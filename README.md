@@ -2,6 +2,8 @@
 
 ![Cover](images/cover.png)
 
+This project is still under active development.
+
 一个基于 FastAPI + RAG + Agent 的 AI 学习助手。
 
 支持：
