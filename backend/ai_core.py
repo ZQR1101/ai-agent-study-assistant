@@ -38,41 +38,63 @@ def generate_questions(text: str) -> str:
     return response.content
 
 
-def load_documents() -> str:
+def load_documents() -> list:
     docs_path = Path(__file__).parent.parent / "docs"
-    all_text = ""
+    documents = []
 
     for file_path in docs_path.iterdir():
+
         if file_path.suffix in [".txt", ".md"]:
             with open(file_path, "r", encoding="utf-8") as f:
-                all_text += f"\n\n文件名：{file_path.name}\n"
-                all_text += f.read()
+                documents.append({
+                    "source": file_path.name,
+                    "text": f.read()
+                })
 
         elif file_path.suffix == ".pdf":
             reader = PdfReader(file_path)
-            all_text += f"\n\n文件名：{file_path.name}\n"
+            pdf_text = ""
 
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
-                    all_text += text + "\n"
+                    pdf_text += text + "\n"
 
-    return all_text
+            documents.append({
+                "source": file_path.name,
+                "text": pdf_text
+            })
+
+    return documents
 
 
 def rag_answer(question: str) -> str:
-    knowledge = load_documents()
+    documents = load_documents()
 
-    chunk_size = 300
+    chunk_size = 500
     overlap = 100
 
     chunks = []
-    for i in range(0, len(knowledge), chunk_size - overlap):
-        chunk = knowledge[i:i + chunk_size]
-        if chunk.strip():
-            chunks.append(chunk.strip())
 
-    chunk_embeddings = embedding_model.encode(chunks)
+    for doc in documents:
+        text = doc["text"]
+        source = doc["source"]
+
+        for i in range(0, len(text), chunk_size - overlap):
+            chunk = text[i:i + chunk_size]
+
+            if chunk.strip():
+                chunks.append({
+                    "source": source,
+                    "text": chunk.strip()
+                })
+
+    if not chunks:
+        return "知识库为空，请先上传或添加文档。"
+
+    chunk_texts = [chunk["text"] for chunk in chunks]
+
+    chunk_embeddings = embedding_model.encode(chunk_texts)
     question_embedding = embedding_model.encode([question])
 
     similarity = cosine_similarity(question_embedding, chunk_embeddings)
@@ -81,8 +103,23 @@ def rag_answer(question: str) -> str:
     similarity_scores = similarity[0]
     top_indices = similarity_scores.argsort()[-top_k:][::-1]
 
-    relevant_chunks = [chunks[index] for index in top_indices]
-    relevant_text = "\n\n".join(relevant_chunks)
+    relevant_chunks = []
+
+    for index in top_indices:
+        relevant_chunks.append(chunks[index])
+
+    relevant_text = ""
+
+    for chunk in relevant_chunks:
+        relevant_text += f"""
+来源文件：{chunk["source"]}
+内容：
+{chunk["text"]}
+
+---
+"""
+
+    sources = sorted(set(chunk["source"] for chunk in relevant_chunks))
 
     prompt = f"""
 你必须严格根据下面提供的知识回答问题。
@@ -97,8 +134,19 @@ def rag_answer(question: str) -> str:
 """
 
     response = llm.invoke(prompt)
-    return response.content
 
+    source_text = "\n".join([f"- {source}" for source in sources])
+
+    final_answer = f"""
+{response.content}
+
+---
+
+参考来源：
+{source_text}
+"""
+
+    return final_answer
 
 def agent_router(user_input: str) -> str:
 
