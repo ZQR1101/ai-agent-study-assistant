@@ -39,7 +39,7 @@ def generate_questions(text: str) -> str:
 
 
 def load_documents() -> str:
-    docs_path = Path(__file__).parent / "docs"
+    docs_path = Path(__file__).parent.parent / "docs"
     all_text = ""
 
     for file_path in docs_path.iterdir():
