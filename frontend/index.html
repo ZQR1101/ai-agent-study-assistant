@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <title>AI学习助手</title>
+</head>
+
+<body>
+
+    <h1>AI学习助手</h1>
+
+    <input type="file" id="pdfFile">
+
+    <button onclick="uploadPDF()">
+        上传PDF
+    </button>
+
+    <br><br>
+
+    <textarea id="userInput" rows="6" cols="60"></textarea>
+
+    <br><br>
+
+    <button onclick="sendMessage()">
+        发送
+    </button>
+
+    <h2>聊天记录：</h2>
+
+    <div id="chatBox"></div>
+
+    <script>
+        async function uploadPDF() {
+            const fileInput = document.getElementById("pdfFile")
+            const file = fileInput.files[0]
+
+            if (!file) {
+                alert("请先选择一个 PDF 文件")
+                return
+            }
+
+            const formData = new FormData()
+            formData.append("file", file)
+
+            const response = await fetch(
+                "http://127.0.0.1:8000/upload",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            )
+
+            const data = await response.json()
+            alert(data.message)
+        }
+
+        async function sendMessage() {
+            const userInput =
+                document.getElementById("userInput").value
+
+            const response = await fetch(
+                "http://127.0.0.1:8000/agent",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        text: userInput
+                    })
+                }
+            )
+
+            const data = await response.json()
+
+            document.getElementById("userInput").value = ""
+
+            const chatBox =
+                document.getElementById("chatBox")
+
+            chatBox.innerHTML += `
+                <div style="
+                    background:#DCF8C6;
+                    padding:10px;
+                    margin:10px;
+                    border-radius:10px;
+                ">
+                    <b>你：</b>${userInput}
+                </div>
+            `
+
+            chatBox.innerHTML += `
+                <div style="
+                    background:#F1F0F0;
+                    padding:10px;
+                    margin:10px;
+                    border-radius:10px;
+                ">
+                    <b>AI：</b>${data.result}
+                </div>
+            `
+        }
+    </script>
+
+</body>
+
+</html>

@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+langchain
+langchain-openai
+sentence-transformers
+scikit-learn
+pypdf
+python-multipart
