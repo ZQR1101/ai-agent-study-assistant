@@ -138,45 +138,25 @@ def agent_router(user_input: str) -> str:
         return "无法判断用户意图。"
 
 
-def learning_workflow(topic: str) -> str:
+def learning_workflow(topic: str) -> dict:
 
-    # Step1: RAG 检索
     rag_result = rag_answer(topic)
 
-    # Step2: 总结
     summary = summarize(rag_result)
 
-    # Step3: 出题
     quiz = generate_questions(summary)
 
-    # Step4: 学习建议
     advice_prompt = f"""
-根据以下内容，
-给出下一步学习建议：
+请根据下面内容，给出简短的下一步学习建议，不超过5条：
 
 {summary}
 """
 
     advice = llm.invoke(advice_prompt).content
 
-    final_result = f"""
-【知识讲解】
-{rag_result}
-
-------------------
-
-【总结】
-{summary}
-
-------------------
-
-【练习题】
-{quiz}
-
-------------------
-
-【下一步建议】
-{advice}
-"""
-
-    return final_result
+    return {
+        "knowledge": rag_result,
+        "summary": summary,
+        "quiz": quiz,
+        "advice": advice
+    }
