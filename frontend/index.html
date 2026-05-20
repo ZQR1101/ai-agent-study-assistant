@@ -26,6 +26,10 @@
         发送
     </button>
 
+    <button onclick="learnMode()">
+        学习模式
+    </button>
+
     <h2>聊天记录：</h2>
 
     <div id="chatBox"></div>
@@ -100,6 +104,65 @@
                     border-radius:10px;
                 ">
                     <b>AI：</b>${data.result}
+                </div>
+            `
+        }
+
+        async function learnMode() {
+            const userInput =
+                document.getElementById("userInput").value
+
+            const response = await fetch(
+                "http://127.0.0.1:8000/learn",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        text: userInput
+                    })
+                }
+            )
+
+            const data = await response.json()
+
+            document.getElementById("userInput").value = ""
+
+            const chatBox =
+                document.getElementById("chatBox")
+
+            chatBox.innerHTML += `
+                <div style="
+                    background:#DCF8C6;
+                    padding:10px;
+                    margin:10px;
+                    border-radius:10px;
+                ">
+                    <b>你：</b>${userInput}
+                </div>
+            `
+
+            chatBox.innerHTML += `
+                <div style="
+                    background:#F1F0F0;
+                    padding:15px;
+                    margin:10px;
+                    border-radius:10px;
+                ">
+                    <h3>知识讲解</h3>
+                    <p>${data.knowledge}</p>
+
+                    <h3>总结</h3>
+                    <p>${data.summary}</p>
+
+                    <h3>练习题</h3>
+                    <p>${data.quiz}</p>
+
+                    <h3>下一步建议</h3>
+                    <p>${data.advice}</p>
                 </div>
             `
         }
