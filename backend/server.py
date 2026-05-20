@@ -7,7 +7,8 @@ from backend.ai_core import (
     summarize,
     generate_questions,
     rag_answer,
-    agent_router
+    agent_router,
+    learning_workflow
 )
 
 app = FastAPI(title="AI学习助手 API")
@@ -80,4 +81,14 @@ async def upload_file(file: UploadFile = File(...)):
 
     return {
         "message": f"{file.filename} 上传成功"
+    }
+
+
+@app.post("/learn")
+def learn_api(request: TextRequest):
+
+    result = learning_workflow(request.text)
+
+    return {
+        "result": result
     }
