@@ -1,173 +1,180 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh">
-
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>AI学习助手</title>
-</head>
+  </head>
 
-<body>
-
+  <body>
     <h1>AI学习助手</h1>
 
-    <input type="file" id="pdfFile">
+    <input type="file" id="pdfFile" />
 
-    <button onclick="uploadPDF()">
-        上传PDF
-    </button>
+    <button onclick="uploadPDF()">上传PDF</button>
 
-    <br><br>
+    <br /><br />
 
     <textarea id="userInput" rows="6" cols="60"></textarea>
 
-    <br><br>
+    <br /><br />
 
-    <button onclick="sendMessage()">
-        发送
-    </button>
+    <button onclick="sendMessage()">发送</button>
 
-    <button onclick="learnMode()">
-        学习模式
-    </button>
+    <button onclick="learnMode()">学习模式</button>
 
     <h2>聊天记录：</h2>
+
+    <div id="loadingText" style="display: none; color: gray; margin: 10px">
+      AI 正在思考中...
+    </div>
 
     <div id="chatBox"></div>
 
     <script>
-        async function uploadPDF() {
-            const fileInput = document.getElementById("pdfFile")
-            const file = fileInput.files[0]
+      async function uploadPDF() {
+        const fileInput = document.getElementById("pdfFile");
+        const file = fileInput.files[0];
 
-            if (!file) {
-                alert("请先选择一个 PDF 文件")
-                return
-            }
-
-            const formData = new FormData()
-            formData.append("file", file)
-
-            const response = await fetch(
-                "http://127.0.0.1:8000/upload",
-                {
-                    method: "POST",
-                    body: formData
-                }
-            )
-
-            const data = await response.json()
-            alert(data.message)
+        if (!file) {
+          alert("请先选择一个 PDF 文件");
+          return;
         }
 
-        async function sendMessage() {
-            const userInput =
-                document.getElementById("userInput").value
+        const formData = new FormData();
+        formData.append("file", file);
 
-            const response = await fetch(
-                "http://127.0.0.1:8000/agent",
-                {
-                    method: "POST",
+        const response = await fetch("http://127.0.0.1:8000/upload", {
+          method: "POST",
+          body: formData,
+        });
 
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+        const data = await response.json();
+        alert(data.message);
+      }
 
-                    body: JSON.stringify({
-                        text: userInput
-                    })
-                }
-            )
+      async function sendMessage() {
+        const userInput = document.getElementById("userInput").value;
 
-            const data = await response.json()
-
-            document.getElementById("userInput").value = ""
-
-            const chatBox =
-                document.getElementById("chatBox")
-
-            chatBox.innerHTML += `
-                <div style="
-                    background:#DCF8C6;
-                    padding:10px;
-                    margin:10px;
-                    border-radius:10px;
-                ">
-                    <b>你：</b>${userInput}
-                </div>
-            `
-
-            chatBox.innerHTML += `
-                <div style="
-                    background:#F1F0F0;
-                    padding:10px;
-                    margin:10px;
-                    border-radius:10px;
-                ">
-                    <b>AI：</b>${data.result}
-                </div>
-            `
+        if (!userInput.trim()) {
+          alert("请输入内容");
+          return;
         }
 
-        async function learnMode() {
-            const userInput =
-                document.getElementById("userInput").value
+        const loadingText = document.getElementById("loadingText");
 
-            const response = await fetch(
-                "http://127.0.0.1:8000/learn",
-                {
-                    method: "POST",
+        loadingText.style.display = "block";
 
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+        const response = await fetch("http://127.0.0.1:8000/agent", {
+          method: "POST",
 
-                    body: JSON.stringify({
-                        text: userInput
-                    })
-                }
-            )
+          headers: {
+            "Content-Type": "application/json",
+          },
 
-            const data = await response.json()
+          body: JSON.stringify({
+            text: userInput,
+          }),
+        });
 
-            document.getElementById("userInput").value = ""
+        const data = await response.json();
 
-            const chatBox =
-                document.getElementById("chatBox")
+        loadingText.style.display = "none";
 
-            chatBox.innerHTML += `
-                <div style="
-                    background:#DCF8C6;
-                    padding:10px;
-                    margin:10px;
-                    border-radius:10px;
-                ">
-                    <b>你：</b>${userInput}
-                </div>
-            `
+        document.getElementById("userInput").value = "";
 
-            chatBox.innerHTML += `
-                <div style="
-                    background:#F1F0F0;
-                    padding:15px;
-                    margin:10px;
-                    border-radius:10px;
-                ">
-                    <h3>知识讲解</h3>
-                    <p>${data.knowledge}</p>
+        const chatBox = document.getElementById("chatBox");
 
-                    <h3>总结</h3>
-                    <p>${data.summary}</p>
+        chatBox.innerHTML += `
+            <div style="
+                background:#DCF8C6;
+                padding:10px;
+                margin:10px;
+                border-radius:10px;
+                white-space:pre-wrap;
+            ">
+                <b>你：</b>${userInput}
+            </div>
+        `;
 
-                    <h3>练习题</h3>
-                    <p>${data.quiz}</p>
+        chatBox.innerHTML += `
+            <div style="
+                background:#F1F0F0;
+                padding:10px;
+                margin:10px;
+                border-radius:10px;
+                white-space:pre-wrap;
+            ">
+                <b>AI：</b>${data.result}
+            </div>
+        `;
+      }
 
-                    <h3>下一步建议</h3>
-                    <p>${data.advice}</p>
-                </div>
-            `
+      async function learnMode() {
+        const userInput = document.getElementById("userInput").value;
+
+        if (!userInput.trim()) {
+          alert("请输入学习主题");
+          return;
         }
+
+        const loadingText = document.getElementById("loadingText");
+
+        loadingText.style.display = "block";
+
+        const response = await fetch("http://127.0.0.1:8000/learn", {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+          },
+
+          body: JSON.stringify({
+            text: userInput,
+          }),
+        });
+
+        const data = await response.json();
+
+        loadingText.style.display = "none";
+
+        document.getElementById("userInput").value = "";
+
+        const chatBox = document.getElementById("chatBox");
+
+        chatBox.innerHTML += `
+            <div style="
+                background:#DCF8C6;
+                padding:10px;
+                margin:10px;
+                border-radius:10px;
+                white-space:pre-wrap;
+            ">
+                <b>你：</b>${userInput}
+            </div>
+        `;
+
+        chatBox.innerHTML += `
+            <div style="
+                background:#F1F0F0;
+                padding:15px;
+                margin:10px;
+                border-radius:10px;
+                white-space:pre-wrap;
+            ">
+                <h3>知识讲解</h3>
+                <div>${data.knowledge}</div>
+
+                <h3>总结</h3>
+                <div>${data.summary}</div>
+
+                <h3>练习题</h3>
+                <div>${data.quiz}</div>
+
+                <h3>下一步建议</h3>
+                <div>${data.advice}</div>
+            </div>
+        `;
+      }
     </script>
-
-</body>
-
+  </body>
 </html>
