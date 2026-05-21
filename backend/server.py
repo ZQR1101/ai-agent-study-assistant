@@ -86,9 +86,5 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.post("/learn")
 def learn_api(request: TextRequest):
-
     result = learning_workflow(request.text)
-
-    return {
-        "result": result
-    }
+    return result
