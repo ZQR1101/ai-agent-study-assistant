@@ -5,6 +5,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from backend.rag_store import search_relevant_chunks
 
 load_dotenv()
 
@@ -69,50 +70,20 @@ def load_documents() -> list:
 
 
 def rag_answer_with_sources(question: str) -> dict:
-    documents = load_documents()
+    relevant_chunks = search_relevant_chunks(question, top_k=3)
 
-    chunk_size = 500
-    overlap = 100
-
-    chunks = []
-
-    for doc in documents:
-        text = doc["text"]
-        source = doc["source"]
-
-        for i in range(0, len(text), chunk_size - overlap):
-            chunk = text[i:i + chunk_size]
-
-            if chunk.strip():
-                chunks.append({
-                    "source": source,
-                    "text": chunk.strip()
-                })
-
-    if not chunks:
+    if not relevant_chunks:
         return {
             "answer": "知识库为空，请先上传或添加文档。",
             "sources": []
         }
-
-    chunk_texts = [chunk["text"] for chunk in chunks]
-
-    chunk_embeddings = embedding_model.encode(chunk_texts)
-    question_embedding = embedding_model.encode([question])
-
-    similarity = cosine_similarity(question_embedding, chunk_embeddings)
-
-    top_k = 3
-    similarity_scores = similarity[0]
-    top_indices = similarity_scores.argsort()[-top_k:][::-1]
-
-    relevant_chunks = [chunks[index] for index in top_indices]
 
     relevant_text = ""
 
     for chunk in relevant_chunks:
         relevant_text += f"""
 来源文件：{chunk["source"]}
+相似度：{chunk["score"]:.4f}
 内容：
 {chunk["text"]}
 

@@ -7,3 +7,4 @@ sentence-transformers
 scikit-learn
 pypdf
 python-multipart
+faiss-cpu
