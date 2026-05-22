@@ -8,7 +8,8 @@ from backend.ai_core import (
     generate_questions,
     rag_answer,
     agent_router,
-    learning_workflow
+    learning_workflow,
+     rag_answer_with_sources
 )
 
 app = FastAPI(title="AI学习助手 API")
@@ -52,12 +53,8 @@ def quiz_api(request: TextRequest):
 
 @app.post("/rag")
 def rag_api(request: TextRequest):
-
-    result = rag_answer(request.text)
-
-    return {
-        "result": result
-    }
+    result = rag_answer_with_sources(request.text)
+    return result
 
 
 @app.post("/agent")

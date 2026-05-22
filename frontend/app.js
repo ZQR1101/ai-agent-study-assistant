@@ -170,3 +170,77 @@ async function learnMode() {
         loadingText.style.display = "none"
     }
 }
+
+async function ragMode() {
+    const userInput =
+        document.getElementById("userInput").value
+
+    if (!userInput.trim()) {
+        alert("请输入知识库问题")
+        return
+    }
+
+    const loadingText =
+        document.getElementById("loadingText")
+
+    const chatBox =
+        document.getElementById("chatBox")
+
+    loadingText.style.display = "block"
+
+    try {
+        const response = await fetch(
+            "http://127.0.0.1:8000/rag",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+                    text: userInput
+                })
+            }
+        )
+
+        if (!response.ok) {
+            throw new Error("知识库问答请求失败：" + response.status)
+        }
+
+        const data = await response.json()
+
+        document.getElementById("userInput").value = ""
+
+        const sourcesHtml = data.sources
+            .map(source => `<li>📄 ${source}</li>`)
+            .join("")
+
+        chatBox.innerHTML += `
+            <div class="user-message">
+                <b>你：</b>${userInput}
+            </div>
+        `
+
+        chatBox.innerHTML += `
+            <div class="ai-message">
+                <h3>知识库回答</h3>
+                <div>${data.answer}</div>
+
+                <h3>参考来源</h3>
+                <ul>
+                    ${sourcesHtml}
+                </ul>
+            </div>
+        `
+
+    } catch (error) {
+        chatBox.innerHTML += `
+            <div class="ai-message">
+                <b>错误：</b>${error.message}
+            </div>
+        `
+    } finally {
+        loadingText.style.display = "none"
+    }
+}

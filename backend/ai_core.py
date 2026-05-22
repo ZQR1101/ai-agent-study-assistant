@@ -68,7 +68,7 @@ def load_documents() -> list:
     return documents
 
 
-def rag_answer(question: str) -> str:
+def rag_answer_with_sources(question: str) -> dict:
     documents = load_documents()
 
     chunk_size = 500
@@ -90,7 +90,10 @@ def rag_answer(question: str) -> str:
                 })
 
     if not chunks:
-        return "知识库为空，请先上传或添加文档。"
+        return {
+            "answer": "知识库为空，请先上传或添加文档。",
+            "sources": []
+        }
 
     chunk_texts = [chunk["text"] for chunk in chunks]
 
@@ -103,10 +106,7 @@ def rag_answer(question: str) -> str:
     similarity_scores = similarity[0]
     top_indices = similarity_scores.argsort()[-top_k:][::-1]
 
-    relevant_chunks = []
-
-    for index in top_indices:
-        relevant_chunks.append(chunks[index])
+    relevant_chunks = [chunks[index] for index in top_indices]
 
     relevant_text = ""
 
@@ -135,10 +135,19 @@ def rag_answer(question: str) -> str:
 
     response = llm.invoke(prompt)
 
-    source_text = "\n".join([f"- {source}" for source in sources])
+    return {
+        "answer": response.content,
+        "sources": sources
+    }
 
-    final_answer = f"""
-{response.content}
+
+def rag_answer(question: str) -> str:
+    result = rag_answer_with_sources(question)
+
+    source_text = "\n".join([f"- {source}" for source in result["sources"]])
+
+    return f"""
+{result["answer"]}
 
 ---
 
@@ -146,10 +155,8 @@ def rag_answer(question: str) -> str:
 {source_text}
 """
 
-    return final_answer
 
 def agent_router(user_input: str) -> str:
-
     router_prompt = f"""
 你是一个任务分类器。
 
@@ -160,7 +167,7 @@ def agent_router(user_input: str) -> str:
 3 = quiz
 4 = rag
 
-你只能返回数字。
+你只能返回数字，不要解释。
 
 用户请求：
 {user_input}
@@ -170,16 +177,16 @@ def agent_router(user_input: str) -> str:
 
     choice = response.content.strip()
 
-    if choice == "1":
+    if choice.startswith("1"):
         return explain(user_input)
 
-    elif choice == "2":
+    elif choice.startswith("2"):
         return summarize(user_input)
 
-    elif choice == "3":
+    elif choice.startswith("3"):
         return generate_questions(user_input)
 
-    elif choice == "4":
+    elif choice.startswith("4"):
         return rag_answer(user_input)
 
     else:
