@@ -1,0 +1,48 @@
+body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 20px;
+}
+
+textarea {
+    width: 100%;
+    font-size: 16px;
+    padding: 10px;
+}
+
+button {
+    padding: 8px 14px;
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+#loadingText {
+    display: none;
+    color: gray;
+    margin: 10px;
+}
+
+.user-message {
+    background: #DCF8C6;
+    padding: 10px;
+    margin: 10px;
+    border-radius: 10px;
+    white-space: pre-wrap;
+}
+
+.ai-message {
+    background: #F1F0F0;
+    padding: 10px;
+    margin: 10px;
+    border-radius: 10px;
+    white-space: pre-wrap;
+}
+
+.learn-card {
+    background: #F1F0F0;
+    padding: 15px;
+    margin: 10px;
+    border-radius: 10px;
+    white-space: pre-wrap;
+}
