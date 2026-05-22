@@ -118,6 +118,9 @@ def search_relevant_chunks(question: str, top_k: int = 3):
 
         chunk = chunks[idx]
 
+        if score < 0.25:
+            continue
+
         results.append({
             "source": chunk["source"],
             "text": chunk["text"],
