@@ -19,15 +19,18 @@ This project is still under active development.
 # Tech Stack
 
 ## Backend
+
 - FastAPI
 - LangChain
 - SentenceTransformers
 
 ## Frontend
+
 - HTML
 - JavaScript
 
 ## AI
+
 - RAG
 - Embedding
 - Agent Routing
@@ -37,15 +40,19 @@ This project is still under active development.
 # Features
 
 ## RAG Question Answering
+
 基于本地知识库进行检索增强问答。
 
 ## Agent Routing
+
 自动判断用户请求并选择工具。
 
 ## ChatPDF
+
 支持上传 PDF 后进行问答。
 
 ## Web Chat UI
+
 支持网页聊天交互。
 
 ---
@@ -94,3 +101,13 @@ frontend/index.html
 - React Frontend
 - Long-term Memory
 - Streaming Response
+
+————————————————
+
+# Environment Variables
+
+Create a `.env` file based on `.env.example`.
+
+```env
+MY_MIMO_API_KEY=your_api_key_here
+```
