@@ -118,7 +118,7 @@ def search_relevant_chunks(question: str, top_k: int = 3):
 
         chunk = chunks[idx]
 
-        if score < 0.25:
+        if score < 0.40:  # 设置一个相似度阈值，过滤掉不相关的结果
             continue
 
         results.append({
