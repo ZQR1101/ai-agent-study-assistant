@@ -95,3 +95,11 @@ async def upload_file(file: UploadFile = File(...)):
 def learn_api(request: TextRequest):
     result = learning_workflow(request.text)
     return result
+
+
+@app.post("/rebuild-index")
+def rebuild_index_api():
+    rebuild_rag_index()
+    return {
+        "message": "RAG 索引已重建"
+    }

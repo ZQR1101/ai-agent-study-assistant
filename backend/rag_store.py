@@ -3,6 +3,7 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+import json
 
 
 embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
@@ -11,11 +12,23 @@ chunks = []
 index = None
 
 
+PROJECT_ROOT = Path(__file__).parent.parent
+DOCS_PATH = PROJECT_ROOT / "docs"
+INDEX_DIR = PROJECT_ROOT / "rag_index"
+INDEX_FILE = INDEX_DIR / "index.faiss"
+CHUNKS_FILE = INDEX_DIR / "chunks.json"
+
+SIMILARITY_THRESHOLD = 0.30
+
+
 def load_documents():
-    docs_path = Path(__file__).parent.parent / "docs"
     documents = []
 
-    for file_path in docs_path.iterdir():
+    if not DOCS_PATH.exists():
+        DOCS_PATH.mkdir(exist_ok=True)
+        return documents
+
+    for file_path in DOCS_PATH.iterdir():
 
         if file_path.suffix in [".txt", ".md"]:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -65,6 +78,32 @@ def build_chunks():
     return new_chunks
 
 
+def save_rag_index():
+    INDEX_DIR.mkdir(exist_ok=True)
+
+    if index is not None:
+        faiss.write_index(index, str(INDEX_FILE))
+
+    with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+
+def load_rag_index():
+    global index
+    global chunks
+
+    if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
+        return False
+
+    index = faiss.read_index(str(INDEX_FILE))
+
+    with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+        chunks = json.load(f)
+
+    print(f"已加载 FAISS RAG 索引，共 {len(chunks)} 个 chunks。")
+    return True
+
+
 def rebuild_rag_index():
     global chunks
     global index
@@ -90,15 +129,28 @@ def rebuild_rag_index():
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
-    print(f"FAISS RAG 索引构建完成，共 {len(chunks)} 个 chunks。")
+    save_rag_index()
+
+    print(f"FAISS RAG 索引构建完成，共 {len(chunks)} 个 chunks，并已保存到本地。")
+
+
+def ensure_rag_index():
+    global index
+
+    if index is not None:
+        return
+
+    loaded = load_rag_index()
+
+    if not loaded:
+        rebuild_rag_index()
 
 
 def search_relevant_chunks(question: str, top_k: int = 3):
     global index
     global chunks
 
-    if index is None:
-        rebuild_rag_index()
+    ensure_rag_index()
 
     if index is None or not chunks:
         return []
@@ -116,10 +168,10 @@ def search_relevant_chunks(question: str, top_k: int = 3):
         if idx == -1:
             continue
 
-        chunk = chunks[idx]
-
-        if score < 0.40:  # 设置一个相似度阈值，过滤掉不相关的结果
+        if score < SIMILARITY_THRESHOLD:
             continue
+
+        chunk = chunks[idx]
 
         results.append({
             "source": chunk["source"],
