@@ -12,7 +12,7 @@ from backend.ai_core import (
     learning_workflow,
     rag_answer_with_sources,
 )
-from backend.rag_store import rebuild_rag_index
+from backend.rag_store import rebuild_rag_index, search_relevant_chunks
 
 app = FastAPI(title="AI学习助手 API")
 
@@ -33,6 +33,11 @@ class TextRequest(BaseModel):
 @app.get("/")
 def home():
     return {"message": "AI学习助手后端启动成功"}
+
+
+@app.post("/echo")
+def echo_api(request: TextRequest):
+    return {"echo": request.text}
 
 
 @app.post("/explain")
@@ -102,4 +107,14 @@ def rebuild_index_api():
     rebuild_rag_index()
     return {
         "message": "RAG 索引已重建"
+    }
+
+@app.post("/debug-rag")
+def debug_rag_api(request: TextRequest):
+    chunks = search_relevant_chunks(request.text, top_k=5)
+
+    return {
+        "question": request.text,
+        "count": len(chunks),
+        "chunks": chunks
     }

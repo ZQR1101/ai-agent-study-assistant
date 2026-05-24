@@ -77,3 +77,52 @@
 
 - `ai_core.py`：负责大模型调用、Prompt 封装、RAG 回答、Agent Router
 - `rag_store.py`：负责文档读取、切块、Embedding、FAISS 建索引和检索
+
+## frontend：前端交互层
+
+前端主要由页面结构、样式和交互逻辑组成。其中 `app.js` 负责读取用户输入、上传文件、调用后端接口，并把返回结果显示到聊天区域。
+
+### 前端函数与后端接口对应关系
+
+| 前端函数        | 后端接口       | 后端功能                              |
+| --------------- | -------------- | ------------------------------------- |
+| `uploadPDF()`   | `POST /upload` | 上传 PDF 到 `docs/`，并重建 RAG 索引  |
+| `sendMessage()` | `POST /agent`  | 调用 Agent Router 自动判断任务类型    |
+| `learnMode()`   | `POST /learn`  | 执行学习工作流：RAG、总结、出题、建议 |
+| `ragMode()`     | `POST /rag`    | 执行知识库问答，并返回答案和引用来源  |
+
+### 前端到后端的数据流
+
+用户在页面输入内容  
+↓  
+`app.js` 使用 `fetch()` 调用 FastAPI 接口  
+↓  
+`server.py` 接收请求  
+↓  
+`ai_core.py` 调用大模型或 RAG  
+↓  
+`rag_store.py` 检索知识库片段  
+↓  
+后端返回 JSON  
+↓  
+前端显示结果
+
+## FastAPI 请求与响应
+
+前端通过 `fetch()` 调用 FastAPI 后端接口。普通文本请求会发送 JSON：
+
+```json
+{
+  "text": "用户输入"
+}
+```
+
+## FastAPI 如何接收前端数据
+
+前端通过 `fetch()` 发送 JSON 数据，例如：
+
+```json
+{
+  "text": "帮我解释 RAG"
+}
+```
