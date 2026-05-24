@@ -6,7 +6,16 @@ import numpy as np
 import json
 
 
-embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+embedding_model = None
+
+
+def get_embedding_model():
+    global embedding_model
+
+    if embedding_model is None:
+        embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+    return embedding_model
 
 chunks = []
 index = None
@@ -119,7 +128,8 @@ def rebuild_rag_index():
 
     chunk_texts = [chunk["text"] for chunk in chunks]
 
-    embeddings = embedding_model.encode(chunk_texts)
+    model = get_embedding_model()
+    embeddings = model.encode(chunk_texts)
     embeddings = np.array(embeddings).astype("float32")
 
     faiss.normalize_L2(embeddings)
@@ -155,7 +165,8 @@ def search_relevant_chunks(question: str, top_k: int = 3):
     if index is None or not chunks:
         return []
 
-    question_embedding = embedding_model.encode([question])
+    model = get_embedding_model()
+    question_embedding = model.encode([question])
     question_embedding = np.array(question_embedding).astype("float32")
 
     faiss.normalize_L2(question_embedding)

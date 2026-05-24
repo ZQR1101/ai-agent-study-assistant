@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi import UploadFile, File
 from pydantic import BaseModel
 from pathlib import Path
+from backend.schemas import ChatRequest, ChatResponse
 from backend.ai_core import (
     explain,
     summarize,
@@ -11,6 +12,7 @@ from backend.ai_core import (
     agent_router,
     learning_workflow,
     rag_answer_with_sources,
+    run_chat_request,
 )
 from backend.rag_store import rebuild_rag_index, search_relevant_chunks
 
@@ -38,6 +40,11 @@ def home():
 @app.post("/echo")
 def echo_api(request: TextRequest):
     return {"echo": request.text}
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat_api(request: ChatRequest):
+    return run_chat_request(request)
 
 
 @app.post("/explain")
