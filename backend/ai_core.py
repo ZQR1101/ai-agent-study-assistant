@@ -1,10 +1,6 @@
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from pathlib import Path
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from backend.rag_store import search_relevant_chunks
 
 load_dotenv()
@@ -16,9 +12,6 @@ llm = ChatOpenAI(
     temperature=0.7,
     max_tokens=2000
 )
-
-
-embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
 def explain(text: str) -> str:
@@ -37,36 +30,6 @@ def generate_questions(text: str) -> str:
     prompt = f"请根据以下知识点出3道练习题，并给出答案：\n{text}"
     response = llm.invoke(prompt)
     return response.content
-
-
-def load_documents() -> list:
-    docs_path = Path(__file__).parent.parent / "docs"
-    documents = []
-
-    for file_path in docs_path.iterdir():
-
-        if file_path.suffix in [".txt", ".md"]:
-            with open(file_path, "r", encoding="utf-8") as f:
-                documents.append({
-                    "source": file_path.name,
-                    "text": f.read()
-                })
-
-        elif file_path.suffix == ".pdf":
-            reader = PdfReader(file_path)
-            pdf_text = ""
-
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    pdf_text += text + "\n"
-
-            documents.append({
-                "source": file_path.name,
-                "text": pdf_text
-            })
-
-    return documents
 
 
 def rag_answer_with_sources(question: str) -> dict:
