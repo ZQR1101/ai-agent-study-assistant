@@ -8,11 +8,7 @@ This project is still under active development.
 
 支持：
 
-- RAG 知识库问答
-- Agent 自动路由
-- PDF 上传
-- ChatPDF
-- Web 聊天界面
+- 项目支持统一 /chat 接口，前端可配置对话模式、模型、temperature、RAG 开关、Agent 开关和 top_k，并返回 answer、sources 和 trace，便于观察 AI 执行路径。
 
 ---
 

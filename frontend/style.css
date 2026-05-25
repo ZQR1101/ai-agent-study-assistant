@@ -1,48 +1,168 @@
 body {
+    background: #f7f7f5;
+    color: #1f2933;
     font-family: Arial, sans-serif;
-    max-width: 900px;
-    margin: 40px auto;
-    padding: 20px;
+    margin: 0;
+}
+
+.app-shell {
+    max-width: 960px;
+    margin: 32px auto;
+    padding: 0 20px 32px;
+}
+
+h1,
+h2,
+h3 {
+    margin: 0;
+}
+
+h1 {
+    font-size: 30px;
+    margin-bottom: 22px;
+}
+
+h2 {
+    font-size: 20px;
+    margin: 24px 0 12px;
+}
+
+h3 {
+    font-size: 15px;
+    margin-bottom: 8px;
+}
+
+.upload-row,
+.action-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.controls {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    margin-bottom: 16px;
+}
+
+label {
+    color: #475569;
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    gap: 6px;
+}
+
+.checkbox-label {
+    align-items: center;
+    flex-direction: row;
+    min-height: 58px;
+}
+
+input,
+select,
+textarea {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-sizing: border-box;
+    color: #1f2933;
+    font: inherit;
+}
+
+input,
+select {
+    min-height: 36px;
+    padding: 6px 8px;
+}
+
+input[type="checkbox"] {
+    min-height: auto;
 }
 
 textarea {
-    width: 100%;
+    display: block;
     font-size: 16px;
+    line-height: 1.5;
+    min-height: 140px;
     padding: 10px;
+    resize: vertical;
+    width: 100%;
 }
 
 button {
-    padding: 8px 14px;
-    margin-right: 8px;
+    background: #2563eb;
+    border: 0;
+    border-radius: 6px;
+    color: white;
     cursor: pointer;
+    font: inherit;
+    min-height: 36px;
+    padding: 8px 14px;
+}
+
+button:hover {
+    background: #1d4ed8;
 }
 
 #loadingText {
+    color: #64748b;
     display: none;
-    color: gray;
-    margin: 10px;
+    margin: 10px 0;
+}
+
+#chatBox {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.user-message,
+.ai-message,
+.learn-card {
+    border-radius: 8px;
+    line-height: 1.55;
+    padding: 12px;
+    white-space: pre-wrap;
 }
 
 .user-message {
-    background: #DCF8C6;
-    padding: 10px;
-    margin: 10px;
-    border-radius: 10px;
-    white-space: pre-wrap;
+    background: #dcf8c6;
 }
 
-.ai-message {
-    background: #F1F0F0;
-    padding: 10px;
-    margin: 10px;
-    border-radius: 10px;
-    white-space: pre-wrap;
-}
-
+.ai-message,
 .learn-card {
-    background: #F1F0F0;
-    padding: 15px;
-    margin: 10px;
-    border-radius: 10px;
-    white-space: pre-wrap;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+}
+
+.error-message {
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+
+.response-meta {
+    color: #64748b;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 13px;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.answer {
+    margin-bottom: 12px;
+}
+
+.meta-section {
+    border-top: 1px solid #e2e8f0;
+    margin-top: 12px;
+    padding-top: 12px;
+}
+
+.meta-section ul {
+    margin: 0;
+    padding-left: 20px;
 }

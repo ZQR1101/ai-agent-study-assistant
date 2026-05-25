@@ -1,37 +1,89 @@
 <!doctype html>
-<html lang="zh">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>AI学习助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 学习助手</title>
     <link rel="stylesheet" href="style.css" />
   </head>
 
   <body>
-    <h1>AI学习助手</h1>
+    <main class="app-shell">
+      <h1>AI 学习助手</h1>
 
-    <input type="file" id="pdfFile" />
+      <section class="upload-row" aria-label="上传知识库文件">
+        <input type="file" id="pdfFile" />
+        <button type="button" onclick="uploadPDF()">上传 PDF</button>
+      </section>
 
-    <button onclick="uploadPDF()">上传PDF</button>
+      <section class="controls" aria-label="聊天参数">
+        <label>
+          模式
+          <select id="modeSelect">
+            <option value="auto" selected>auto</option>
+            <option value="chat">chat</option>
+            <option value="rag">rag</option>
+            <option value="explain">explain</option>
+            <option value="summarize">summarize</option>
+            <option value="quiz">quiz</option>
+            <option value="learn">learn</option>
+          </select>
+        </label>
 
-    <br /><br />
+        <label>
+          模型
+          <select id="modelSelect">
+            <option value="mimo-v2.5" selected>mimo-v2.5</option>
+            <option value="MiMo-V2.5-Pro">MiMo-V2.5-Pro</option>
+          </select>
+        </label>
 
-    <textarea id="userInput" rows="6" cols="60"></textarea>
+        <label>
+          temperature
+          <input
+            type="number"
+            id="temperatureInput"
+            min="0"
+            max="2"
+            step="0.1"
+            value="0.7"
+          />
+        </label>
 
-    <br /><br />
+        <label>
+          top_k
+          <input type="number" id="topKInput" min="1" max="10" step="1" value="3" />
+        </label>
 
-    <button onclick="sendMessage()">发送</button>
+        <label class="checkbox-label">
+          <input type="checkbox" id="useAgentInput" />
+          use_agent
+        </label>
 
-    <button onclick="learnMode()">学习模式</button>
+        <label class="checkbox-label">
+          <input type="checkbox" id="useRagInput" />
+          use_rag
+        </label>
+      </section>
 
-    <button onclick="ragMode()">知识库问答</button>
+      <textarea
+        id="userInput"
+        rows="6"
+        placeholder="输入你的问题、知识点或学习主题..."
+      ></textarea>
 
-    <h2>聊天记录：</h2>
+      <section class="action-row" aria-label="快捷操作">
+        <button type="button" onclick="sendMessage()">发送</button>
+        <button type="button" onclick="learnMode()">学习模式</button>
+        <button type="button" onclick="ragMode()">知识库问答</button>
+      </section>
 
-    <div id="loadingText" style="display: none; color: gray; margin: 10px">
-      AI 正在思考中...
-    </div>
+      <h2>聊天记录</h2>
 
-    <div id="chatBox"></div>
+      <div id="loadingText">AI 正在思考中...</div>
+
+      <div id="chatBox" aria-live="polite"></div>
+    </main>
 
     <script src="app.js"></script>
   </body>

@@ -27,7 +27,7 @@ INDEX_DIR = PROJECT_ROOT / "rag_index"
 INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
-SIMILARITY_THRESHOLD = 0.30
+SIMILARITY_THRESHOLD = 0.45
 
 
 def load_documents():
@@ -156,13 +156,25 @@ def ensure_rag_index():
         rebuild_rag_index()
 
 
-def search_relevant_chunks(question: str, top_k: int = 3):
+def search_relevant_chunks(
+    question: str,
+    top_k: int = 3,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    include_metadata: bool = False,
+):
     global index
     global chunks
 
     ensure_rag_index()
 
     if index is None or not chunks:
+        if include_metadata:
+            return {
+                "chunks": [],
+                "highest_score": None,
+                "threshold": similarity_threshold,
+                "passed_threshold": False,
+            }
         return []
 
     model = get_embedding_model()
@@ -173,13 +185,27 @@ def search_relevant_chunks(question: str, top_k: int = 3):
 
     scores, indices = index.search(question_embedding, top_k)
 
+    highest_score = None
     results = []
+
+    if len(indices[0]) > 0 and indices[0][0] != -1:
+        highest_score = float(scores[0][0])
+
+    if highest_score is None or highest_score < similarity_threshold:
+        if include_metadata:
+            return {
+                "chunks": [],
+                "highest_score": highest_score,
+                "threshold": similarity_threshold,
+                "passed_threshold": False,
+            }
+        return []
 
     for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
 
-        if score < SIMILARITY_THRESHOLD:
+        if score < similarity_threshold:
             continue
 
         chunk = chunks[idx]
@@ -189,5 +215,13 @@ def search_relevant_chunks(question: str, top_k: int = 3):
             "text": chunk["text"],
             "score": float(score)
         })
+
+    if include_metadata:
+        return {
+            "chunks": results,
+            "highest_score": highest_score,
+            "threshold": similarity_threshold,
+            "passed_threshold": bool(results),
+        }
 
     return results

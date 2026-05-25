@@ -1,5 +1,104 @@
+const API_BASE_URL = "http://127.0.0.1:8000"
+
+
+function getElement(id) {
+    return document.getElementById(id)
+}
+
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;")
+}
+
+
+function clampNumber(value, fallback, min, max) {
+    const number = Number(value)
+
+    if (Number.isNaN(number)) {
+        return fallback
+    }
+
+    return Math.min(Math.max(number, min), max)
+}
+
+
+function buildChatRequest(modeOverride) {
+    const message = getElement("userInput").value.trim()
+
+    return {
+        message,
+        mode: modeOverride || getElement("modeSelect").value,
+        model: getElement("modelSelect").value,
+        temperature: clampNumber(getElement("temperatureInput").value, 0.7, 0, 2),
+        use_agent: getElement("useAgentInput").checked,
+        use_rag: getElement("useRagInput").checked,
+        top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
+    }
+}
+
+
+function appendUserMessage(message) {
+    getElement("chatBox").innerHTML += `
+        <div class="user-message">
+            <b>你：</b>${escapeHtml(message)}
+        </div>
+    `
+}
+
+
+function appendErrorMessage(message) {
+    getElement("chatBox").innerHTML += `
+        <div class="ai-message error-message">
+            <b>错误：</b>${escapeHtml(message)}
+        </div>
+    `
+}
+
+
+function renderList(title, items) {
+    if (!items || items.length === 0) {
+        return ""
+    }
+
+    const listItems = items
+        .map(item => `<li>${escapeHtml(item)}</li>`)
+        .join("")
+
+    return `
+        <div class="meta-section">
+            <h3>${title}</h3>
+            <ul>${listItems}</ul>
+        </div>
+    `
+}
+
+
+function appendChatResponse(data) {
+    const answer = escapeHtml(data.answer || "")
+    const sourcesHtml = renderList("参考来源", data.sources)
+    const traceHtml = renderList("执行路径", data.trace)
+
+    getElement("chatBox").innerHTML += `
+        <div class="ai-message">
+            <div class="response-meta">
+                <span>模式：${escapeHtml(data.mode || "")}</span>
+                <span>模型：${escapeHtml(data.model || "")}</span>
+            </div>
+            <div class="answer">${answer}</div>
+            ${sourcesHtml}
+            ${traceHtml}
+        </div>
+    `
+}
+
+
 async function uploadPDF() {
-    const fileInput = document.getElementById("pdfFile")
+    const fileInput = getElement("pdfFile")
     const file = fileInput.files[0]
 
     if (!file) {
@@ -11,86 +110,57 @@ async function uploadPDF() {
     formData.append("file", file)
 
     try {
-        const response = await fetch(
-            "http://127.0.0.1:8000/upload",
-            {
-                method: "POST",
-                body: formData
-            }
-        )
+        const response = await fetch(`${API_BASE_URL}/upload`, {
+            method: "POST",
+            body: formData,
+        })
 
         if (!response.ok) {
-            throw new Error("上传失败：" + response.status)
+            throw new Error(`上传失败：${response.status}`)
         }
 
         const data = await response.json()
         alert(data.message)
-
     } catch (error) {
-        alert("上传失败：" + error.message)
+        alert(`上传失败：${error.message}`)
     }
 }
 
 
-async function sendMessage() {
-    const userInput =
-        document.getElementById("userInput").value
+async function sendMessage(modeOverride) {
+    const requestBody = buildChatRequest(modeOverride)
 
-    if (!userInput.trim()) {
+    if (!requestBody.message) {
         alert("请输入内容")
         return
     }
 
-    const loadingText =
-        document.getElementById("loadingText")
-
-    const chatBox =
-        document.getElementById("chatBox")
+    const loadingText = getElement("loadingText")
+    const chatBox = getElement("chatBox")
 
     loadingText.style.display = "block"
 
     try {
-        const response = await fetch(
-            "http://127.0.0.1:8000/agent",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type": "application/json"
-                },
-
-                body: JSON.stringify({
-                    text: userInput
-                })
-            }
-        )
+        const response = await fetch(`${API_BASE_URL}/chat`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestBody),
+        })
 
         if (!response.ok) {
-            throw new Error("后端请求失败：" + response.status)
+            throw new Error(`后端请求失败：${response.status}`)
         }
 
         const data = await response.json()
 
-        document.getElementById("userInput").value = ""
-
-        chatBox.innerHTML += `
-            <div class="user-message">
-                <b>你：</b>${userInput}
-            </div>
-        `
-
-        chatBox.innerHTML += `
-            <div class="ai-message">
-                <b>AI：</b>${data.result}
-            </div>
-        `
-
+        getElement("userInput").value = ""
+        appendUserMessage(requestBody.message)
+        appendChatResponse(data)
+        chatBox.scrollTop = chatBox.scrollHeight
     } catch (error) {
-        chatBox.innerHTML += `
-            <div class="ai-message">
-                <b>错误：</b>${error.message}
-            </div>
-        `
+        appendErrorMessage(error.message)
     } finally {
         loadingText.style.display = "none"
     }
@@ -98,149 +168,13 @@ async function sendMessage() {
 
 
 async function learnMode() {
-    const userInput =
-        document.getElementById("userInput").value
-
-    if (!userInput.trim()) {
-        alert("请输入学习主题")
-        return
-    }
-
-    const loadingText =
-        document.getElementById("loadingText")
-
-    const chatBox =
-        document.getElementById("chatBox")
-
-    loadingText.style.display = "block"
-
-    try {
-        const response = await fetch(
-            "http://127.0.0.1:8000/learn",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type": "application/json"
-                },
-
-                body: JSON.stringify({
-                    text: userInput
-                })
-            }
-        )
-
-        if (!response.ok) {
-            throw new Error("学习模式请求失败：" + response.status)
-        }
-
-        const data = await response.json()
-
-        document.getElementById("userInput").value = ""
-
-        chatBox.innerHTML += `
-            <div class="user-message">
-                <b>你：</b>${userInput}
-            </div>
-        `
-
-        chatBox.innerHTML += `
-            <div class="learn-card">
-                <h3>知识讲解</h3>
-                <div>${data.knowledge}</div>
-
-                <h3>总结</h3>
-                <div>${data.summary}</div>
-
-                <h3>练习题</h3>
-                <div>${data.quiz}</div>
-
-                <h3>下一步建议</h3>
-                <div>${data.advice}</div>
-            </div>
-        `
-
-    } catch (error) {
-        chatBox.innerHTML += `
-            <div class="ai-message">
-                <b>错误：</b>${error.message}
-            </div>
-        `
-    } finally {
-        loadingText.style.display = "none"
-    }
+    getElement("modeSelect").value = "learn"
+    await sendMessage("learn")
 }
 
+
 async function ragMode() {
-    const userInput =
-        document.getElementById("userInput").value
-
-    if (!userInput.trim()) {
-        alert("请输入知识库问题")
-        return
-    }
-
-    const loadingText =
-        document.getElementById("loadingText")
-
-    const chatBox =
-        document.getElementById("chatBox")
-
-    loadingText.style.display = "block"
-
-    try {
-        const response = await fetch(
-            "http://127.0.0.1:8000/rag",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type": "application/json"
-                },
-
-                body: JSON.stringify({
-                    text: userInput
-                })
-            }
-        )
-
-        if (!response.ok) {
-            throw new Error("知识库问答请求失败：" + response.status)
-        }
-
-        const data = await response.json()
-
-        document.getElementById("userInput").value = ""
-
-        const sourcesHtml = data.sources
-            .map(source => `<li>📄 ${source}</li>`)
-            .join("")
-
-        chatBox.innerHTML += `
-            <div class="user-message">
-                <b>你：</b>${userInput}
-            </div>
-        `
-
-        chatBox.innerHTML += `
-            <div class="ai-message">
-                <h3>知识库回答</h3>
-                <div>${data.answer}</div>
-
-                <h3>参考来源</h3>
-                <ul>
-                    ${sourcesHtml}
-                </ul>
-            </div>
-        `
-
-    } catch (error) {
-        chatBox.innerHTML += `
-            <div class="ai-message">
-                <b>错误：</b>${error.message}
-            </div>
-        `
-    } finally {
-        loadingText.style.display = "none"
-    }
+    getElement("modeSelect").value = "rag"
+    getElement("useRagInput").checked = true
+    await sendMessage("rag")
 }
