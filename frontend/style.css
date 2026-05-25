@@ -156,6 +156,20 @@ button:hover {
     margin-bottom: 12px;
 }
 
+.learning-answer-title {
+    margin-bottom: 6px;
+}
+
+.fallback-note {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 6px;
+    color: #9a3412;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    white-space: normal;
+}
+
 .meta-section {
     border-top: 1px solid #e2e8f0;
     margin-top: 12px;

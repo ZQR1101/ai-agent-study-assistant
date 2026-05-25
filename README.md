@@ -8,7 +8,12 @@ This project is still under active development.
 
 支持：
 
-- 项目支持统一 /chat 接口，前端可配置对话模式、模型、temperature、RAG 开关、Agent 开关和 top_k，并返回 answer、sources 和 trace，便于观察 AI 执行路径。
+1. 统一 /chat 接口
+2. 前端支持 mode / model / temperature / use_rag / use_agent / top_k
+3. RAG 相关性阈值过滤
+4. 空检索 fallback
+5. sources 和 trace 展示
+6. learn / quiz / summarize 等模式可以结合 RAG
 
 ---
 

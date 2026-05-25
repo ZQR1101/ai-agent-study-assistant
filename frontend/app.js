@@ -78,10 +78,57 @@ function renderList(title, items) {
 }
 
 
+function traceIncludes(trace, text) {
+    return Array.isArray(trace) && trace.some(item => String(item).includes(text))
+}
+
+
+function renderAnswer(data) {
+    const rawAnswer = String(data.answer || "")
+
+    if (data.mode !== "learn") {
+        return `<div class="answer">${escapeHtml(rawAnswer)}</div>`
+    }
+
+    const trace = data.trace || []
+    const ragPassed = traceIncludes(trace, "RAG 是否通过阈值：是")
+    const ragFailed = traceIncludes(trace, "RAG 是否通过阈值：否")
+    const fallbackUsed = traceIncludes(trace, "是否启用 fallback：是")
+    const ragDisabled = traceIncludes(trace, "use_rag：False")
+        || traceIncludes(trace, "use_rag：false")
+
+    let title = "学习内容："
+    let noteHtml = ""
+
+    if (ragPassed) {
+        title = "知识库学习内容："
+    } else if (ragFailed && fallbackUsed) {
+        title = "普通模型学习内容："
+        noteHtml = `
+            <div class="fallback-note">
+                知识库未找到可靠相关内容，本部分由普通模型生成。
+            </div>
+        `
+    } else if (ragDisabled) {
+        title = "学习内容："
+    }
+
+    const answerBody = rawAnswer.replace(/^知识内容：\s*/, "")
+
+    return `
+        <div class="answer">
+            <h3 class="learning-answer-title">${title}</h3>
+            ${noteHtml}
+            <div>${escapeHtml(answerBody)}</div>
+        </div>
+    `
+}
+
+
 function appendChatResponse(data) {
-    const answer = escapeHtml(data.answer || "")
     const sourcesHtml = renderList("参考来源", data.sources)
     const traceHtml = renderList("执行路径", data.trace)
+    const answerHtml = renderAnswer(data)
 
     getElement("chatBox").innerHTML += `
         <div class="ai-message">
@@ -89,7 +136,7 @@ function appendChatResponse(data) {
                 <span>模式：${escapeHtml(data.mode || "")}</span>
                 <span>模型：${escapeHtml(data.model || "")}</span>
             </div>
-            <div class="answer">${answer}</div>
+            ${answerHtml}
             ${sourcesHtml}
             ${traceHtml}
         </div>
