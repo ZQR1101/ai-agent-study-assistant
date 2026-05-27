@@ -561,6 +561,7 @@ def _with_fallback_prefix(answer: str, prefix: str) -> str:
 
 def run_chat_request(request: ChatRequest) -> dict:
     use_rag = request.use_rag or request.mode == "rag"
+    agent_handles_rag = request.mode == "auto" and request.use_agent
     selected_model = normalize_model(request.model)
     trace = [
         "收到用户请求",
@@ -579,9 +580,11 @@ def run_chat_request(request: ChatRequest) -> dict:
     fallback_used = False
     rag_context = None
 
-    if use_rag:
+    if use_rag and not agent_handles_rag:
         rag_context = get_rag_context(request.message, request.top_k)
         _append_rag_trace(trace, _rag_context_for_trace(rag_context, request.top_k))
+    elif use_rag and agent_handles_rag:
+        trace.append("外层 RAG 检索：跳过，交给 Agent rag tool 执行")
 
     if request.mode == "rag":
         executed_mode = "rag"
