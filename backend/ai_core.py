@@ -10,6 +10,8 @@ load_dotenv()
 
 DEFAULT_MODEL = "mimo-v2.5"
 DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+SOURCE_SNIPPET_LENGTH = 400
+
 NO_RAG_ANSWER = "知识库中没有找到与该问题相关的内容。你可以上传相关资料，或切换到普通聊天模式。"
 RAG_FALLBACK_PREFIX = "知识库中没有找到相关内容，以下内容未使用知识库，仅基于模型通用知识生成。"
 LEARN_FALLBACK_PREFIX = "知识库中没有找到相关内容，以下学习内容未使用知识库，仅基于模型通用知识生成。"
@@ -37,8 +39,14 @@ llm = build_llm()
 def _format_score(score) -> str:
     if score is None:
         return "无"
-
     return f"{score:.4f}"
+
+
+def _truncate_text(text: str, max_length: int = SOURCE_SNIPPET_LENGTH) -> str:
+    clean_text = " ".join(str(text or "").split())
+    if len(clean_text) <= max_length:
+        return clean_text
+    return clean_text[:max_length].rstrip() + "..."
 
 
 def _context_prompt(task: str, text: str, context: str) -> str:
@@ -81,17 +89,24 @@ def get_rag_context(
         }
 
     context_parts = []
+    source_chunks = []
+
     for chunk in chunks:
         context_parts.append(
             f"来源文件：{chunk['source']}\n"
             f"相似度：{chunk['score']:.4f}\n"
             f"内容：\n{chunk['text']}"
         )
+        source_chunks.append({
+            "source": chunk["source"],
+            "score": float(chunk["score"]),
+            "text": _truncate_text(chunk["text"]),
+        })
 
     return {
         "found": True,
         "context": "\n\n---\n\n".join(context_parts),
-        "sources": sorted(set(chunk["source"] for chunk in chunks)),
+        "sources": source_chunks,
         "max_score": max_score,
         "threshold": score_threshold,
     }
@@ -188,7 +203,10 @@ def rag_answer(
         top_k=top_k,
         similarity_threshold=similarity_threshold,
     )
-    source_text = "\n".join([f"- {source}" for source in result["sources"]])
+    source_text = "\n".join([
+        f"- {source.get('source')} ({_format_score(source.get('score'))})"
+        for source in result["sources"]
+    ])
 
     return f"""
 {result["answer"]}
@@ -303,6 +321,10 @@ def _format_learning_result(result: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _source_names(sources: list[dict]) -> list[str]:
+    return sorted(set(source.get("source", "") for source in sources if source.get("source")))
+
+
 def _append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
     if not rag_context:
         return
@@ -311,7 +333,7 @@ def _append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
     trace.append(f"RAG max_score：{_format_score(rag_context.get('max_score'))}")
     trace.append(f"RAG 阈值：{_format_score(rag_context.get('threshold'))}")
     trace.append(f"RAG 是否通过阈值：{'是' if rag_context.get('found') else '否'}")
-    trace.append(f"RAG sources：{rag_context.get('sources', [])}")
+    trace.append(f"RAG sources：{_source_names(rag_context.get('sources', []))}")
 
 
 def _rag_context_for_trace(rag_context: dict, top_k: int) -> dict:
@@ -326,12 +348,13 @@ def _with_fallback_prefix(answer: str, prefix: str) -> str:
 
 
 def run_chat_request(request: ChatRequest) -> dict:
+    use_rag = request.use_rag or request.mode == "rag"
     trace = [
         "收到用户请求",
         f"mode：{request.mode}",
         f"model：{request.model}",
         f"temperature：{request.temperature}",
-        f"use_rag：{request.use_rag}",
+        f"use_rag：{use_rag}",
     ]
     custom_llm = build_llm(model=request.model, temperature=request.temperature)
     sources = []
@@ -340,7 +363,7 @@ def run_chat_request(request: ChatRequest) -> dict:
     fallback_used = False
     rag_context = None
 
-    if request.use_rag:
+    if use_rag:
         rag_context = get_rag_context(request.message, request.top_k)
         _append_rag_trace(trace, _rag_context_for_trace(rag_context, request.top_k))
 
@@ -348,11 +371,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "rag"
         trace.append("最终执行的模式：rag")
 
-        if rag_context is None:
-            rag_context = get_rag_context(request.message, request.top_k)
-            _append_rag_trace(trace, _rag_context_for_trace(rag_context, request.top_k))
-
-        if rag_context["found"]:
+        if rag_context and rag_context["found"]:
             answer = chat(request.message, context=rag_context["context"], custom_llm=custom_llm)
             sources = rag_context["sources"]
         else:
@@ -362,12 +381,12 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "chat"
         trace.append("最终执行的模式：chat")
 
-        if request.use_rag and rag_context and rag_context["found"]:
+        if rag_context and rag_context["found"]:
             answer = chat(request.message, context=rag_context["context"], custom_llm=custom_llm)
             sources = rag_context["sources"]
         else:
             answer = chat(request.message, custom_llm=custom_llm)
-            if request.use_rag and rag_context and not rag_context["found"]:
+            if use_rag and rag_context and not rag_context["found"]:
                 fallback_used = True
                 answer = _with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
 
@@ -375,12 +394,12 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "explain"
         trace.append("最终执行的模式：explain")
 
-        if request.use_rag and rag_context and rag_context["found"]:
+        if rag_context and rag_context["found"]:
             answer = explain(request.message, context=rag_context["context"], custom_llm=custom_llm)
             sources = rag_context["sources"]
         else:
             answer = explain(request.message, custom_llm=custom_llm)
-            if request.use_rag and rag_context and not rag_context["found"]:
+            if use_rag and rag_context and not rag_context["found"]:
                 fallback_used = True
                 answer = _with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
 
@@ -388,12 +407,12 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "summarize"
         trace.append("最终执行的模式：summarize")
 
-        if request.use_rag and rag_context and rag_context["found"]:
+        if rag_context and rag_context["found"]:
             answer = summarize(request.message, context=rag_context["context"], custom_llm=custom_llm)
             sources = rag_context["sources"]
         else:
             answer = summarize(request.message, custom_llm=custom_llm)
-            if request.use_rag and rag_context and not rag_context["found"]:
+            if use_rag and rag_context and not rag_context["found"]:
                 fallback_used = True
                 answer = _with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
 
@@ -401,7 +420,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "quiz"
         trace.append("最终执行的模式：quiz")
 
-        if request.use_rag and rag_context and rag_context["found"]:
+        if rag_context and rag_context["found"]:
             answer = generate_questions(
                 request.message,
                 context=rag_context["context"],
@@ -410,7 +429,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             sources = rag_context["sources"]
         else:
             answer = generate_questions(request.message, custom_llm=custom_llm)
-            if request.use_rag and rag_context and not rag_context["found"]:
+            if use_rag and rag_context and not rag_context["found"]:
                 fallback_used = True
                 answer = _with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
 
@@ -418,7 +437,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         executed_mode = "learn"
         trace.append("最终执行的模式：learn")
 
-        if request.use_rag and rag_context and rag_context["found"]:
+        if rag_context and rag_context["found"]:
             result = learning_workflow(
                 request.message,
                 context=rag_context["context"],
@@ -432,7 +451,7 @@ def run_chat_request(request: ChatRequest) -> dict:
                 custom_llm=custom_llm,
                 use_rag=False,
             )
-            if request.use_rag and rag_context and not rag_context["found"]:
+            if use_rag and rag_context and not rag_context["found"]:
                 fallback_used = True
                 result["knowledge"] = _with_fallback_prefix(
                     result["knowledge"],

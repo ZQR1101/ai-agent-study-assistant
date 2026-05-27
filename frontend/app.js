@@ -27,16 +27,30 @@ function clampNumber(value, fallback, min, max) {
 }
 
 
+function updateUseRagState() {
+    const mode = getElement("modeSelect").value
+    const useRagInput = getElement("useRagInput")
+
+    if (mode === "rag") {
+        useRagInput.checked = true
+        useRagInput.disabled = true
+    } else {
+        useRagInput.disabled = false
+    }
+}
+
+
 function buildChatRequest(modeOverride) {
     const message = getElement("userInput").value.trim()
+    const mode = modeOverride || getElement("modeSelect").value
 
     return {
         message,
-        mode: modeOverride || getElement("modeSelect").value,
+        mode,
         model: getElement("modelSelect").value,
         temperature: clampNumber(getElement("temperatureInput").value, 0.7, 0, 2),
         use_agent: getElement("useAgentInput").checked,
-        use_rag: getElement("useRagInput").checked,
+        use_rag: mode === "rag" ? true : getElement("useRagInput").checked,
         top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
     }
 }
@@ -60,7 +74,7 @@ function appendErrorMessage(message) {
 }
 
 
-function renderList(title, items) {
+function renderTrace(title, items) {
     if (!items || items.length === 0) {
         return ""
     }
@@ -73,6 +87,40 @@ function renderList(title, items) {
         <div class="meta-section">
             <h3>${title}</h3>
             <ul>${listItems}</ul>
+        </div>
+    `
+}
+
+
+function renderSources(sources) {
+    if (!sources || sources.length === 0) {
+        return ""
+    }
+
+    const listItems = sources.map((source, index) => {
+        if (typeof source === "string") {
+            return `<li>${escapeHtml(source)}</li>`
+        }
+
+        const sourceName = escapeHtml(source.source || "未知来源")
+        const score = source.score === null || source.score === undefined
+            ? "无"
+            : Number(source.score).toFixed(4)
+        const text = escapeHtml(source.text || source.snippet || "")
+
+        return `
+            <li class="source-item">
+                <div><b>${index + 1}. ${sourceName}</b></div>
+                <div>相似度：${score}</div>
+                <div>命中片段：${text}</div>
+            </li>
+        `
+    }).join("")
+
+    return `
+        <div class="meta-section">
+            <h3>参考来源</h3>
+            <ol class="source-list">${listItems}</ol>
         </div>
     `
 }
@@ -126,8 +174,8 @@ function renderAnswer(data) {
 
 
 function appendChatResponse(data) {
-    const sourcesHtml = renderList("参考来源", data.sources)
-    const traceHtml = renderList("执行路径", data.trace)
+    const sourcesHtml = renderSources(data.sources)
+    const traceHtml = renderTrace("执行路径", data.trace)
     const answerHtml = renderAnswer(data)
 
     getElement("chatBox").innerHTML += `
@@ -175,6 +223,7 @@ async function uploadPDF() {
 
 
 async function sendMessage(modeOverride) {
+    updateUseRagState()
     const requestBody = buildChatRequest(modeOverride)
 
     if (!requestBody.message) {
@@ -216,6 +265,7 @@ async function sendMessage(modeOverride) {
 
 async function learnMode() {
     getElement("modeSelect").value = "learn"
+    updateUseRagState()
     await sendMessage("learn")
 }
 
@@ -223,5 +273,12 @@ async function learnMode() {
 async function ragMode() {
     getElement("modeSelect").value = "rag"
     getElement("useRagInput").checked = true
+    updateUseRagState()
     await sendMessage("rag")
 }
+
+
+document.addEventListener("DOMContentLoaded", () => {
+    getElement("modeSelect").addEventListener("change", updateUseRagState)
+    updateUseRagState()
+})

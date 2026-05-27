@@ -27,7 +27,7 @@ INDEX_DIR = PROJECT_ROOT / "rag_index"
 INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
-SIMILARITY_THRESHOLD = 0.45
+SIMILARITY_THRESHOLD = 0.55
 
 
 def load_documents():

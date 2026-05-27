@@ -16,9 +16,15 @@ class ChatRequest(BaseModel):
     top_k: int = Field(3, ge=1, le=10)
 
 
+class SourceChunk(BaseModel):
+    source: str
+    score: float | None = None
+    text: str
+
+
 class ChatResponse(BaseModel):
     answer: str
     mode: str
     model: str
-    sources: list[str] = Field(default_factory=list)
+    sources: list[SourceChunk] = Field(default_factory=list)
     trace: list[str] = Field(default_factory=list)

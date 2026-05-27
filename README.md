@@ -373,7 +373,7 @@ trace 可能记录：
     "use_rag：True",
     "RAG top_k：3",
     "RAG max_score：0.4029",
-    "RAG 阈值：0.4500",
+    "RAG 阈值：0.5500",
     "RAG 是否通过阈值：否",
     "RAG sources：[]",
     "最终执行的模式：quiz",
