@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import json
+import re
 
 
 embedding_model = None
@@ -38,15 +39,16 @@ def load_documents():
         return documents
 
     for file_path in DOCS_PATH.iterdir():
+        suffix = file_path.suffix.lower()
 
-        if file_path.suffix in [".txt", ".md"]:
+        if suffix in [".txt", ".md"]:
             with open(file_path, "r", encoding="utf-8") as f:
                 documents.append({
                     "source": file_path.name,
                     "text": f.read()
                 })
 
-        elif file_path.suffix == ".pdf":
+        elif suffix == ".pdf":
             reader = PdfReader(file_path)
             pdf_text = ""
 
@@ -156,6 +158,71 @@ def ensure_rag_index():
         rebuild_rag_index()
 
 
+def list_index_sources() -> list[str]:
+    ensure_rag_index()
+    return sorted(set(chunk["source"] for chunk in chunks))
+
+
+def _extract_query_terms(question: str) -> list[str]:
+    raw_terms = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff]+", question.lower())
+    stop_words = {"什么是", "什么", "怎么", "如何", "the", "and", "for", "with"}
+    return [
+        term
+        for term in raw_terms
+        if len(term) >= 2 and term not in stop_words
+    ]
+
+
+def _keyword_relevant_chunks(
+    question: str,
+    top_k: int = 3,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+):
+    terms = _extract_query_terms(question)
+
+    if not terms:
+        return []
+
+    min_hits = 2 if len(terms) >= 2 else 1
+    results = []
+
+    for chunk in chunks:
+        source_text = chunk["source"].lower()
+        content_text = chunk["text"].lower()
+        source_hits = sum(1 for term in terms if term in source_text)
+        content_hits = sum(1 for term in terms if term in content_text)
+        total_hits = source_hits + content_hits
+
+        if total_hits < min_hits:
+            continue
+
+        score = similarity_threshold + min(0.15, total_hits * 0.03 + source_hits * 0.02)
+        results.append({
+            "source": chunk["source"],
+            "text": chunk["text"],
+            "score": float(score),
+            "_keyword_hits": total_hits,
+        })
+
+    results.sort(
+        key=lambda item: (
+            item["_keyword_hits"],
+            item["score"],
+            len(item["text"]),
+        ),
+        reverse=True,
+    )
+
+    return [
+        {
+            "source": item["source"],
+            "text": item["text"],
+            "score": item["score"],
+        }
+        for item in results[:top_k]
+    ]
+
+
 def search_relevant_chunks(
     question: str,
     top_k: int = 3,
@@ -183,7 +250,8 @@ def search_relevant_chunks(
 
     faiss.normalize_L2(question_embedding)
 
-    scores, indices = index.search(question_embedding, top_k)
+    search_k = min(len(chunks), max(top_k * 5, top_k))
+    scores, indices = index.search(question_embedding, search_k)
 
     highest_score = None
     results = []
@@ -192,6 +260,23 @@ def search_relevant_chunks(
         highest_score = float(scores[0][0])
 
     if highest_score is None or highest_score < similarity_threshold:
+        keyword_results = _keyword_relevant_chunks(
+            question,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+        )
+
+        if keyword_results:
+            keyword_highest_score = max(item["score"] for item in keyword_results)
+            if include_metadata:
+                return {
+                    "chunks": keyword_results,
+                    "highest_score": keyword_highest_score,
+                    "threshold": similarity_threshold,
+                    "passed_threshold": True,
+                }
+            return keyword_results
+
         if include_metadata:
             return {
                 "chunks": [],
@@ -215,6 +300,9 @@ def search_relevant_chunks(
             "text": chunk["text"],
             "score": float(score)
         })
+
+        if len(results) >= top_k:
+            break
 
     if include_metadata:
         return {

@@ -14,7 +14,7 @@ from backend.ai_core import (
     rag_answer_with_sources,
     run_chat_request,
 )
-from backend.rag_store import rebuild_rag_index, search_relevant_chunks
+from backend.rag_store import rebuild_rag_index, search_relevant_chunks, list_index_sources
 
 app = FastAPI(title="AI学习助手 API")
 
@@ -115,6 +115,15 @@ def rebuild_index_api():
     return {
         "message": "RAG 索引已重建"
     }
+
+@app.get("/debug-index-sources")
+def debug_index_sources_api():
+    sources = list_index_sources()
+    return {
+        "count": len(sources),
+        "sources": sources,
+    }
+
 
 @app.post("/debug-rag")
 def debug_rag_api(request: TextRequest):

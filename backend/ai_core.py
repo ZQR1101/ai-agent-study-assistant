@@ -1,4 +1,6 @@
+import json
 import os
+import re
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -10,11 +12,18 @@ load_dotenv()
 
 DEFAULT_MODEL = "mimo-v2.5"
 DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+SUPPORTED_MODELS = {DEFAULT_MODEL}
 SOURCE_SNIPPET_LENGTH = 400
 
 NO_RAG_ANSWER = "知识库中没有找到与该问题相关的内容。你可以上传相关资料，或切换到普通聊天模式。"
 RAG_FALLBACK_PREFIX = "知识库中没有找到相关内容，以下内容未使用知识库，仅基于模型通用知识生成。"
 LEARN_FALLBACK_PREFIX = "知识库中没有找到相关内容，以下学习内容未使用知识库，仅基于模型通用知识生成。"
+
+
+def normalize_model(model: str | None) -> str:
+    if model in SUPPORTED_MODELS:
+        return model
+    return DEFAULT_MODEL
 
 
 def build_llm(model: str = DEFAULT_MODEL, temperature: float = 0.7, max_tokens: int = 2000):
@@ -23,11 +32,12 @@ def build_llm(model: str = DEFAULT_MODEL, temperature: float = 0.7, max_tokens: 
         or os.getenv("MIMO_API_KEY")
         or os.getenv("OPENAI_API_KEY")
     )
+    selected_model = normalize_model(model)
 
     return ChatOpenAI(
         api_key=api_key,
         base_url=os.getenv("MIMO_BASE_URL", DEFAULT_BASE_URL),
-        model=model,
+        model=selected_model,
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -100,6 +110,7 @@ def get_rag_context(
         source_chunks.append({
             "source": chunk["source"],
             "score": float(chunk["score"]),
+            "snippet": _truncate_text(chunk["text"]),
             "text": _truncate_text(chunk["text"]),
         })
 
@@ -218,39 +229,240 @@ def rag_answer(
 """
 
 
-def agent_router(user_input: str, custom_llm=None) -> str:
+def _extract_json_object(text: str) -> dict | None:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
+    lowered = user_input.lower()
+
+    if any(word in lowered for word in ["quiz", "题", "练习", "测试"]):
+        tool = "quiz"
+    elif any(word in lowered for word in ["summary", "summarize", "总结", "摘要"]):
+        tool = "summarize"
+    elif any(word in lowered for word in ["rag", "知识库", "根据我的资料", "根据文档"]):
+        tool = "rag"
+    elif any(word in lowered for word in ["解释", "什么是", "what is", "why"]):
+        tool = "explain"
+    else:
+        tool = "chat"
+
+    return {
+        "goal": "根据用户请求选择最合适的学习助手能力。",
+        "fallback": True,
+        "fallback_reason": reason,
+        "steps": [
+            {
+                "tool": tool,
+                "input": user_input,
+                "reason": "使用本地规则生成的 fallback 单步计划。",
+            }
+        ],
+    }
+
+
+def plan_agent_steps(user_input: str, custom_llm=None) -> dict:
     active_llm = custom_llm or llm
-    router_prompt = f"""
-你是一个任务分类器。
+    planner_prompt = f"""
+你是 AI 学习助手的 Planner。
+请把用户请求拆成 1 到 3 个执行步骤，并只返回 JSON，不要返回 Markdown。
 
-请判断用户请求属于哪一类：
+可用工具：
+- chat：普通回答
+- explain：解释概念
+- summarize：总结内容
+- quiz：生成练习题
+- rag：查询本地知识库
 
-1 = explain
-2 = summarize
-3 = quiz
-4 = rag
-
-你只能返回数字，不要解释。
+JSON 格式：
+{{
+  "goal": "用户目标",
+  "steps": [
+    {{
+      "tool": "chat|explain|summarize|quiz|rag",
+      "input": "传给工具的输入",
+      "reason": "为什么使用这个工具"
+    }}
+  ]
+}}
 
 用户请求：
 {user_input}
 """
-    response = active_llm.invoke(router_prompt)
-    choice = response.content.strip()
+    response = active_llm.invoke(planner_prompt)
+    plan = _extract_json_object(response.content)
 
-    if choice.startswith("1"):
-        return explain(user_input, custom_llm=active_llm)
+    if not plan or not isinstance(plan.get("steps"), list) or not plan["steps"]:
+        return _fallback_agent_plan(user_input)
 
-    if choice.startswith("2"):
-        return summarize(user_input, custom_llm=active_llm)
+    allowed_tools = {"chat", "explain", "summarize", "quiz", "rag"}
+    normalized_steps = []
 
-    if choice.startswith("3"):
-        return generate_questions(user_input, custom_llm=active_llm)
+    for step in plan["steps"][:3]:
+        if not isinstance(step, dict):
+            continue
 
-    if choice.startswith("4"):
-        return rag_answer(user_input, custom_llm=active_llm)
+        tool = str(step.get("tool", "")).strip().lower()
+        if tool not in allowed_tools:
+            continue
 
-    return "无法判断用户意图。"
+        normalized_steps.append({
+            "tool": tool,
+            "input": str(step.get("input") or user_input),
+            "reason": str(step.get("reason") or "planner selected this tool"),
+        })
+
+    if not normalized_steps:
+        return _fallback_agent_plan(user_input, reason="planner returned no valid tools")
+
+    return {
+        "goal": str(plan.get("goal") or "完成用户请求"),
+        "fallback": False,
+        "steps": normalized_steps,
+    }
+
+
+def _execute_agent_tool(tool: str, tool_input: str, custom_llm=None, top_k: int = 3) -> dict:
+    active_llm = custom_llm or llm
+
+    if tool == "chat":
+        return {
+            "answer": chat(tool_input, custom_llm=active_llm),
+            "sources": [],
+            "trace": [],
+            "fallback_used": False,
+        }
+
+    if tool == "explain":
+        return {
+            "answer": explain(tool_input, custom_llm=active_llm),
+            "sources": [],
+            "trace": [],
+            "fallback_used": False,
+        }
+
+    if tool == "summarize":
+        return {
+            "answer": summarize(tool_input, custom_llm=active_llm),
+            "sources": [],
+            "trace": [],
+            "fallback_used": False,
+        }
+
+    if tool == "quiz":
+        return {
+            "answer": generate_questions(tool_input, custom_llm=active_llm),
+            "sources": [],
+            "trace": [],
+            "fallback_used": False,
+        }
+
+    if tool == "rag":
+        rag_context = get_rag_context(tool_input, top_k=top_k)
+        rag_sources = rag_context.get("sources", [])
+        trace = [
+            f"RAG query：{tool_input}",
+            f"RAG max_score：{_format_score(rag_context.get('max_score'))}",
+            f"RAG threshold：{_format_score(rag_context.get('threshold'))}",
+            f"RAG 是否命中：{'是' if rag_context.get('found') else '否'}",
+            f"RAG sources：{_source_names(rag_sources)}",
+        ]
+
+        if rag_context.get("found"):
+            return {
+                "answer": chat(tool_input, context=rag_context["context"], custom_llm=active_llm),
+                "sources": rag_sources,
+                "trace": trace,
+                "fallback_used": False,
+            }
+
+        trace.append("Agent RAG 未命中，未使用知识库来源")
+        answer = _with_fallback_prefix(
+            chat(tool_input, custom_llm=active_llm),
+            RAG_FALLBACK_PREFIX,
+        )
+        return {
+            "answer": answer,
+            "sources": [],
+            "trace": trace,
+            "fallback_used": True,
+        }
+
+    return {
+        "answer": chat(tool_input, custom_llm=active_llm),
+        "sources": [],
+        "trace": [],
+        "fallback_used": False,
+    }
+
+
+def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k: int = 3) -> dict:
+    active_llm = custom_llm or llm
+    trace = ["Agent Planner：开始分析用户请求"]
+    plan = plan_agent_steps(user_input, custom_llm=active_llm)
+
+    trace.append(f"Agent Planner goal：{plan.get('goal')}")
+    trace.append(f"Agent Planner fallback：{'是' if plan.get('fallback') else '否'}")
+    if plan.get("fallback_reason"):
+        trace.append(f"Agent Planner fallback reason：{plan['fallback_reason']}")
+
+    if prefer_rag and not any(step.get("tool") == "rag" for step in plan["steps"]):
+        plan["steps"].insert(0, {
+            "tool": "rag",
+            "input": user_input,
+            "reason": "use_rag=true，优先尝试知识库检索",
+        })
+        plan["steps"] = plan["steps"][:3]
+        trace.append("Agent Planner：use_rag=true，已插入 rag step")
+
+    previous_result = ""
+    step_outputs = []
+    all_sources = []
+    fallback_used = False
+
+    for index, step in enumerate(plan["steps"], start=1):
+        tool = step["tool"]
+        tool_input = step.get("input") or user_input
+        if "{previous_result}" in tool_input:
+            tool_input = tool_input.replace("{previous_result}", previous_result)
+
+        trace.append(f"Agent Step {index} tool={tool}")
+        trace.append(f"Agent Step {index} plan：tool={tool}, reason={step.get('reason')}")
+        result = _execute_agent_tool(tool, tool_input, custom_llm=active_llm, top_k=top_k)
+        result_answer = result.get("answer", "")
+        result_sources = result.get("sources", [])
+        previous_result = result_answer
+        all_sources.extend(result_sources)
+        fallback_used = fallback_used or result.get("fallback_used", False)
+        trace.extend(result.get("trace", []))
+        step_outputs.append(f"步骤 {index}（{tool}）：\n{result_answer}")
+        trace.append(f"Agent Step {index} done：输出长度 {len(result_answer)}")
+
+    answer = "\n\n".join(step_outputs) if step_outputs else chat(user_input, custom_llm=active_llm)
+
+    return {
+        "answer": answer,
+        "trace": trace,
+        "plan": plan,
+        "sources": all_sources,
+        "fallback_used": fallback_used,
+    }
+
+
+def agent_router(user_input: str, custom_llm=None) -> str:
+    return run_agent(user_input, custom_llm=custom_llm)["answer"]
 
 
 def learning_workflow(
@@ -349,14 +561,18 @@ def _with_fallback_prefix(answer: str, prefix: str) -> str:
 
 def run_chat_request(request: ChatRequest) -> dict:
     use_rag = request.use_rag or request.mode == "rag"
+    selected_model = normalize_model(request.model)
     trace = [
         "收到用户请求",
         f"mode：{request.mode}",
-        f"model：{request.model}",
+        f"model：{selected_model}",
         f"temperature：{request.temperature}",
         f"use_rag：{use_rag}",
     ]
-    custom_llm = build_llm(model=request.model, temperature=request.temperature)
+    if selected_model != request.model:
+        trace.append(f"模型 {request.model} 不可用，已回退到 {selected_model}")
+
+    custom_llm = build_llm(model=selected_model, temperature=request.temperature)
     sources = []
     answer = ""
     executed_mode = request.mode
@@ -462,20 +678,38 @@ def run_chat_request(request: ChatRequest) -> dict:
 
     elif request.mode == "auto" or request.use_agent:
         executed_mode = "agent"
-        trace.append("最终执行的模式：agent_router")
-        answer = agent_router(request.message, custom_llm=custom_llm)
+        trace.append("最终执行的模式：agent")
+        agent_result = run_agent(
+            request.message,
+            custom_llm=custom_llm,
+            prefer_rag=use_rag,
+            top_k=request.top_k,
+        )
+        answer = agent_result["answer"]
+        sources = agent_result.get("sources", [])
+        fallback_used = fallback_used or agent_result.get("fallback_used", False)
+        trace.extend(agent_result["trace"])
 
     else:
-        executed_mode = "auto"
-        trace.append("最终执行的模式：agent_router")
-        answer = agent_router(request.message, custom_llm=custom_llm)
+        executed_mode = "agent"
+        trace.append("最终执行的模式：agent")
+        agent_result = run_agent(
+            request.message,
+            custom_llm=custom_llm,
+            prefer_rag=use_rag,
+            top_k=request.top_k,
+        )
+        answer = agent_result["answer"]
+        sources = agent_result.get("sources", [])
+        fallback_used = fallback_used or agent_result.get("fallback_used", False)
+        trace.extend(agent_result["trace"])
 
     trace.append(f"是否启用 fallback：{'是' if fallback_used else '否'}")
 
     return {
         "answer": answer,
         "mode": executed_mode,
-        "model": request.model,
+        "model": selected_model,
         "sources": sources,
         "trace": trace,
     }

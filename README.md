@@ -235,7 +235,7 @@ Content-Type: application/json
 前端页面相当于一个轻量参数控制台：
 
 - `mode`：选择 `chat`、`rag`、`explain`、`summarize`、`quiz`、`learn`、`auto`
-- `model`：选择 `mimo-v2.5` 或 `MiMo-V2.5-Pro`
+- `model`：当前前端默认使用 `mimo-v2.5`
 - `temperature`：控制模型输出随机性，范围 `0.0 - 2.0`
 - `use_agent`：是否启用 Agent Router
 - `use_rag`：是否启用知识库检索

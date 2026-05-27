@@ -19,7 +19,8 @@ class ChatRequest(BaseModel):
 class SourceChunk(BaseModel):
     source: str
     score: float | None = None
-    text: str
+    snippet: str | None = None
+    text: str | None = None
 
 
 class ChatResponse(BaseModel):
