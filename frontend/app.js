@@ -126,6 +126,34 @@ function renderSources(sources) {
 }
 
 
+function renderPlan(plan) {
+    if (!plan || plan.length === 0) {
+        return ""
+    }
+
+    const listItems = plan.map((step, index) => {
+        const tool = escapeHtml(step.tool || "unknown")
+        const input = escapeHtml(step.input || "")
+        const reason = escapeHtml(step.reason || "")
+
+        return `
+            <li class="plan-item">
+                <div><b>${index + 1}. ${tool}</b></div>
+                <div>输入：${input}</div>
+                ${reason ? `<div>原因：${reason}</div>` : ""}
+            </li>
+        `
+    }).join("")
+
+    return `
+        <div class="meta-section">
+            <h3>Agent 计划</h3>
+            <ol class="plan-list">${listItems}</ol>
+        </div>
+    `
+}
+
+
 function traceIncludes(trace, text) {
     return Array.isArray(trace) && trace.some(item => String(item).includes(text))
 }
@@ -175,6 +203,7 @@ function renderAnswer(data) {
 
 function appendChatResponse(data) {
     const sourcesHtml = renderSources(data.sources)
+    const planHtml = renderPlan(data.plan)
     const traceHtml = renderTrace("执行路径", data.trace)
     const answerHtml = renderAnswer(data)
 
@@ -186,6 +215,7 @@ function appendChatResponse(data) {
             </div>
             ${answerHtml}
             ${sourcesHtml}
+            ${planHtml}
             ${traceHtml}
         </div>
     `

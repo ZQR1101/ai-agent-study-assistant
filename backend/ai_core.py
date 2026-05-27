@@ -559,6 +559,21 @@ def _with_fallback_prefix(answer: str, prefix: str) -> str:
     return f"{prefix}\n\n{answer}"
 
 
+def _plan_steps_for_response(plan: dict | None) -> list[dict]:
+    if not plan or not isinstance(plan.get("steps"), list):
+        return []
+
+    return [
+        {
+            "tool": str(step.get("tool", "")),
+            "input": str(step.get("input", "")),
+            "reason": step.get("reason"),
+        }
+        for step in plan["steps"]
+        if isinstance(step, dict)
+    ]
+
+
 def run_chat_request(request: ChatRequest) -> dict:
     use_rag = request.use_rag or request.mode == "rag"
     agent_handles_rag = request.mode == "auto" and request.use_agent
@@ -579,6 +594,7 @@ def run_chat_request(request: ChatRequest) -> dict:
     executed_mode = request.mode
     fallback_used = False
     rag_context = None
+    plan = []
 
     if use_rag and not agent_handles_rag:
         rag_context = get_rag_context(request.message, request.top_k)
@@ -690,6 +706,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
+        plan = _plan_steps_for_response(agent_result.get("plan"))
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -704,6 +721,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
+        plan = _plan_steps_for_response(agent_result.get("plan"))
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -715,4 +733,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "model": selected_model,
         "sources": sources,
         "trace": trace,
+        "plan": plan,
     }

@@ -23,9 +23,16 @@ class SourceChunk(BaseModel):
     text: str | None = None
 
 
+class AgentPlanStep(BaseModel):
+    tool: str
+    input: str
+    reason: str | None = None
+
+
 class ChatResponse(BaseModel):
     answer: str
     mode: str
     model: str
     sources: list[SourceChunk] = Field(default_factory=list)
     trace: list[str] = Field(default_factory=list)
+    plan: list[AgentPlanStep] = Field(default_factory=list)
