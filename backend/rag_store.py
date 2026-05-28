@@ -29,6 +29,64 @@ INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
 SIMILARITY_THRESHOLD = 0.55
+MIN_CHUNK_LENGTH = 30
+
+
+def is_valid_chunk(text: str, min_length: int = MIN_CHUNK_LENGTH) -> bool:
+    clean_text = " ".join(str(text or "").split())
+
+    if len(clean_text) < min_length:
+        return False
+
+    if re.fullmatch(r"[\s\|\-\:\#\*_`~\.=]+", clean_text):
+        return False
+
+    table_separator = re.fullmatch(r"[\|\s\-\:]+", clean_text)
+    if table_separator:
+        return False
+
+    meaningful_chars = re.findall(r"[0-9A-Za-z\u4e00-\u9fff]", clean_text)
+    if len(meaningful_chars) < 20:
+        return False
+
+    meaningful_ratio = len(meaningful_chars) / max(len(clean_text), 1)
+    if meaningful_ratio < 0.25:
+        return False
+
+    return True
+
+
+def expand_query(query: str) -> str:
+    lowered = query.lower()
+    expansions = []
+
+    if "agentic rag" in lowered or "agent rag" in lowered:
+        expansions.extend([
+            "agentic rag",
+            "代理式RAG",
+            "代理式检索增强生成",
+            "智能体RAG",
+            "agent rag",
+        ])
+
+    if "langgraph" in lowered:
+        expansions.extend(["LangGraph", "图工作流", "状态图", "agent workflow"])
+
+    if "prompt engineering" in lowered or "提示工程" in lowered:
+        expansions.extend(["prompt engineering", "提示工程", "提示词工程", "prompting best practices"])
+
+    if re.search(r"\brag\b", lowered) or "检索增强生成" in query:
+        expansions.extend(["RAG", "检索增强生成", "知识库问答", "retrieval augmented generation"])
+
+    unique_expansions = []
+    for item in expansions:
+        if item not in query and item not in unique_expansions:
+            unique_expansions.append(item)
+
+    if not unique_expansions:
+        return query
+
+    return f"{query} {' '.join(unique_expansions)}"
 
 
 def load_documents():
@@ -80,7 +138,7 @@ def build_chunks():
         for i in range(0, len(text), chunk_size - overlap):
             chunk = text[i:i + chunk_size]
 
-            if chunk.strip():
+            if is_valid_chunk(chunk):
                 new_chunks.append({
                     "source": source,
                     "text": chunk.strip()
@@ -187,6 +245,9 @@ def _keyword_relevant_chunks(
     results = []
 
     for chunk in chunks:
+        if not is_valid_chunk(chunk["text"]):
+            continue
+
         source_text = chunk["source"].lower()
         content_text = chunk["text"].lower()
         source_hits = sum(1 for term in terms if term in source_text)
@@ -233,6 +294,7 @@ def search_relevant_chunks(
     global chunks
 
     ensure_rag_index()
+    expanded_question = expand_query(question)
 
     if index is None or not chunks:
         if include_metadata:
@@ -241,11 +303,15 @@ def search_relevant_chunks(
                 "highest_score": None,
                 "threshold": similarity_threshold,
                 "passed_threshold": False,
+                "expanded_query": expanded_question,
+                "raw_count": 0,
+                "valid_count": 0,
+                "discarded_invalid_count": 0,
             }
         return []
 
     model = get_embedding_model()
-    question_embedding = model.encode([question])
+    question_embedding = model.encode([expanded_question])
     question_embedding = np.array(question_embedding).astype("float32")
 
     faiss.normalize_L2(question_embedding)
@@ -254,37 +320,11 @@ def search_relevant_chunks(
     scores, indices = index.search(question_embedding, search_k)
 
     highest_score = None
+    raw_results = []
     results = []
 
     if len(indices[0]) > 0 and indices[0][0] != -1:
         highest_score = float(scores[0][0])
-
-    if highest_score is None or highest_score < similarity_threshold:
-        keyword_results = _keyword_relevant_chunks(
-            question,
-            top_k=top_k,
-            similarity_threshold=similarity_threshold,
-        )
-
-        if keyword_results:
-            keyword_highest_score = max(item["score"] for item in keyword_results)
-            if include_metadata:
-                return {
-                    "chunks": keyword_results,
-                    "highest_score": keyword_highest_score,
-                    "threshold": similarity_threshold,
-                    "passed_threshold": True,
-                }
-            return keyword_results
-
-        if include_metadata:
-            return {
-                "chunks": [],
-                "highest_score": highest_score,
-                "threshold": similarity_threshold,
-                "passed_threshold": False,
-            }
-        return []
 
     for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
@@ -294,15 +334,57 @@ def search_relevant_chunks(
             continue
 
         chunk = chunks[idx]
-
-        results.append({
+        raw_results.append({
             "source": chunk["source"],
             "text": chunk["text"],
             "score": float(score)
         })
 
-        if len(results) >= top_k:
-            break
+    raw_count = len(raw_results)
+    valid_vector_results = [
+        item
+        for item in raw_results
+        if is_valid_chunk(item["text"])
+    ]
+
+    keyword_results = _keyword_relevant_chunks(
+        expanded_question,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+    )
+
+    combined_results = valid_vector_results + [
+        item for item in keyword_results if is_valid_chunk(item["text"])
+    ]
+
+    seen = set()
+    deduped_results = []
+    for item in combined_results:
+        key = (item["source"], item["text"])
+        if key in seen:
+            continue
+
+        seen.add(key)
+        deduped_results.append(item)
+
+    deduped_results.sort(key=lambda item: item["score"], reverse=True)
+    results = deduped_results[:top_k]
+    valid_count = len(results)
+    discarded_invalid_count = raw_count - len(valid_vector_results)
+
+    if results:
+        highest_score = max(float(item["score"]) for item in results)
+    elif include_metadata:
+        return {
+            "chunks": [],
+            "highest_score": highest_score,
+            "threshold": similarity_threshold,
+            "passed_threshold": False,
+            "expanded_query": expanded_question,
+            "raw_count": raw_count,
+            "valid_count": 0,
+            "discarded_invalid_count": discarded_invalid_count,
+        }
 
     if include_metadata:
         return {
@@ -310,6 +392,10 @@ def search_relevant_chunks(
             "highest_score": highest_score,
             "threshold": similarity_threshold,
             "passed_threshold": bool(results),
+            "expanded_query": expanded_question,
+            "raw_count": raw_count,
+            "valid_count": valid_count,
+            "discarded_invalid_count": discarded_invalid_count,
         }
 
     return results

@@ -88,6 +88,10 @@ def get_rag_context(
     )
     chunks = search_result["chunks"]
     max_score = search_result["highest_score"]
+    expanded_query = search_result.get("expanded_query", question)
+    raw_count = search_result.get("raw_count", 0)
+    valid_count = search_result.get("valid_count", len(chunks))
+    discarded_invalid_count = search_result.get("discarded_invalid_count", 0)
 
     if not chunks or max_score is None or max_score < score_threshold:
         return {
@@ -96,6 +100,10 @@ def get_rag_context(
             "sources": [],
             "max_score": max_score,
             "threshold": score_threshold,
+            "expanded_query": expanded_query,
+            "raw_count": raw_count,
+            "valid_count": valid_count,
+            "discarded_invalid_count": discarded_invalid_count,
         }
 
     context_parts = []
@@ -120,6 +128,10 @@ def get_rag_context(
         "sources": source_chunks,
         "max_score": max_score,
         "threshold": score_threshold,
+        "expanded_query": expanded_query,
+        "raw_count": raw_count,
+        "valid_count": valid_count,
+        "discarded_invalid_count": discarded_invalid_count,
     }
 
 
@@ -374,8 +386,12 @@ def _execute_agent_tool(tool: str, tool_input: str, custom_llm=None, top_k: int 
         rag_sources = rag_context.get("sources", [])
         trace = [
             f"RAG query：{tool_input}",
+            f"RAG expanded_query：{rag_context.get('expanded_query')}",
             f"RAG max_score：{_format_score(rag_context.get('max_score'))}",
             f"RAG threshold：{_format_score(rag_context.get('threshold'))}",
+            f"RAG 原始候选数：{rag_context.get('raw_count')}",
+            f"RAG 有效候选数：{rag_context.get('valid_count')}",
+            f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}",
             f"RAG 是否命中：{'是' if rag_context.get('found') else '否'}",
             f"RAG sources：{_source_names(rag_sources)}",
         ]
@@ -542,8 +558,12 @@ def _append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
         return
 
     trace.append(f"RAG top_k：{rag_context.get('top_k')}")
+    trace.append(f"RAG expanded_query：{rag_context.get('expanded_query')}")
     trace.append(f"RAG max_score：{_format_score(rag_context.get('max_score'))}")
     trace.append(f"RAG 阈值：{_format_score(rag_context.get('threshold'))}")
+    trace.append(f"RAG 原始候选数：{rag_context.get('raw_count')}")
+    trace.append(f"RAG 有效候选数：{rag_context.get('valid_count')}")
+    trace.append(f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}")
     trace.append(f"RAG 是否通过阈值：{'是' if rag_context.get('found') else '否'}")
     trace.append(f"RAG sources：{_source_names(rag_context.get('sources', []))}")
 
