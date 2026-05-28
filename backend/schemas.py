@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
+AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz"]
 
 
 class ChatRequest(BaseModel):
@@ -24,9 +25,15 @@ class SourceChunk(BaseModel):
 
 
 class AgentPlanStep(BaseModel):
-    tool: str
-    input: str
+    tool: AgentToolName
+    input: str = Field(..., min_length=1)
     reason: str | None = None
+
+
+class AgentPlan(BaseModel):
+    goal: str = Field(..., min_length=1)
+    steps: list[AgentPlanStep] = Field(..., min_length=1)
+    fallback: bool = False
 
 
 class TraceBlock(BaseModel):

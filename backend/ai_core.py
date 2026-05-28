@@ -4,9 +4,10 @@ import re
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from pydantic import ValidationError
 
 from backend.rag_store import SIMILARITY_THRESHOLD, search_relevant_chunks
-from backend.schemas import ChatRequest
+from backend.schemas import AgentPlan, ChatRequest
 
 load_dotenv()
 
@@ -257,6 +258,22 @@ def _extract_json_object(text: str) -> dict | None:
         return None
 
 
+def _model_to_dict(model) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+
+    return model.dict()
+
+
+def _validate_agent_plan(data: dict) -> dict:
+    if hasattr(AgentPlan, "model_validate"):
+        plan = AgentPlan.model_validate(data)
+    else:
+        plan = AgentPlan.parse_obj(data)
+
+    return _model_to_dict(plan)
+
+
 def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
     lowered = user_input.lower()
 
@@ -271,10 +288,9 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
     else:
         tool = "chat"
 
-    return {
+    fallback_plan = {
         "goal": "根据用户请求选择最合适的学习助手能力。",
         "fallback": True,
-        "fallback_reason": reason,
         "steps": [
             {
                 "tool": tool,
@@ -283,13 +299,18 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
             }
         ],
     }
+    validated_plan = _validate_agent_plan(fallback_plan)
+    validated_plan["fallback_reason"] = reason
+    validated_plan["planner_json_parse"] = "失败"
+    validated_plan["planner_schema_validate"] = "失败"
+    return validated_plan
 
 
 def plan_agent_steps(user_input: str, custom_llm=None) -> dict:
     active_llm = custom_llm or llm
     planner_prompt = f"""
 你是 AI 学习助手的 Planner。
-请把用户请求拆成 1 到 3 个执行步骤，并只返回 JSON，不要返回 Markdown。
+请把用户请求拆成 1 到 3 个执行步骤，并只返回 JSON object。
 
 可用工具：
 - chat：普通回答
@@ -298,52 +319,118 @@ def plan_agent_steps(user_input: str, custom_llm=None) -> dict:
 - quiz：生成练习题
 - rag：查询本地知识库
 
-JSON 格式：
+AgentPlan schema：
 {{
-  "goal": "用户目标",
+  "goal": "用户任务目标，非空字符串",
   "steps": [
     {{
-      "tool": "chat|explain|summarize|quiz|rag",
-      "input": "传给工具的输入",
+      "tool": "chat|rag|explain|summarize|quiz",
+      "input": "传给工具的输入，非空字符串",
       "reason": "为什么使用这个工具"
     }}
-  ]
+  ],
+  "fallback": false
 }}
 
-用户请求：
+工具名只能是：chat、rag、explain、summarize、quiz。
+
+示例 1：
+用户输入：什么是 RAG
+输出：
+{{
+  "goal": "解释 RAG 的概念",
+  "steps": [
+    {{
+      "tool": "explain",
+      "input": "RAG",
+      "reason": "用户询问概念定义，使用 explain 工具解释"
+    }}
+  ],
+  "fallback": false
+}}
+
+示例 2：
+用户输入：请解释 RAG，并出 3 道练习题
+输出：
+{{
+  "goal": "解释 RAG 并生成练习题",
+  "steps": [
+    {{
+      "tool": "explain",
+      "input": "RAG",
+      "reason": "先解释概念"
+    }},
+    {{
+      "tool": "quiz",
+      "input": "基于 RAG 生成 3 道练习题",
+      "reason": "用户要求出题"
+    }}
+  ],
+  "fallback": false
+}}
+
+示例 3：
+用户输入：根据知识库解释 agentic rag，并出 3 道练习题
+输出：
+{{
+  "goal": "基于知识库解释 agentic rag 并生成练习题",
+  "steps": [
+    {{
+      "tool": "rag",
+      "input": "agentic rag",
+      "reason": "用户要求根据知识库回答，先检索相关内容"
+    }},
+    {{
+      "tool": "explain",
+      "input": "基于知识库内容解释 agentic rag",
+      "reason": "解释检索到的概念"
+    }},
+    {{
+      "tool": "quiz",
+      "input": "基于 agentic rag 生成 3 道练习题",
+      "reason": "用户要求生成练习题"
+    }}
+  ],
+  "fallback": false
+}}
+
+当前用户请求：
 {user_input}
+
+最终输出要求：
+你必须只输出一个 JSON object。
+不要输出 Markdown。
+不要输出 ```json。
+不要输出任何解释文字。
+不要输出 schema 以外的字段。
+JSON 必须符合 AgentPlan schema。
 """
     response = active_llm.invoke(planner_prompt)
-    plan = _extract_json_object(response.content)
+    data = _extract_json_object(response.content)
 
-    if not plan or not isinstance(plan.get("steps"), list) or not plan["steps"]:
-        return _fallback_agent_plan(user_input)
+    if not data:
+        return _fallback_agent_plan(user_input, reason="planner json parse failed")
 
-    allowed_tools = {"chat", "explain", "summarize", "quiz", "rag"}
-    normalized_steps = []
+    try:
+        plan = _validate_agent_plan(data)
+    except ValidationError as exc:
+        fallback_plan = _fallback_agent_plan(
+            user_input,
+            reason=f"planner schema validate failed: {exc.errors()[0].get('msg')}",
+        )
+        fallback_plan["planner_json_parse"] = "成功"
+        return fallback_plan
 
-    for step in plan["steps"][:3]:
-        if not isinstance(step, dict):
-            continue
+    if not plan.get("steps"):
+        fallback_plan = _fallback_agent_plan(user_input, reason="planner returned empty steps")
+        fallback_plan["planner_json_parse"] = "成功"
+        return fallback_plan
 
-        tool = str(step.get("tool", "")).strip().lower()
-        if tool not in allowed_tools:
-            continue
-
-        normalized_steps.append({
-            "tool": tool,
-            "input": str(step.get("input") or user_input),
-            "reason": str(step.get("reason") or "planner selected this tool"),
-        })
-
-    if not normalized_steps:
-        return _fallback_agent_plan(user_input, reason="planner returned no valid tools")
-
-    return {
-        "goal": str(plan.get("goal") or "完成用户请求"),
-        "fallback": False,
-        "steps": normalized_steps,
-    }
+    plan["steps"] = plan["steps"][:3]
+    plan["fallback"] = False
+    plan["planner_json_parse"] = "成功"
+    plan["planner_schema_validate"] = "成功"
+    return plan
 
 
 def _execute_agent_tool(tool: str, tool_input: str, custom_llm=None, top_k: int = 3) -> dict:
@@ -430,6 +517,8 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
     plan = plan_agent_steps(user_input, custom_llm=active_llm)
 
     trace.append(f"Agent Planner goal：{plan.get('goal')}")
+    trace.append(f"Agent Planner JSON parse：{plan.get('planner_json_parse', '成功')}")
+    trace.append(f"Agent Planner schema validate：{plan.get('planner_schema_validate', '成功')}")
     trace.append(f"Agent Planner fallback：{'是' if plan.get('fallback') else '否'}")
     if plan.get("fallback_reason"):
         trace.append(f"Agent Planner fallback reason：{plan['fallback_reason']}")
