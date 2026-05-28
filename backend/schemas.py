@@ -29,10 +29,15 @@ class AgentPlanStep(BaseModel):
     reason: str | None = None
 
 
+class TraceBlock(BaseModel):
+    title: str
+    items: list[str] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     answer: str
     mode: str
     model: str
     sources: list[SourceChunk] = Field(default_factory=list)
-    trace: list[str] = Field(default_factory=list)
+    trace: list[TraceBlock] = Field(default_factory=list)
     plan: list[AgentPlanStep] = Field(default_factory=list)

@@ -594,6 +594,58 @@ def _plan_steps_for_response(plan: dict | None) -> list[dict]:
     ]
 
 
+def _append_trace_block(blocks: list[dict], title: str, items: list[str]) -> None:
+    filtered_items = [item for item in items if item]
+
+    if filtered_items:
+        blocks.append({
+            "title": title,
+            "items": filtered_items,
+        })
+
+
+def _group_trace_items(trace: list[str]) -> list[dict]:
+    request_items = []
+    rag_items = []
+    route_items = []
+    agent_items = []
+    result_items = []
+    other_items = []
+
+    for item in trace:
+        if item == "收到用户请求":
+            request_items.append(item)
+        elif (
+            item.startswith("mode：")
+            or item.startswith("model：")
+            or item.startswith("temperature：")
+            or item.startswith("use_rag：")
+            or item.startswith("use_agent：")
+            or item.startswith("top_k：")
+            or item.startswith("模型 ")
+        ):
+            request_items.append(item)
+        elif item.startswith("RAG ") or item.startswith("外层 RAG"):
+            rag_items.append(item)
+        elif item.startswith("最终执行的模式"):
+            route_items.append(item)
+        elif item.startswith("Agent "):
+            agent_items.append(item)
+        elif item.startswith("是否启用 fallback"):
+            result_items.append(item)
+        else:
+            other_items.append(item)
+
+    blocks = []
+    _append_trace_block(blocks, "请求参数", request_items)
+    _append_trace_block(blocks, "RAG 检索", rag_items)
+    _append_trace_block(blocks, "路由决策", route_items)
+    _append_trace_block(blocks, "Agent 执行", agent_items)
+    _append_trace_block(blocks, "执行结果", result_items)
+    _append_trace_block(blocks, "其他信息", other_items)
+    return blocks
+
+
 def run_chat_request(request: ChatRequest) -> dict:
     use_rag = request.use_rag or request.mode == "rag"
     agent_handles_rag = request.mode == "auto" and request.use_agent
@@ -604,6 +656,8 @@ def run_chat_request(request: ChatRequest) -> dict:
         f"model：{selected_model}",
         f"temperature：{request.temperature}",
         f"use_rag：{use_rag}",
+        f"use_agent：{request.use_agent}",
+        f"top_k：{request.top_k}",
     ]
     if selected_model != request.model:
         trace.append(f"模型 {request.model} 不可用，已回退到 {selected_model}")
@@ -752,6 +806,6 @@ def run_chat_request(request: ChatRequest) -> dict:
         "mode": executed_mode,
         "model": selected_model,
         "sources": sources,
-        "trace": trace,
+        "trace": _group_trace_items(trace),
         "plan": plan,
     }

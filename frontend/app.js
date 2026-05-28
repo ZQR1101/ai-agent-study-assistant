@@ -74,12 +74,55 @@ function appendErrorMessage(message) {
 }
 
 
-function renderTrace(title, items) {
-    if (!items || items.length === 0) {
+function flattenTraceItems(trace) {
+    if (!Array.isArray(trace)) {
+        return []
+    }
+
+    return trace.flatMap(block => {
+        if (typeof block === "string") {
+            return [block]
+        }
+
+        if (block && Array.isArray(block.items)) {
+            return block.items
+        }
+
+        return []
+    })
+}
+
+
+function renderTrace(title, trace) {
+    if (!trace || trace.length === 0) {
         return ""
     }
 
-    const listItems = items
+    if (typeof trace[0] === "object" && !Array.isArray(trace[0])) {
+        const blocksHtml = trace.map(block => {
+            const blockTitle = escapeHtml(block.title || "执行信息")
+            const blockItems = Array.isArray(block.items) ? block.items : []
+            const listItems = blockItems
+                .map(item => `<li>${escapeHtml(item)}</li>`)
+                .join("")
+
+            return `
+                <div class="trace-block">
+                    <h4>${blockTitle}</h4>
+                    <ul>${listItems}</ul>
+                </div>
+            `
+        }).join("")
+
+        return `
+            <div class="meta-section">
+                <h3>${title}</h3>
+                ${blocksHtml}
+            </div>
+        `
+    }
+
+    const listItems = trace
         .map(item => `<li>${escapeHtml(item)}</li>`)
         .join("")
 
@@ -155,7 +198,7 @@ function renderPlan(plan) {
 
 
 function traceIncludes(trace, text) {
-    return Array.isArray(trace) && trace.some(item => String(item).includes(text))
+    return flattenTraceItems(trace).some(item => String(item).includes(text))
 }
 
 
