@@ -15,6 +15,8 @@ class ChatRequest(BaseModel):
     use_agent: bool = False
     use_rag: bool = False
     top_k: int = Field(3, ge=1, le=10)
+    session_id: str | None = None
+    history: list[dict] = Field(default_factory=list)
 
 
 class SourceChunk(BaseModel):

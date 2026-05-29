@@ -1,4 +1,11 @@
 const API_BASE_URL = "http://127.0.0.1:8000"
+const HISTORY_LIMIT = 6
+const SESSION_ID = (
+    window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
+)
+const chatHistory = []
 
 
 function getElement(id) {
@@ -27,6 +34,37 @@ function clampNumber(value, fallback, min, max) {
 }
 
 
+function getRecentHistory() {
+    return chatHistory.slice(-HISTORY_LIMIT)
+}
+
+
+function addHistoryMessage(role, content) {
+    const cleanContent = String(content || "").trim()
+
+    if (!cleanContent) {
+        return
+    }
+
+    chatHistory.push({
+        role,
+        content: cleanContent,
+    })
+
+    if (chatHistory.length > HISTORY_LIMIT * 2) {
+        chatHistory.splice(0, chatHistory.length - HISTORY_LIMIT * 2)
+    }
+}
+
+
+function clearConversation() {
+    chatHistory.length = 0
+    getElement("chatBox").innerHTML = ""
+    getElement("userInput").value = ""
+    getElement("loadingText").style.display = "none"
+}
+
+
 function updateUseRagState() {
     const mode = getElement("modeSelect").value
     const useRagInput = getElement("useRagInput")
@@ -52,6 +90,8 @@ function buildChatRequest(modeOverride) {
         use_agent: getElement("useAgentInput").checked,
         use_rag: mode === "rag" ? true : getElement("useRagInput").checked,
         top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
+        session_id: SESSION_ID,
+        history: getRecentHistory(),
     }
 }
 
@@ -557,6 +597,9 @@ async function sendMessage(modeOverride) {
     const loadingText = getElement("loadingText")
     const chatBox = getElement("chatBox")
 
+    appendUserMessage(requestBody.message)
+    addHistoryMessage("user", requestBody.message)
+    getElement("userInput").value = ""
     loadingText.style.display = "block"
 
     try {
@@ -574,9 +617,8 @@ async function sendMessage(modeOverride) {
 
         const data = await response.json()
 
-        getElement("userInput").value = ""
-        appendUserMessage(requestBody.message)
         appendChatResponse(data)
+        addHistoryMessage("assistant", data.answer || "")
         chatBox.scrollTop = chatBox.scrollHeight
     } catch (error) {
         appendErrorMessage(error.message)
@@ -604,5 +646,6 @@ async function ragMode() {
 document.addEventListener("DOMContentLoaded", () => {
     getElement("modeSelect").addEventListener("change", updateUseRagState)
     getElement("chatBox").addEventListener("click", handleChatBoxClick)
+    getElement("clearChatButton").addEventListener("click", clearConversation)
     updateUseRagState()
 })

@@ -107,6 +107,15 @@ button:hover {
     background: #1d4ed8;
 }
 
+.secondary-button {
+    background: #e2e8f0;
+    color: #334155;
+}
+
+.secondary-button:hover {
+    background: #cbd5e1;
+}
+
 #loadingText {
     color: #64748b;
     display: none;
