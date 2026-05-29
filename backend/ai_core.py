@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from backend.rag_store import SIMILARITY_THRESHOLD, search_relevant_chunks
 from backend.schemas import AgentPlan, ChatRequest
+from backend.tools import ToolSpec
 
 load_dotenv()
 
@@ -274,6 +275,17 @@ def _validate_agent_plan(data: dict) -> dict:
     return _model_to_dict(plan)
 
 
+def _tool_descriptions_for_prompt() -> str:
+    return "\n".join(
+        f"- {tool.name}：{tool.description}"
+        for tool in TOOL_REGISTRY.values()
+    )
+
+
+def _tool_names_for_prompt() -> str:
+    return "|".join(TOOL_REGISTRY.keys())
+
+
 def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
     lowered = user_input.lower()
 
@@ -286,6 +298,9 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
     elif any(word in lowered for word in ["解释", "什么是", "what is", "why"]):
         tool = "explain"
     else:
+        tool = "chat"
+
+    if tool not in TOOL_REGISTRY:
         tool = "chat"
 
     fallback_plan = {
@@ -313,18 +328,14 @@ def plan_agent_steps(user_input: str, custom_llm=None) -> dict:
 请把用户请求拆成 1 到 3 个执行步骤，并只返回 JSON object。
 
 可用工具：
-- chat：普通回答
-- explain：解释概念
-- summarize：总结内容
-- quiz：生成练习题
-- rag：查询本地知识库
+{_tool_descriptions_for_prompt()}
 
 AgentPlan schema：
 {{
   "goal": "用户任务目标，非空字符串",
   "steps": [
     {{
-      "tool": "chat|rag|explain|summarize|quiz",
+      "tool": "{_tool_names_for_prompt()}",
       "input": "传给工具的输入，非空字符串",
       "reason": "为什么使用这个工具"
     }}
@@ -332,7 +343,7 @@ AgentPlan schema：
   "fallback": false
 }}
 
-工具名只能是：chat、rag、explain、summarize、quiz。
+工具名只能是：{', '.join(TOOL_REGISTRY.keys())}。
 
 示例 1：
 用户输入：什么是 RAG
@@ -426,6 +437,11 @@ JSON 必须符合 AgentPlan schema。
         fallback_plan["planner_json_parse"] = "成功"
         return fallback_plan
 
+    if any(step.get("tool") not in TOOL_REGISTRY for step in plan["steps"]):
+        fallback_plan = _fallback_agent_plan(user_input, reason="planner returned unknown tool")
+        fallback_plan["planner_json_parse"] = "成功"
+        return fallback_plan
+
     plan["steps"] = plan["steps"][:3]
     plan["fallback"] = False
     plan["planner_json_parse"] = "成功"
@@ -433,82 +449,238 @@ JSON 必须符合 AgentPlan schema。
     return plan
 
 
-def _execute_agent_tool(tool: str, tool_input: str, custom_llm=None, top_k: int = 3) -> dict:
-    active_llm = custom_llm or llm
+def _is_valid_agent_context(value: str | None) -> bool:
+    text = str(value or "").strip()
 
-    if tool == "chat":
-        return {
-            "answer": chat(tool_input, custom_llm=active_llm),
-            "sources": [],
-            "trace": [],
-            "fallback_used": False,
-        }
+    if not text:
+        return False
 
-    if tool == "explain":
-        return {
-            "answer": explain(tool_input, custom_llm=active_llm),
-            "sources": [],
-            "trace": [],
-            "fallback_used": False,
-        }
+    invalid_markers = [
+        NO_RAG_ANSWER,
+        "知识库中没有找到相关内容",
+        "知识库中没有找到与该问题相关的内容",
+    ]
+    return not any(marker in text for marker in invalid_markers)
 
-    if tool == "summarize":
-        return {
-            "answer": summarize(tool_input, custom_llm=active_llm),
-            "sources": [],
-            "trace": [],
-            "fallback_used": False,
-        }
 
-    if tool == "quiz":
-        return {
-            "answer": generate_questions(tool_input, custom_llm=active_llm),
-            "sources": [],
-            "trace": [],
-            "fallback_used": False,
-        }
+def _build_agent_tool_context(shared_context: dict | None) -> tuple[str | None, list[str]]:
+    if not shared_context:
+        return None, []
 
-    if tool == "rag":
-        rag_context = get_rag_context(tool_input, top_k=top_k)
-        rag_sources = rag_context.get("sources", [])
-        trace = [
-            f"RAG query：{tool_input}",
-            f"RAG expanded_query：{rag_context.get('expanded_query')}",
-            f"RAG max_score：{_format_score(rag_context.get('max_score'))}",
-            f"RAG threshold：{_format_score(rag_context.get('threshold'))}",
-            f"RAG 原始候选数：{rag_context.get('raw_count')}",
-            f"RAG 有效候选数：{rag_context.get('valid_count')}",
-            f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}",
-            f"RAG 是否命中：{'是' if rag_context.get('found') else '否'}",
-            f"RAG sources：{_source_names(rag_sources)}",
-        ]
+    context_parts = []
+    context_sources = []
+    rag_context = shared_context.get("rag_context", "")
+    last_output = shared_context.get("last_output", "")
 
-        if rag_context.get("found"):
-            return {
-                "answer": chat(tool_input, context=rag_context["context"], custom_llm=active_llm),
-                "sources": rag_sources,
-                "trace": trace,
-                "fallback_used": False,
-            }
+    if _is_valid_agent_context(rag_context):
+        context_parts.append(f"【知识库内容】\n{rag_context}")
+        context_sources.append("rag_context")
 
-        trace.append("Agent RAG 未命中，未使用知识库来源")
-        answer = _with_fallback_prefix(
-            chat(tool_input, custom_llm=active_llm),
-            RAG_FALLBACK_PREFIX,
-        )
-        return {
-            "answer": answer,
-            "sources": [],
-            "trace": trace,
-            "fallback_used": True,
-        }
+    if _is_valid_agent_context(last_output):
+        context_parts.append(f"【上一步输出】\n{last_output}")
+        context_sources.append("previous_step_output")
 
+    if not context_parts:
+        return None, []
+
+    return "\n\n".join(context_parts), context_sources
+
+
+def _base_tool_result(
+    answer: str,
+    sources: list | None = None,
+    trace: list[str] | None = None,
+    context: str = "",
+    fallback_used: bool = False,
+    used_context: bool = False,
+    context_sources: list[str] | None = None,
+) -> dict:
     return {
-        "answer": chat(tool_input, custom_llm=active_llm),
-        "sources": [],
-        "trace": [],
-        "fallback_used": False,
+        "answer": answer,
+        "sources": sources or [],
+        "trace": trace or [],
+        "context": context,
+        "fallback_used": fallback_used,
+        "used_context": used_context,
+        "context_sources": context_sources or [],
     }
+
+
+def _run_chat_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    tool_context, context_sources = _build_agent_tool_context(shared_context)
+    answer = chat(step_input, context=tool_context, custom_llm=active_llm)
+    return _base_tool_result(
+        answer=answer,
+        used_context=bool(tool_context),
+        context_sources=context_sources,
+    )
+
+
+def _run_explain_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    tool_context, context_sources = _build_agent_tool_context(shared_context)
+    answer = explain(step_input, context=tool_context, custom_llm=active_llm)
+    return _base_tool_result(
+        answer=answer,
+        used_context=bool(tool_context),
+        context_sources=context_sources,
+    )
+
+
+def _run_summarize_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    tool_context, context_sources = _build_agent_tool_context(shared_context)
+    answer = summarize(step_input, context=tool_context, custom_llm=active_llm)
+    return _base_tool_result(
+        answer=answer,
+        used_context=bool(tool_context),
+        context_sources=context_sources,
+    )
+
+
+def _run_quiz_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    tool_context, context_sources = _build_agent_tool_context(shared_context)
+    answer = generate_questions(step_input, context=tool_context, custom_llm=active_llm)
+    return _base_tool_result(
+        answer=answer,
+        used_context=bool(tool_context),
+        context_sources=context_sources,
+    )
+
+
+def _run_rag_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    rag_context = get_rag_context(step_input, top_k=top_k)
+    rag_sources = rag_context.get("sources", [])
+    trace = [
+        f"RAG query：{step_input}",
+        f"RAG expanded_query：{rag_context.get('expanded_query')}",
+        f"RAG max_score：{_format_score(rag_context.get('max_score'))}",
+        f"RAG threshold：{_format_score(rag_context.get('threshold'))}",
+        f"RAG 原始候选数：{rag_context.get('raw_count')}",
+        f"RAG 有效候选数：{rag_context.get('valid_count')}",
+        f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}",
+        f"RAG 是否命中：{'是' if rag_context.get('found') else '否'}",
+        f"RAG sources：{_source_names(rag_sources)}",
+    ]
+
+    if rag_context.get("found"):
+        answer = chat(step_input, context=rag_context["context"], custom_llm=active_llm)
+        return _base_tool_result(
+            answer=answer,
+            sources=rag_sources,
+            context=rag_context["context"],
+            trace=trace,
+        )
+
+    trace.append("Agent RAG 未命中，未使用知识库来源")
+    answer = _with_fallback_prefix(
+        chat(step_input, custom_llm=active_llm),
+        RAG_FALLBACK_PREFIX,
+    )
+    return _base_tool_result(
+        answer=answer,
+        trace=trace,
+        fallback_used=True,
+    )
+
+
+TOOL_REGISTRY = {
+    "chat": ToolSpec(
+        name="chat",
+        description="普通聊天或通用问答",
+        run=_run_chat_tool,
+    ),
+    "rag": ToolSpec(
+        name="rag",
+        description="从本地知识库检索相关内容并回答",
+        run=_run_rag_tool,
+    ),
+    "explain": ToolSpec(
+        name="explain",
+        description="用简单中文解释概念",
+        run=_run_explain_tool,
+    ),
+    "summarize": ToolSpec(
+        name="summarize",
+        description="总结输入内容",
+        run=_run_summarize_tool,
+    ),
+    "quiz": ToolSpec(
+        name="quiz",
+        description="根据内容生成练习题",
+        run=_run_quiz_tool,
+    ),
+}
+
+
+def _execute_agent_tool(
+    tool: str,
+    tool_input: str,
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    tool_spec = TOOL_REGISTRY.get(tool)
+
+    if tool_spec is None:
+        fallback_tool = TOOL_REGISTRY["chat"]
+        result = fallback_tool.run(
+            step_input=tool_input,
+            original_input=(shared_context or {}).get("original_input", ""),
+            custom_llm=custom_llm,
+            top_k=top_k,
+            shared_context=shared_context,
+        )
+        result["trace"].append(f"Agent unknown tool：{tool}，已回退到 chat")
+        result["tool_name"] = "chat"
+        result["tool_description"] = fallback_tool.description
+        result["tool_success"] = True
+        return result
+
+    result = tool_spec.run(
+        step_input=tool_input,
+        original_input=(shared_context or {}).get("original_input", ""),
+        custom_llm=custom_llm,
+        top_k=top_k,
+        shared_context=shared_context,
+    )
+    result["tool_name"] = tool_spec.name
+    result["tool_description"] = tool_spec.description
+    result["tool_success"] = True
+    return result
 
 
 def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k: int = 3) -> dict:
@@ -536,6 +708,13 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
     step_outputs = []
     all_sources = []
     fallback_used = False
+    shared_context = {
+        "original_input": user_input,
+        "rag_context": "",
+        "sources": [],
+        "step_outputs": [],
+        "last_output": "",
+    }
 
     for index, step in enumerate(plan["steps"], start=1):
         tool = step["tool"]
@@ -545,13 +724,35 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
 
         trace.append(f"Agent Step {index} tool={tool}")
         trace.append(f"Agent Step {index} plan：tool={tool}, reason={step.get('reason')}")
-        result = _execute_agent_tool(tool, tool_input, custom_llm=active_llm, top_k=top_k)
+        result = _execute_agent_tool(
+            tool,
+            tool_input,
+            custom_llm=active_llm,
+            top_k=top_k,
+            shared_context=shared_context,
+        )
         result_answer = result.get("answer", "")
         result_sources = result.get("sources", [])
         previous_result = result_answer
         all_sources.extend(result_sources)
         fallback_used = fallback_used or result.get("fallback_used", False)
+        trace.append(f"Agent Step {index} 工具说明：{result.get('tool_description', '')}")
+        trace.append(f"Agent Step {index} 工具执行成功：{'是' if result.get('tool_success') else '否'}")
         trace.extend(result.get("trace", []))
+        trace.append(f"Agent Step {index} 使用上下文：{'是' if result.get('used_context') else '否'}")
+        if result.get("context_sources"):
+            trace.append(f"Agent Step {index} 上下文来源：{' + '.join(result['context_sources'])}")
+
+        if tool == "rag" and _is_valid_agent_context(result.get("context")):
+            shared_context["rag_context"] = result["context"]
+            shared_context["sources"] = result_sources
+
+        shared_context["step_outputs"].append({
+            "tool": tool,
+            "input": tool_input,
+            "answer": result_answer,
+        })
+        shared_context["last_output"] = result_answer
         step_outputs.append(f"步骤 {index}（{tool}）：\n{result_answer}")
         trace.append(f"Agent Step {index} done：输出长度 {len(result_answer)}")
 
