@@ -37,6 +37,11 @@ def home():
     return {"message": "AI学习助手后端启动成功"}
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
 @app.post("/echo")
 def echo_api(request: TextRequest):
     return {"echo": request.text}
