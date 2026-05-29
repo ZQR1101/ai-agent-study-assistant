@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 from backend.rag_store import SIMILARITY_THRESHOLD, search_relevant_chunks
-from backend.schemas import AgentPlan, ChatRequest
+from backend.schemas import AgentPlan, ChatRequest, FlashcardPayload
 from backend.tools import ToolSpec
 
 load_dotenv()
@@ -275,6 +275,15 @@ def _validate_agent_plan(data: dict) -> dict:
     return _model_to_dict(plan)
 
 
+def _validate_flashcard_payload(data: dict) -> dict:
+    if hasattr(FlashcardPayload, "model_validate"):
+        payload = FlashcardPayload.model_validate(data)
+    else:
+        payload = FlashcardPayload.parse_obj(data)
+
+    return _model_to_dict(payload)
+
+
 def _tool_descriptions_for_prompt() -> str:
     return "\n".join(
         f"- {tool.name}：{tool.description}"
@@ -289,7 +298,9 @@ def _tool_names_for_prompt() -> str:
 def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
     lowered = user_input.lower()
 
-    if any(word in lowered for word in ["quiz", "题", "练习", "测试"]):
+    if any(word in lowered for word in ["flashcard", "卡片", "记忆卡", "抽认卡"]):
+        tool = "flashcard"
+    elif any(word in lowered for word in ["quiz", "题", "练习", "测试"]):
         tool = "quiz"
     elif any(word in lowered for word in ["summary", "summarize", "总结", "摘要"]):
         tool = "summarize"
@@ -325,7 +336,7 @@ def plan_agent_steps(user_input: str, custom_llm=None) -> dict:
     active_llm = custom_llm or llm
     planner_prompt = f"""
 你是 AI 学习助手的 Planner。
-请把用户请求拆成 1 到 3 个执行步骤，并只返回 JSON object。
+请把用户请求拆成 1 到 4 个执行步骤，并只返回 JSON object。
 
 可用工具：
 {_tool_descriptions_for_prompt()}
@@ -405,6 +416,36 @@ AgentPlan schema：
   "fallback": false
 }}
 
+示例 4：
+用户输入：根据知识库解释 agentic rag，生成记忆卡片，并出 3 道练习题
+输出：
+{{
+  "goal": "基于知识库解释 agentic rag，生成记忆卡片并出题",
+  "steps": [
+    {{
+      "tool": "rag",
+      "input": "agentic rag",
+      "reason": "用户要求根据知识库回答，先检索相关内容"
+    }},
+    {{
+      "tool": "explain",
+      "input": "基于知识库内容解释 agentic rag",
+      "reason": "先帮助用户理解概念"
+    }},
+    {{
+      "tool": "flashcard",
+      "input": "基于 agentic rag 生成 3-5 张复习记忆卡片",
+      "reason": "用户要求生成记忆卡片用于复习"
+    }},
+    {{
+      "tool": "quiz",
+      "input": "基于 agentic rag 生成 3 道练习题",
+      "reason": "用户要求生成练习题"
+    }}
+  ],
+  "fallback": false
+}}
+
 当前用户请求：
 {user_input}
 
@@ -442,7 +483,7 @@ JSON 必须符合 AgentPlan schema。
         fallback_plan["planner_json_parse"] = "成功"
         return fallback_plan
 
-    plan["steps"] = plan["steps"][:3]
+    plan["steps"] = plan["steps"][:4]
     plan["fallback"] = False
     plan["planner_json_parse"] = "成功"
     plan["planner_schema_validate"] = "成功"
@@ -494,6 +535,7 @@ def _base_tool_result(
     fallback_used: bool = False,
     used_context: bool = False,
     context_sources: list[str] | None = None,
+    flashcards: list | None = None,
 ) -> dict:
     return {
         "answer": answer,
@@ -503,7 +545,24 @@ def _base_tool_result(
         "fallback_used": fallback_used,
         "used_context": used_context,
         "context_sources": context_sources or [],
+        "flashcards": flashcards or [],
     }
+
+
+def _format_flashcards_markdown(cards: list[dict]) -> str:
+    parts = ["## 记忆卡片"]
+
+    for index, card in enumerate(cards, start=1):
+        tags = " / ".join(card.get("tags") or [])
+        parts.append(
+            f"### 卡片 {index}\n"
+            f"**正面：** {card.get('front', '')}\n"
+            f"**背面：** {card.get('back', '')}\n"
+            f"**标签：** {tags}\n"
+            f"**难度：** {card.get('difficulty', 'medium')}"
+        )
+
+    return "\n\n".join(parts)
 
 
 def _run_chat_tool(
@@ -571,6 +630,126 @@ def _run_quiz_tool(
         answer=answer,
         used_context=bool(tool_context),
         context_sources=context_sources,
+    )
+
+
+def _run_flashcard_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+) -> dict:
+    active_llm = custom_llm or llm
+    tool_context, context_sources = _build_agent_tool_context(shared_context)
+    source_text = tool_context or step_input or original_input
+    trace = []
+
+    prompt = f"""
+你是 AI 学习助手的 flashcard 工具。
+请根据给定学习内容生成适合学生复习的记忆卡片，并且只输出 JSON object。
+
+FlashcardPayload schema：
+{{
+  "cards": [
+    {{
+      "front": "卡片正面问题，非空字符串",
+      "back": "卡片背面答案，非空字符串",
+      "tags": ["标签1", "标签2"],
+      "difficulty": "easy|medium|hard"
+    }}
+  ]
+}}
+
+示例：
+{{
+  "cards": [
+    {{
+      "front": "什么是 RAG？",
+      "back": "RAG 是检索增强生成，即先检索相关知识，再让模型基于知识回答。",
+      "tags": ["RAG", "基础概念"],
+      "difficulty": "easy"
+    }},
+    {{
+      "front": "Agentic RAG 和传统 RAG 的区别是什么？",
+      "back": "传统 RAG 通常是固定的检索-生成流程，而 Agentic RAG 可以自主规划、调用工具、评估结果并迭代优化。",
+      "tags": ["RAG", "Agent"],
+      "difficulty": "medium"
+    }}
+  ]
+}}
+
+学习内容：
+{source_text}
+
+用户要求：
+{step_input}
+
+输出要求：
+- 默认生成 3-5 张卡片。
+- 每张卡片必须包含 front、back、tags、difficulty。
+- difficulty 只能是 easy、medium、hard。
+- 如果学习内容来自知识库，请尽量贴合知识库内容，不要编造。
+- 不要输出 Markdown。
+- 不要输出 ```json。
+- 不要输出任何解释文字。
+- 不要输出 schema 以外的字段。
+- 你必须只输出一个 JSON object。
+"""
+
+    raw_response = active_llm.invoke(prompt).content
+    data = _extract_json_object(raw_response)
+    flashcards = []
+
+    if data:
+        try:
+            payload = _validate_flashcard_payload(data)
+            flashcards = payload.get("cards", [])[:5]
+            trace.append("Flashcard JSON parse：成功")
+            trace.append("Flashcard schema validate：成功")
+        except ValidationError as exc:
+            trace.append("Flashcard JSON parse：成功")
+            trace.append(f"Flashcard schema validate：失败：{exc.errors()[0].get('msg')}")
+    else:
+        trace.append("Flashcard JSON parse：失败")
+        trace.append("Flashcard schema validate：失败")
+
+    if flashcards:
+        answer = f"已生成 {len(flashcards)} 张记忆卡片，请在下方卡片区域查看、复制或下载。"
+    else:
+        fallback_prompt = f"""
+请基于以下学习内容生成适合学生复习的记忆卡片。
+
+【学习内容】
+{source_text}
+
+【用户要求】
+{step_input}
+
+输出要求：
+- 默认生成 3-5 张卡片。
+- 每张卡片必须包含：正面、背面、标签、难度。
+- 难度使用 easy / medium / hard。
+- 使用清晰 Markdown。
+
+格式：
+## 记忆卡片
+
+### 卡片 1
+**正面：** ...
+**背面：** ...
+**标签：** ...
+**难度：** medium
+"""
+        answer = active_llm.invoke(fallback_prompt).content
+        trace.append("Flashcard fallback：已返回 Markdown answer，flashcards=[]")
+
+    return _base_tool_result(
+        answer=answer,
+        trace=trace,
+        used_context=bool(tool_context),
+        context_sources=context_sources,
+        flashcards=flashcards,
     )
 
 
@@ -643,6 +822,11 @@ TOOL_REGISTRY = {
         description="根据内容生成练习题",
         run=_run_quiz_tool,
     ),
+    "flashcard": ToolSpec(
+        name="flashcard",
+        description="根据知识点生成适合复习的记忆卡片，包括正面问题、背面答案、标签和难度",
+        run=_run_flashcard_tool,
+    ),
 }
 
 
@@ -701,12 +885,13 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
             "input": user_input,
             "reason": "use_rag=true，优先尝试知识库检索",
         })
-        plan["steps"] = plan["steps"][:3]
+        plan["steps"] = plan["steps"][:4]
         trace.append("Agent Planner：use_rag=true，已插入 rag step")
 
     previous_result = ""
     step_outputs = []
     all_sources = []
+    all_flashcards = []
     fallback_used = False
     shared_context = {
         "original_input": user_input,
@@ -733,8 +918,10 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
         )
         result_answer = result.get("answer", "")
         result_sources = result.get("sources", [])
+        result_flashcards = result.get("flashcards", [])
         previous_result = result_answer
         all_sources.extend(result_sources)
+        all_flashcards.extend(result_flashcards)
         fallback_used = fallback_used or result.get("fallback_used", False)
         trace.append(f"Agent Step {index} 工具说明：{result.get('tool_description', '')}")
         trace.append(f"Agent Step {index} 工具执行成功：{'是' if result.get('tool_success') else '否'}")
@@ -763,6 +950,7 @@ def run_agent(user_input: str, custom_llm=None, prefer_rag: bool = False, top_k:
         "trace": trace,
         "plan": plan,
         "sources": all_sources,
+        "flashcards": all_flashcards,
         "fallback_used": fallback_used,
     }
 
@@ -959,6 +1147,7 @@ def run_chat_request(request: ChatRequest) -> dict:
     fallback_used = False
     rag_context = None
     plan = []
+    flashcards = []
 
     if use_rag and not agent_handles_rag:
         rag_context = get_rag_context(request.message, request.top_k)
@@ -1071,6 +1260,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
+        flashcards = agent_result.get("flashcards", [])
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -1086,6 +1276,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
+        flashcards = agent_result.get("flashcards", [])
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -1098,4 +1289,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "sources": sources,
         "trace": _group_trace_items(trace),
         "plan": plan,
+        "flashcards": flashcards,
     }

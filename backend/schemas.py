@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
-AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz"]
+AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz", "flashcard"]
 
 
 class ChatRequest(BaseModel):
@@ -41,6 +41,17 @@ class TraceBlock(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class FlashcardItem(BaseModel):
+    front: str = Field(..., min_length=1)
+    back: str = Field(..., min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+class FlashcardPayload(BaseModel):
+    cards: list[FlashcardItem] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     answer: str
     mode: str
@@ -48,3 +59,4 @@ class ChatResponse(BaseModel):
     sources: list[SourceChunk] = Field(default_factory=list)
     trace: list[TraceBlock] = Field(default_factory=list)
     plan: list[AgentPlanStep] = Field(default_factory=list)
+    flashcards: list[FlashcardItem] = Field(default_factory=list)
