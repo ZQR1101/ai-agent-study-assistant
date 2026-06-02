@@ -59,9 +59,20 @@ function addHistoryMessage(role, content) {
 
 function clearConversation() {
     chatHistory.length = 0
-    getElement("chatBox").innerHTML = ""
+    getElement("chatBox").innerHTML = `
+        <article class="ai-message">
+            <div class="message-meta">
+                <span>助手</span>
+                <span>学习工作台已就绪</span>
+            </div>
+            <div class="answer">
+                对话已清空。选择左侧模式，输入新的学习主题即可继续。
+            </div>
+        </article>
+    `
     getElement("userInput").value = ""
     getElement("loadingText").style.display = "none"
+    resetInsights()
 }
 
 
@@ -97,20 +108,26 @@ function buildChatRequest(modeOverride) {
 
 
 function appendUserMessage(message) {
-    getElement("chatBox").innerHTML += `
-        <div class="user-message">
-            <b>你：</b>${escapeHtml(message)}
-        </div>
-    `
+    getElement("chatBox").insertAdjacentHTML("beforeend", `
+        <article class="user-message">
+            <div class="message-meta">
+                <span>你</span>
+            </div>
+            <div>${escapeHtml(message)}</div>
+        </article>
+    `)
 }
 
 
 function appendErrorMessage(message) {
-    getElement("chatBox").innerHTML += `
-        <div class="ai-message error-message">
-            <b>错误：</b>${escapeHtml(message)}
-        </div>
-    `
+    getElement("chatBox").insertAdjacentHTML("beforeend", `
+        <article class="ai-message error-message">
+            <div class="message-meta">
+                <span>错误</span>
+            </div>
+            <div>${escapeHtml(message)}</div>
+        </article>
+    `)
 }
 
 
@@ -133,124 +150,184 @@ function flattenTraceItems(trace) {
 }
 
 
-function renderTrace(title, trace) {
-    if (!trace || trace.length === 0) {
-        return ""
+function traceIncludes(trace, text) {
+    return flattenTraceItems(trace).some(item => String(item).includes(text))
+}
+
+
+function renderAnswer(data) {
+    const rawAnswer = String(data.answer || "")
+
+    if (data.mode !== "learn") {
+        return `<div class="answer">${escapeHtml(rawAnswer)}</div>`
     }
 
-    if (typeof trace[0] === "object" && !Array.isArray(trace[0])) {
-        const blocksHtml = trace.map(block => {
-            const blockTitle = escapeHtml(block.title || "执行信息")
-            const blockItems = Array.isArray(block.items) ? block.items : []
-            const listItems = blockItems
-                .map(item => `<li>${escapeHtml(item)}</li>`)
-                .join("")
+    const trace = data.trace || []
+    const ragPassed = traceIncludes(trace, "RAG 是否通过阈值：是")
+    const ragFailed = traceIncludes(trace, "RAG 是否通过阈值：否")
+    const fallbackUsed = traceIncludes(trace, "是否启用 fallback：是")
+    const ragDisabled = traceIncludes(trace, "use_rag：False")
+        || traceIncludes(trace, "use_rag：false")
 
-            return `
-                <div class="trace-block">
-                    <h4>${blockTitle}</h4>
-                    <ul>${listItems}</ul>
-                </div>
-            `
-        }).join("")
+    let title = "学习内容"
+    let noteHtml = ""
 
-        return `
-            <div class="meta-section">
-                <h3>${title}</h3>
-                ${blocksHtml}
+    if (ragPassed) {
+        title = "知识库学习内容"
+    } else if (ragFailed && fallbackUsed) {
+        title = "普通模型学习内容"
+        noteHtml = `
+            <div class="fallback-note">
+                知识库未找到可靠相关内容，本部分由普通模型生成。
             </div>
         `
+    } else if (ragDisabled) {
+        title = "学习内容"
     }
 
-    const listItems = trace
-        .map(item => `<li>${escapeHtml(item)}</li>`)
-        .join("")
+    const answerBody = rawAnswer.replace(/^知识内容：\s*/, "")
 
     return `
-        <div class="meta-section">
-            <h3>${title}</h3>
-            <ul>${listItems}</ul>
+        <div class="answer">
+            <strong>${title}</strong>
+            ${noteHtml}
+            <div>${escapeHtml(answerBody)}</div>
         </div>
     `
 }
 
 
-function renderSources(sources) {
-    if (!sources || sources.length === 0) {
-        return ""
+function appendChatResponse(data) {
+    const answerHtml = renderAnswer(data)
+
+    getElement("chatBox").insertAdjacentHTML("beforeend", `
+        <article class="ai-message">
+            <div class="response-meta">
+                <span>模式：${escapeHtml(data.mode || "")}</span>
+                <span>模型：${escapeHtml(data.model || "")}</span>
+            </div>
+            ${answerHtml}
+        </article>
+    `)
+
+    renderInsights(data)
+}
+
+
+function emptyState(title, text) {
+    return `
+        <div class="empty-state">
+            <strong>${escapeHtml(title)}</strong>
+            <span>${escapeHtml(text)}</span>
+        </div>
+    `
+}
+
+
+function resetInsights() {
+    getElement("sourcesPanel").innerHTML = emptyState("暂无来源", "启用 RAG 后，这里会显示命中文档、相似度和片段。")
+    getElement("planPanel").innerHTML = emptyState("暂无 Agent 计划", "启用 Agent 后，这里会显示工具调用步骤。")
+    getElement("tracePanel").innerHTML = emptyState("暂无执行路径", "请求完成后，这里会记录检索、规划和 fallback 状态。")
+    getElement("flashcardsPanel").innerHTML = emptyState("暂无记忆卡片", "让 Agent 生成 flashcard 后，可以在这里翻看和下载。")
+}
+
+
+function renderSourcesPanel(sources) {
+    if (!Array.isArray(sources) || sources.length === 0) {
+        return emptyState("本次没有来源", "如果需要引用知识库，请选择 RAG 模式或打开 RAG 检索。")
     }
 
-    const listItems = sources.map((source, index) => {
+    return sources.map((source, index) => {
         if (typeof source === "string") {
-            return `<li>${escapeHtml(source)}</li>`
+            return `
+                <article class="source-card">
+                    <strong>${index + 1}. ${escapeHtml(source)}</strong>
+                </article>
+            `
         }
 
         const sourceName = escapeHtml(source.source || "未知来源")
         const score = source.score === null || source.score === undefined
-            ? "无"
+            ? "暂无分数"
             : Number(source.score).toFixed(4)
-        const text = escapeHtml(source.text || source.snippet || "")
+        const snippet = escapeHtml(source.text || source.snippet || "")
 
         return `
-            <li class="source-item">
-                <div><b>${index + 1}. ${sourceName}</b></div>
-                <div>相似度：${score}</div>
-                <div>命中片段：${text}</div>
-            </li>
+            <article class="source-card">
+                <strong>${index + 1}. ${sourceName}</strong>
+                <span class="source-score">相似度 ${score}</span>
+                <div class="source-snippet">${snippet}</div>
+            </article>
         `
     }).join("")
-
-    return `
-        <div class="meta-section">
-            <h3>参考来源</h3>
-            <ol class="source-list">${listItems}</ol>
-        </div>
-    `
 }
 
 
-function renderPlan(plan) {
-    if (!plan || plan.length === 0) {
-        return ""
+function renderPlanPanel(plan) {
+    if (!Array.isArray(plan) || plan.length === 0) {
+        return emptyState("本次没有 Agent 计划", "打开 Agent 规划后，复杂任务会显示工具执行步骤。")
     }
 
-    const listItems = plan.map((step, index) => {
+    const items = plan.map((step, index) => {
         const tool = escapeHtml(step.tool || "unknown")
         const input = escapeHtml(step.input || "")
         const reason = escapeHtml(step.reason || "")
 
         return `
             <li class="plan-item">
-                <div><b>${index + 1}. ${tool}</b></div>
+                <span class="plan-step">${index + 1}. ${tool}</span>
                 <div>输入：${input}</div>
                 ${reason ? `<div>原因：${reason}</div>` : ""}
             </li>
         `
     }).join("")
 
+    return `<ol class="plan-list">${items}</ol>`
+}
+
+
+function renderTracePanel(trace) {
+    if (!Array.isArray(trace) || trace.length === 0) {
+        return emptyState("本次没有执行路径", "后端返回 trace 后，这里会显示系统处理过程。")
+    }
+
+    if (typeof trace[0] === "object" && !Array.isArray(trace[0])) {
+        return trace.map(block => {
+            const blockTitle = escapeHtml(block.title || "执行信息")
+            const blockItems = Array.isArray(block.items) ? block.items : []
+            const items = blockItems.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+
+            return `
+                <article class="trace-block">
+                    <strong>${blockTitle}</strong>
+                    <ul>${items}</ul>
+                </article>
+            `
+        }).join("")
+    }
+
+    const items = trace.map(item => `<li>${escapeHtml(item)}</li>`).join("")
     return `
-        <div class="meta-section">
-            <h3>Agent 计划</h3>
-            <ol class="plan-list">${listItems}</ol>
-        </div>
+        <article class="trace-block">
+            <strong>执行信息</strong>
+            <ul>${items}</ul>
+        </article>
     `
 }
 
 
-function renderFlashcards(flashcards) {
-    if (!flashcards || flashcards.length === 0) {
-        return ""
+function renderFlashcardsPanel(flashcards) {
+    if (!Array.isArray(flashcards) || flashcards.length === 0) {
+        return emptyState("本次没有记忆卡片", "让 Agent 生成记忆卡片后，可以在这里翻面和下载 PNG。")
     }
 
-    const cardsHtml = flashcards.map((card, index) => {
+    return flashcards.map((card, index) => {
         const front = escapeHtml(card.front || "")
         const back = escapeHtml(card.back || "")
         const rawDifficulty = String(card.difficulty || "medium").toLowerCase()
         const difficulty = ["easy", "medium", "hard"].includes(rawDifficulty)
             ? rawDifficulty
             : "medium"
-        const difficultyText = escapeHtml(difficulty)
-        const difficultyClass = `flashcard-difficulty flashcard-difficulty-${difficulty}`
         const tags = Array.isArray(card.tags) ? card.tags : []
         const tagsJson = escapeHtml(JSON.stringify(tags))
         const tagsHtml = tags
@@ -264,7 +341,7 @@ function renderFlashcards(flashcards) {
                 data-front="${front}"
                 data-back="${back}"
                 data-tags="${tagsJson}"
-                data-difficulty="${difficultyText}"
+                data-difficulty="${escapeHtml(difficulty)}"
             >
                 <div class="flashcard-card-toolbar">
                     <span class="flashcard-card-number">卡片 ${index + 1}</span>
@@ -277,7 +354,7 @@ function renderFlashcards(flashcards) {
                         <div class="flashcard-label">正面</div>
                         <div class="flashcard-content">${front}</div>
                         <div class="flashcard-meta">
-                            <span class="${difficultyClass}">${difficultyText}</span>
+                            <span class="flashcard-difficulty flashcard-difficulty-${difficulty}">${difficulty}</span>
                             ${tagsHtml}
                         </div>
                     </div>
@@ -285,7 +362,7 @@ function renderFlashcards(flashcards) {
                         <div class="flashcard-label">背面</div>
                         <div class="flashcard-content">${back}</div>
                         <div class="flashcard-meta">
-                            <span class="${difficultyClass}">${difficultyText}</span>
+                            <span class="flashcard-difficulty flashcard-difficulty-${difficulty}">${difficulty}</span>
                             ${tagsHtml}
                         </div>
                     </div>
@@ -293,16 +370,14 @@ function renderFlashcards(flashcards) {
             </article>
         `
     }).join("")
+}
 
-    return `
-        <div class="flashcard-section">
-            <div class="flashcard-section-header">
-                <h3>记忆卡片</h3>
-            </div>
-            <p class="flashcard-hint">点击卡片翻转查看答案</p>
-            <div class="flashcard-grid">${cardsHtml}</div>
-        </div>
-    `
+
+function renderInsights(data) {
+    getElement("sourcesPanel").innerHTML = renderSourcesPanel(data.sources)
+    getElement("planPanel").innerHTML = renderPlanPanel(data.plan)
+    getElement("tracePanel").innerHTML = renderTracePanel(data.trace)
+    getElement("flashcardsPanel").innerHTML = renderFlashcardsPanel(data.flashcards)
 }
 
 
@@ -334,7 +409,9 @@ function wrapCanvasText(context, text, maxWidth) {
     let line = ""
 
     words.forEach(word => {
-        const testLine = line ? `${line}${normalizedText.includes(" ") ? " " : ""}${word}` : word
+        const separator = normalizedText.includes(" ") ? " " : ""
+        const testLine = line ? `${line}${separator}${word}` : word
+
         if (context.measureText(testLine).width > maxWidth && line) {
             lines.push(line)
             line = word
@@ -370,15 +447,15 @@ function drawCardFace(context, x, y, width, height, title, content, meta, fillCo
     context.fillStyle = fillColor
     context.strokeStyle = borderColor
     context.lineWidth = 2
-    drawRoundedRect(context, x, y, width, height, 18)
+    drawRoundedRect(context, x, y, width, height, 16)
     context.fill()
     context.stroke()
 
-    context.fillStyle = "#64748b"
+    context.fillStyle = "#65747c"
     context.font = "700 22px Arial"
     context.fillText(title, x + 24, y + 36)
 
-    context.fillStyle = "#0f172a"
+    context.fillStyle = "#172126"
     context.font = "24px Arial"
     let currentY = y + 78
     wrapCanvasText(context, content, width - 48).slice(0, 6).forEach(line => {
@@ -416,14 +493,14 @@ function createFlashcardFaceCanvas(card, side) {
     const height = faceHeight + padding * 2
     const tags = Array.isArray(card.tags) && card.tags.length > 0
         ? card.tags.join(" / ")
-        : "无"
+        : "无标签"
     const meta = `标签：${tags}    难度：${card.difficulty || "medium"}`
     const isFront = side === "front"
 
     canvas.width = width * scale
     canvas.height = height * scale
     context.scale(scale, scale)
-    context.fillStyle = "#f8fafc"
+    context.fillStyle = "#f7faf9"
     context.fillRect(0, 0, width, height)
 
     drawCardFace(
@@ -436,7 +513,7 @@ function createFlashcardFaceCanvas(card, side) {
         isFront ? card.front : card.back,
         meta,
         isFront ? "#ffffff" : "#ecfdf5",
-        isFront ? "#dbe3ef" : "#a7f3d0",
+        isFront ? "#d8e2df" : "#a7f3d0",
     )
 
     return canvas
@@ -466,77 +543,7 @@ function downloadSingleFlashcard(cardElement) {
 }
 
 
-function traceIncludes(trace, text) {
-    return flattenTraceItems(trace).some(item => String(item).includes(text))
-}
-
-
-function renderAnswer(data) {
-    const rawAnswer = String(data.answer || "")
-
-    if (data.mode !== "learn") {
-        return `<div class="answer">${escapeHtml(rawAnswer)}</div>`
-    }
-
-    const trace = data.trace || []
-    const ragPassed = traceIncludes(trace, "RAG 是否通过阈值：是")
-    const ragFailed = traceIncludes(trace, "RAG 是否通过阈值：否")
-    const fallbackUsed = traceIncludes(trace, "是否启用 fallback：是")
-    const ragDisabled = traceIncludes(trace, "use_rag：False")
-        || traceIncludes(trace, "use_rag：false")
-
-    let title = "学习内容："
-    let noteHtml = ""
-
-    if (ragPassed) {
-        title = "知识库学习内容："
-    } else if (ragFailed && fallbackUsed) {
-        title = "普通模型学习内容："
-        noteHtml = `
-            <div class="fallback-note">
-                知识库未找到可靠相关内容，本部分由普通模型生成。
-            </div>
-        `
-    } else if (ragDisabled) {
-        title = "学习内容："
-    }
-
-    const answerBody = rawAnswer.replace(/^知识内容：\s*/, "")
-
-    return `
-        <div class="answer">
-            <h3 class="learning-answer-title">${title}</h3>
-            ${noteHtml}
-            <div>${escapeHtml(answerBody)}</div>
-        </div>
-    `
-}
-
-
-function appendChatResponse(data) {
-    const sourcesHtml = renderSources(data.sources)
-    const planHtml = renderPlan(data.plan)
-    const flashcardsHtml = renderFlashcards(data.flashcards)
-    const traceHtml = renderTrace("执行路径", data.trace)
-    const answerHtml = renderAnswer(data)
-
-    getElement("chatBox").innerHTML += `
-        <div class="ai-message">
-            <div class="response-meta">
-                <span>模式：${escapeHtml(data.mode || "")}</span>
-                <span>模型：${escapeHtml(data.model || "")}</span>
-            </div>
-            ${answerHtml}
-            ${flashcardsHtml}
-            ${sourcesHtml}
-            ${planHtml}
-            ${traceHtml}
-        </div>
-    `
-}
-
-
-async function handleChatBoxClick(event) {
+function handleFlashcardClick(event) {
     const singleDownloadButton = event.target.closest(".download-single-flashcard-button")
     if (singleDownloadButton) {
         const card = singleDownloadButton.closest(".flashcard")
@@ -578,7 +585,7 @@ async function uploadPDF() {
         }
 
         const data = await response.json()
-        alert(data.message)
+        alert(data.message || "上传完成")
     } catch (error) {
         alert(`上传失败：${error.message}`)
     }
@@ -628,24 +635,52 @@ async function sendMessage(modeOverride) {
 }
 
 
-async function learnMode() {
-    getElement("modeSelect").value = "learn"
-    updateUseRagState()
-    await sendMessage("learn")
+function activateInsightTab(tabName) {
+    document.querySelectorAll(".insight-tab").forEach(tab => {
+        tab.classList.toggle("active", tab.dataset.tab === tabName)
+    })
+
+    document.querySelectorAll(".insight-section").forEach(panel => {
+        const isActive = panel.id === `${tabName}Panel`
+        panel.classList.toggle("active", isActive)
+    })
 }
 
 
-async function ragMode() {
-    getElement("modeSelect").value = "rag"
-    getElement("useRagInput").checked = true
-    updateUseRagState()
-    await sendMessage("rag")
+function setupQuickActions() {
+    document.querySelectorAll(".quick-action").forEach(button => {
+        button.addEventListener("click", async () => {
+            const mode = button.dataset.mode
+            getElement("modeSelect").value = mode
+            updateUseRagState()
+
+            if (getElement("userInput").value.trim()) {
+                await sendMessage(mode)
+            } else {
+                getElement("userInput").focus()
+            }
+        })
+    })
 }
 
 
 document.addEventListener("DOMContentLoaded", () => {
     getElement("modeSelect").addEventListener("change", updateUseRagState)
-    getElement("chatBox").addEventListener("click", handleChatBoxClick)
+    getElement("sendButton").addEventListener("click", () => sendMessage())
+    getElement("uploadButton").addEventListener("click", uploadPDF)
     getElement("clearChatButton").addEventListener("click", clearConversation)
+    getElement("flashcardsPanel").addEventListener("click", handleFlashcardClick)
+    setupQuickActions()
+
+    document.querySelectorAll(".insight-tab").forEach(tab => {
+        tab.addEventListener("click", () => activateInsightTab(tab.dataset.tab))
+    })
+
+    getElement("userInput").addEventListener("keydown", event => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            sendMessage()
+        }
+    })
+
     updateUseRagState()
 })
