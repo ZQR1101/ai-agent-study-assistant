@@ -4,193 +4,213 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI 学习助手</title>
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260604-stitch-export" />
   </head>
 
   <body>
-    <div class="app-shell">
-      <aside class="rail" aria-label="主导航">
-        <div class="brand-mark">AI</div>
-        <nav class="rail-nav" aria-label="功能导航">
-          <button class="rail-item active" type="button" title="工作台">工作台</button>
-          <button class="rail-item" type="button" title="知识库">知识库</button>
-          <button class="rail-item" type="button" title="卡片">卡片</button>
-          <button class="rail-item" type="button" title="历史">历史</button>
-        </nav>
-      </aside>
-
-      <aside class="settings-panel" aria-label="学习设置">
-        <header class="panel-header">
-          <p class="eyebrow">Workspace</p>
-          <h1>学习设置</h1>
+    <main class="app-shell">
+      <aside class="app-sidebar" aria-label="学习导航">
+        <header class="brand-block">
+          <span class="brand-mark">AI</span>
+          <div>
+            <h1>智学助手</h1>
+            <p>AI 学习导师</p>
+          </div>
         </header>
 
-        <section class="field-group" aria-label="模式选择">
-          <label for="modeSelect">学习模式</label>
-          <select id="modeSelect">
-            <option value="auto" selected>自动规划</option>
-            <option value="chat">普通问答</option>
-            <option value="rag">知识库问答</option>
-            <option value="explain">概念解释</option>
-            <option value="summarize">内容总结</option>
-            <option value="quiz">自动出题</option>
-            <option value="learn">学习模式</option>
-          </select>
+        <button type="button" class="primary-button new-thread-button" id="newConversationButton">
+          <span>+</span>
+          新建对话
+        </button>
+
+        <nav class="side-nav" aria-label="主导航">
+          <button class="side-nav-item nav-item active" type="button" data-view="study">
+            <span>⌂</span>
+            主页
+          </button>
+          <button class="side-nav-item nav-item" type="button" data-view="knowledge">
+            <span>▣</span>
+            知识库
+          </button>
+          <button class="side-nav-item nav-item" type="button" data-view="cards">
+            <span>◫</span>
+            闪卡复习
+          </button>
+        </nav>
+
+        <section class="sidebar-section conversation-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2>最近对话</h2>
+            </div>
+          </div>
+          <div id="conversationHistoryPanel" class="conversation-history">
+            <div class="empty-state">
+              <strong>暂无历史对话</strong>
+              <span>发送消息后，当前会话会自动保存在这里。</span>
+            </div>
+          </div>
         </section>
 
-        <section class="field-group">
-          <label for="modelSelect">模型</label>
-          <select id="modelSelect">
-            <option value="mimo-v2.5" selected>mimo-v2.5</option>
-          </select>
-        </section>
-
-        <div class="split-fields">
-          <section class="field-group">
-            <label for="temperatureInput">温度</label>
-            <input
-              type="number"
-              id="temperatureInput"
-              min="0"
-              max="2"
-              step="0.1"
-              value="0.7"
-            />
-          </section>
-
-          <section class="field-group">
-            <label for="topKInput">Top K</label>
-            <input type="number" id="topKInput" min="1" max="10" step="1" value="3" />
-          </section>
-        </div>
-
-        <section class="switch-list" aria-label="增强能力">
-          <label class="switch-row">
-            <span>
-              <strong>RAG 检索</strong>
-              <small>使用本地知识库增强回答</small>
-            </span>
-            <input type="checkbox" id="useRagInput" />
-          </label>
-
-          <label class="switch-row">
-            <span>
-              <strong>Agent 规划</strong>
-              <small>拆解多步骤学习任务</small>
-            </span>
-            <input type="checkbox" id="useAgentInput" />
-          </label>
-        </section>
-
-        <section class="upload-box" aria-label="上传知识库文件">
+        <section class="sidebar-section knowledge-card">
           <div>
-            <h2>知识库</h2>
-            <p>上传 PDF 后会重建索引。</p>
+            <p class="eyebrow">PDF Upload</p>
+            <h2>学习材料</h2>
+            <p>上传 PDF 后会重建索引，也可以在知识库页直接打开文件。</p>
           </div>
           <input type="file" id="pdfFile" accept="application/pdf" />
           <button type="button" class="secondary-button" id="uploadButton">上传 PDF</button>
-          <div class="status-pill">
-            <span class="status-dot"></span>
-            本地知识库可用
-          </div>
         </section>
 
-        <section class="future-list" aria-label="后续模块">
-          <h2>可扩展模块</h2>
-          <button type="button">文件管理</button>
-          <button type="button">会话历史</button>
-          <button type="button">卡片库</button>
+        <section class="sidebar-section settings-card">
+          <details>
+            <summary>设置</summary>
+            <input type="hidden" id="modeSelect" value="auto" />
+            <input type="checkbox" id="useAgentInput" checked hidden />
+            <div class="advanced-grid">
+              <label>
+                模型
+                <select id="modelSelect">
+                  <option value="mimo-v2.5" selected>mimo-v2.5</option>
+                </select>
+              </label>
+              <label>
+                温度
+                <input type="number" id="temperatureInput" min="0" max="2" step="0.1" value="0.7" />
+              </label>
+              <label>
+                Top K
+                <input type="number" id="topKInput" min="1" max="10" step="1" value="3" />
+              </label>
+            </div>
+            <div class="toggle-list">
+              <label class="toggle-row">
+                <span>RAG 检索</span>
+                <input type="checkbox" id="useRagInput" />
+              </label>
+            </div>
+          </details>
         </section>
       </aside>
 
-      <main class="workspace">
-        <header class="workspace-header">
-          <div>
-            <p class="eyebrow">AI Study Assistant</p>
-            <h1>AI 学习助手</h1>
+      <section class="workspace-column">
+        <div class="workspace-page workspace-view active" id="studyView">
+          <header class="workspace-topbar">
+            <div>
+              <p class="eyebrow">Current Topic</p>
+              <h2>当前学习会话</h2>
+            </div>
+            <div class="workspace-actions">
+              <span id="activeModeLabel" class="mode-pill">自动规划</span>
+            </div>
+          </header>
+
+          <div class="chat-panel" aria-label="学习对话">
+            <div id="chatBox" class="chat-feed" aria-live="polite"></div>
+            <div id="loadingText" class="loading-text">AI 正在整理学习材料...</div>
           </div>
-          <div class="session-badge">当前会话</div>
-        </header>
-
-        <section class="quick-actions" aria-label="快捷学习流程">
-          <button type="button" class="quick-action" data-mode="learn">生成学习路径</button>
-          <button type="button" class="quick-action" data-mode="rag">基于知识库回答</button>
-          <button type="button" class="quick-action" data-mode="quiz">生成练习题</button>
-          <button type="button" class="quick-action" data-mode="summarize">总结当前主题</button>
-        </section>
-
-        <section class="conversation-panel" aria-label="聊天记录">
-          <div id="chatBox" class="chat-feed" aria-live="polite">
-            <article class="ai-message">
-              <div class="message-meta">
-                <span>助手</span>
-                <span>学习工作台已就绪</span>
-              </div>
-              <div class="answer">
-                选择左侧模式，输入主题或问题。我可以结合知识库解释概念、总结材料、生成练习题，也可以用 Agent 把复杂学习任务拆成步骤。
-              </div>
-            </article>
-          </div>
-
-          <div id="loadingText" class="loading-text">AI 正在思考...</div>
 
           <section class="composer" aria-label="发送消息">
+            <button class="composer-icon" type="button" aria-label="添加材料">+</button>
             <textarea
               id="userInput"
-              rows="4"
-              placeholder="输入你的问题、知识点或学习主题..."
+              rows="2"
+              placeholder="输入你的问题或想法..."
             ></textarea>
-            <div class="composer-actions">
-              <button type="button" id="clearChatButton" class="secondary-button">清空对话</button>
-              <button type="button" id="sendButton" class="primary-button">发送</button>
-            </div>
+            <button type="button" id="clearChatButton" class="ghost-button">清空</button>
+            <button type="button" id="sendButton" class="send-button" aria-label="发送">↑</button>
           </section>
-        </section>
-      </main>
+          <p class="composer-note">AI 可能会产生错误信息，请核实关键事实。</p>
+        </div>
 
-      <aside class="insights-panel" aria-label="学习洞察">
-        <header class="panel-header">
-          <p class="eyebrow">Insights</p>
-          <h1>学习洞察</h1>
+        <section class="workspace-page" id="knowledgeView" aria-label="知识库内容">
+          <header class="workspace-header">
+            <div>
+              <p class="eyebrow">Knowledge Base</p>
+              <h2>本地知识库</h2>
+            </div>
+            <button type="button" class="secondary-button" id="refreshKnowledgeButton">刷新知识库</button>
+          </header>
+          <div class="workspace-toolbar" aria-label="知识库工具栏">
+            <div class="search-surface">搜索 docs/ 中的 PDF、Markdown、TXT</div>
+            <span class="metadata-chip">本地文件</span>
+            <span class="metadata-chip">内联预览</span>
+            <span class="metadata-chip warm">RAG 可引用</span>
+          </div>
+          <p class="workspace-copy">
+            这里直接读取后端 `docs/` 目录中的文件。点击“打开”会在当前页面预览 PDF、Markdown 或 TXT。
+          </p>
+          <div id="knowledgeLibraryPanel" class="library-list">
+            <div class="empty-state">
+              <strong>尚未加载知识库</strong>
+              <span>点击“刷新知识库”查看当前文件。</span>
+            </div>
+          </div>
+          <div id="knowledgeViewerPanel" class="knowledge-viewer">
+            <div class="empty-state">
+              <strong>尚未打开文件</strong>
+              <span>从上方知识库列表选择一个文件后，会在这里显示内容。</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-page" id="cardsView" aria-label="卡片库">
+          <header class="workspace-header">
+            <div>
+              <p class="eyebrow">Flashcard Library</p>
+              <h2>卡片库</h2>
+            </div>
+            <button type="button" class="secondary-button" id="clearCardsButton">清空卡片库</button>
+          </header>
+          <div class="workspace-toolbar" aria-label="卡片库工具栏">
+            <div class="search-surface">按主题、标签或难度筛选卡片</div>
+            <span class="metadata-chip">点击翻面</span>
+            <span class="metadata-chip">PNG 导出</span>
+            <span class="metadata-chip warm">温习模式</span>
+          </div>
+          <p class="workspace-copy">
+            本轮生成的记忆卡片会自动出现在这里。刷新页面后卡片库会清空。
+          </p>
+          <div id="cardLibraryPanel" class="card-library-grid">
+            <div class="empty-state">
+              <strong>还没有卡片</strong>
+              <span>让 Agent 生成 flashcard 后，卡片会出现在这里。</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="results-panel" aria-label="学习空间">
+        <header class="results-header">
+          <div>
+            <p class="eyebrow">Study Space</p>
+            <h2>学习空间</h2>
+          </div>
         </header>
 
-        <nav class="insight-tabs" aria-label="洞察类型">
-          <button type="button" class="insight-tab active" data-tab="sources">来源</button>
-          <button type="button" class="insight-tab" data-tab="plan">计划</button>
-          <button type="button" class="insight-tab" data-tab="trace">路径</button>
-          <button type="button" class="insight-tab" data-tab="flashcards">卡片</button>
+        <nav class="insight-tabs" aria-label="成果类型">
+          <button type="button" class="insight-tab active" data-tab="sources">来源追踪</button>
+          <button type="button" class="insight-tab" data-tab="plan">学习计划</button>
+          <button type="button" class="insight-tab" data-tab="flashcards">闪卡复习</button>
+          <button type="button" class="insight-tab" data-tab="trace">执行路径</button>
         </nav>
 
-        <section class="insight-section active" id="sourcesPanel">
-          <div class="empty-state">
-            <strong>暂无来源</strong>
-            <span>启用 RAG 后，这里会显示命中文档、相似度和片段。</span>
-          </div>
-        </section>
+        <section class="insight-section active" id="sourcesPanel"></section>
+        <section class="insight-section" id="planPanel"></section>
+        <section class="insight-section" id="flashcardsPanel"></section>
+        <section class="insight-section" id="tracePanel"></section>
 
-        <section class="insight-section" id="planPanel">
-          <div class="empty-state">
-            <strong>暂无 Agent 计划</strong>
-            <span>启用 Agent 后，这里会显示工具调用步骤。</span>
+        <div class="study-progress">
+          <div>
+            <span>今日专注时间</span>
+            <strong>45 分钟</strong>
           </div>
-        </section>
-
-        <section class="insight-section" id="tracePanel">
-          <div class="empty-state">
-            <strong>暂无执行路径</strong>
-            <span>请求完成后，这里会记录检索、规划和 fallback 状态。</span>
-          </div>
-        </section>
-
-        <section class="insight-section" id="flashcardsPanel">
-          <div class="empty-state">
-            <strong>暂无记忆卡片</strong>
-            <span>让 Agent 生成 flashcard 后，可以在这里翻看和下载。</span>
-          </div>
-        </section>
+          <div class="progress-track"><span></span></div>
+        </div>
       </aside>
-    </div>
+    </main>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20260604-stitch-export"></script>
   </body>
 </html>

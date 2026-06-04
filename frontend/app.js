@@ -1,11 +1,33 @@
 const API_BASE_URL = "http://127.0.0.1:8000"
 const HISTORY_LIMIT = 6
-const SESSION_ID = (
-    window.crypto && window.crypto.randomUUID
-        ? window.crypto.randomUUID()
-        : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
-)
-const chatHistory = []
+const CONVERSATIONS_KEY = "aiStudyAssistant.conversations.v1"
+
+let currentSessionId = createSessionId()
+let chatHistory = []
+let conversations = loadConversations()
+let cardLibrary = []
+let knowledgeFiles = []
+let knowledgeLoaded = false
+let activeKnowledgeObjectUrl = ""
+
+const MODE_LABELS = {
+    auto: "自动规划",
+    chat: "普通问答",
+    rag: "知识库问答",
+    explain: "概念解释",
+    summarize: "内容总结",
+    quiz: "自动出题",
+    learn: "学习模式",
+}
+
+
+function createSessionId() {
+    if (window.crypto && window.crypto.randomUUID) {
+        return window.crypto.randomUUID()
+    }
+
+    return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
 
 function getElement(id) {
@@ -34,6 +56,140 @@ function clampNumber(value, fallback, min, max) {
 }
 
 
+function loadConversations() {
+    try {
+        const value = JSON.parse(localStorage.getItem(CONVERSATIONS_KEY) || "[]")
+        return Array.isArray(value) ? value : []
+    } catch (error) {
+        return []
+    }
+}
+
+
+function saveConversations() {
+    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations.slice(0, 20)))
+}
+
+
+function getConversationTitle(messages) {
+    const firstUserMessage = messages.find(message => message.role === "user")
+    const title = String(firstUserMessage?.content || "新学习对话").trim()
+    return title.length > 22 ? `${title.slice(0, 22)}...` : title
+}
+
+
+function persistCurrentConversation() {
+    if (chatHistory.length === 0) {
+        return
+    }
+
+    const now = new Date().toISOString()
+    const nextConversation = {
+        id: currentSessionId,
+        title: getConversationTitle(chatHistory),
+        updatedAt: now,
+        messages: chatHistory.map(message => ({ ...message })),
+    }
+    const existingIndex = conversations.findIndex(item => item.id === currentSessionId)
+
+    if (existingIndex >= 0) {
+        conversations.splice(existingIndex, 1)
+    }
+
+    conversations.unshift(nextConversation)
+    saveConversations()
+    renderConversationHistory()
+}
+
+
+function renderConversationHistory() {
+    const panel = getElement("conversationHistoryPanel")
+
+    if (!panel) {
+        return
+    }
+
+    if (conversations.length === 0) {
+        panel.innerHTML = emptyState("暂无历史对话", "发送消息后，当前会话会自动保存在这里。")
+        return
+    }
+
+    panel.innerHTML = conversations.slice(0, 8).map(conversation => {
+        const updatedAt = new Date(conversation.updatedAt).toLocaleString()
+        const activeClass = conversation.id === currentSessionId ? " active" : ""
+
+        return `
+            <button class="conversation-item${activeClass}" type="button" data-conversation-id="${escapeHtml(conversation.id)}">
+                <strong>${escapeHtml(conversation.title)}</strong>
+                <span>${escapeHtml(updatedAt)}</span>
+            </button>
+        `
+    }).join("")
+}
+
+
+function renderWelcomeMessage(message = "把一个主题、问题或材料片段发给我。我会先组织解释，再把可核对的来源、学习计划和复习卡片整理在右侧。") {
+    getElement("chatBox").innerHTML = `
+        <article class="ai-message welcome-message">
+            <div class="message-meta">
+                <span>助手</span>
+                <span>学习画布已就绪</span>
+            </div>
+            <div class="answer">${escapeHtml(message)}</div>
+        </article>
+    `
+}
+
+
+function startNewConversation() {
+    currentSessionId = createSessionId()
+    chatHistory = []
+    getElement("userInput").value = ""
+    getElement("loadingText").style.display = "none"
+    renderWelcomeMessage("这是一个新对话。输入新的学习主题，我会重新检索资料、组织解释并生成可复习的学习成果。")
+    resetInsights()
+    renderConversationHistory()
+}
+
+
+function restoreConversation(conversationId) {
+    const conversation = conversations.find(item => item.id === conversationId)
+
+    if (!conversation) {
+        return
+    }
+
+    currentSessionId = conversation.id
+    chatHistory = conversation.messages.map(message => ({ ...message }))
+    renderChatMessages()
+    resetInsights()
+    renderConversationHistory()
+}
+
+
+function renderChatMessages() {
+    if (chatHistory.length === 0) {
+        renderWelcomeMessage()
+        return
+    }
+
+    getElement("chatBox").innerHTML = chatHistory.map(message => {
+        const isAssistant = message.role === "assistant"
+        const messageClass = isAssistant ? "ai-message" : "user-message"
+        const roleLabel = isAssistant ? "助手" : "你"
+
+        return `
+            <article class="${messageClass}">
+                <div class="message-meta">
+                    <span>${roleLabel}</span>
+                </div>
+                <div>${escapeHtml(message.content)}</div>
+            </article>
+        `
+    }).join("")
+}
+
+
 function getRecentHistory() {
     return chatHistory.slice(-HISTORY_LIMIT)
 }
@@ -46,33 +202,22 @@ function addHistoryMessage(role, content) {
         return
     }
 
-    chatHistory.push({
-        role,
-        content: cleanContent,
-    })
+    chatHistory.push({ role, content: cleanContent })
 
     if (chatHistory.length > HISTORY_LIMIT * 2) {
-        chatHistory.splice(0, chatHistory.length - HISTORY_LIMIT * 2)
+        chatHistory = chatHistory.slice(-HISTORY_LIMIT * 2)
     }
+
+    persistCurrentConversation()
 }
 
 
-function clearConversation() {
-    chatHistory.length = 0
-    getElement("chatBox").innerHTML = `
-        <article class="ai-message">
-            <div class="message-meta">
-                <span>助手</span>
-                <span>学习工作台已就绪</span>
-            </div>
-            <div class="answer">
-                对话已清空。选择左侧模式，输入新的学习主题即可继续。
-            </div>
-        </article>
-    `
-    getElement("userInput").value = ""
-    getElement("loadingText").style.display = "none"
-    resetInsights()
+function updateActiveModeUI(mode) {
+    getElement("activeModeLabel").textContent = MODE_LABELS[mode] || mode
+
+    document.querySelectorAll(".mode-card").forEach(button => {
+        button.classList.toggle("active", button.dataset.modeChoice === mode)
+    })
 }
 
 
@@ -86,34 +231,49 @@ function updateUseRagState() {
     } else {
         useRagInput.disabled = false
     }
+
+    updateActiveModeUI(mode)
+}
+
+
+function setMode(mode) {
+    getElement("modeSelect").value = mode
+    updateUseRagState()
 }
 
 
 function buildChatRequest(modeOverride) {
     const message = getElement("userInput").value.trim()
-    const mode = modeOverride || getElement("modeSelect").value
+    const mode = "auto"
 
     return {
         message,
         mode,
         model: getElement("modelSelect").value,
         temperature: clampNumber(getElement("temperatureInput").value, 0.7, 0, 2),
-        use_agent: getElement("useAgentInput").checked,
-        use_rag: mode === "rag" ? true : getElement("useRagInput").checked,
+        use_agent: true,
+        use_rag: getElement("useRagInput").checked,
         top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
-        session_id: SESSION_ID,
+        session_id: currentSessionId,
         history: getRecentHistory(),
     }
 }
 
 
+function clearConversation() {
+    startNewConversation()
+}
+
+
 function appendUserMessage(message) {
+    const displayMessage = compactDisplayText(message)
+
     getElement("chatBox").insertAdjacentHTML("beforeend", `
         <article class="user-message">
             <div class="message-meta">
                 <span>你</span>
             </div>
-            <div>${escapeHtml(message)}</div>
+            <div>${escapeHtml(displayMessage)}</div>
         </article>
     `)
 }
@@ -123,7 +283,7 @@ function appendErrorMessage(message) {
     getElement("chatBox").insertAdjacentHTML("beforeend", `
         <article class="ai-message error-message">
             <div class="message-meta">
-                <span>错误</span>
+                <span>请求失败</span>
             </div>
             <div>${escapeHtml(message)}</div>
         </article>
@@ -155,8 +315,17 @@ function traceIncludes(trace, text) {
 }
 
 
+function compactDisplayText(value) {
+    return String(value || "")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+}
+
+
 function renderAnswer(data) {
-    const rawAnswer = String(data.answer || "")
+    const rawAnswer = compactDisplayText(data.answer)
 
     if (data.mode !== "learn") {
         return `<div class="answer">${escapeHtml(rawAnswer)}</div>`
@@ -197,13 +366,14 @@ function renderAnswer(data) {
 }
 
 
-function appendChatResponse(data) {
+function appendChatResponse(data, requestMessage = "") {
+    const cards = Array.isArray(data.flashcards) ? data.flashcards : []
     const answerHtml = renderAnswer(data)
 
     getElement("chatBox").insertAdjacentHTML("beforeend", `
         <article class="ai-message">
             <div class="response-meta">
-                <span>模式：${escapeHtml(data.mode || "")}</span>
+                <span>模式：${escapeHtml(MODE_LABELS[data.mode] || data.mode || "")}</span>
                 <span>模型：${escapeHtml(data.model || "")}</span>
             </div>
             ${answerHtml}
@@ -211,6 +381,7 @@ function appendChatResponse(data) {
     `)
 
     renderInsights(data)
+    addCardsToLibrary(cards, requestMessage)
 }
 
 
@@ -225,16 +396,154 @@ function emptyState(title, text) {
 
 
 function resetInsights() {
-    getElement("sourcesPanel").innerHTML = emptyState("暂无来源", "启用 RAG 后，这里会显示命中文档、相似度和片段。")
-    getElement("planPanel").innerHTML = emptyState("暂无 Agent 计划", "启用 Agent 后，这里会显示工具调用步骤。")
-    getElement("tracePanel").innerHTML = emptyState("暂无执行路径", "请求完成后，这里会记录检索、规划和 fallback 状态。")
-    getElement("flashcardsPanel").innerHTML = emptyState("暂无记忆卡片", "让 Agent 生成 flashcard 后，可以在这里翻看和下载。")
+    getElement("sourcesPanel").innerHTML = emptyState("等待一次知识检索", "启用 RAG 后，这里会显示命中文档和相关片段。")
+    getElement("planPanel").innerHTML = emptyState("等待 Agent 计划", "启用 Agent 后，复杂学习任务会拆成工具步骤。")
+    getElement("flashcardsPanel").innerHTML = emptyState("还没有记忆卡片", "请求生成 flashcard 后，可以在这里翻看和下载 PNG。")
+    getElement("tracePanel").innerHTML = emptyState("暂无执行路径", "这里会记录检索、规划、fallback 等运行细节。")
+}
+
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) {
+        return `${bytes} B`
+    }
+
+    if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`
+    }
+
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+
+function buildKnowledgeFileUrl(file) {
+    if (file && file.url) {
+        return `${API_BASE_URL}${file.url}`
+    }
+
+    return `${API_BASE_URL}/knowledge-files/${encodeURIComponent(file.name || "")}`
+}
+
+
+function buildKnowledgeContentUrl(file) {
+    return `${API_BASE_URL}/knowledge-files/${encodeURIComponent(file.name || "")}/content`
+}
+
+
+function clearKnowledgeObjectUrl() {
+    if (activeKnowledgeObjectUrl) {
+        URL.revokeObjectURL(activeKnowledgeObjectUrl)
+        activeKnowledgeObjectUrl = ""
+    }
+}
+
+
+async function openKnowledgeFile(index) {
+    const file = knowledgeFiles[index]
+    const viewer = getElement("knowledgeViewerPanel")
+
+    if (!file || !viewer) {
+        return
+    }
+
+    clearKnowledgeObjectUrl()
+    viewer.innerHTML = emptyState("正在打开文件", `${file.name} 加载中...`)
+
+    try {
+        const fileUrl = buildKnowledgeFileUrl(file)
+
+        if (file.type === "pdf") {
+            viewer.innerHTML = `
+                <article class="knowledge-viewer-card">
+                    <div class="knowledge-source-header">
+                        <strong>${escapeHtml(file.name)}</strong>
+                        <span>PDF · ${formatFileSize(Number(file.size || 0))}</span>
+                    </div>
+                    <div class="knowledge-actions">
+                        <a class="ghost-link" href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">新窗口打开</a>
+                    </div>
+                    <iframe class="knowledge-pdf-frame" src="${escapeHtml(fileUrl)}" title="${escapeHtml(file.name)}"></iframe>
+                </article>
+            `
+            return
+        }
+
+        const response = await fetch(buildKnowledgeContentUrl(file))
+
+        if (!response.ok) {
+            throw new Error(`文本预览接口返回 ${response.status}`)
+        }
+
+        const payload = await response.json()
+        const text = payload.content || ""
+        viewer.innerHTML = `
+            <article class="knowledge-viewer-card">
+                <div class="knowledge-source-header">
+                    <strong>${escapeHtml(file.name)}</strong>
+                    <span>${escapeHtml(String(file.type || "text").toUpperCase())} · ${formatFileSize(Number(file.size || 0))}</span>
+                </div>
+                <pre class="knowledge-text-preview">${escapeHtml(text)}</pre>
+            </article>
+        `
+    } catch (error) {
+        viewer.innerHTML = emptyState("文件打开失败", error.message)
+    }
+}
+
+
+async function loadKnowledgeLibrary(force = false) {
+    const panel = getElement("knowledgeLibraryPanel")
+
+    if (!panel || (knowledgeLoaded && !force)) {
+        return
+    }
+
+    panel.innerHTML = emptyState("正在加载知识库", "正在读取 docs 目录文件...")
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/knowledge-files`)
+
+        if (!response.ok) {
+            throw new Error(`知识库接口返回 ${response.status}`)
+        }
+
+        const data = await response.json()
+        const files = Array.isArray(data.files) ? data.files : []
+        knowledgeFiles = files
+        knowledgeLoaded = true
+
+        const status = document.querySelector(".knowledge-status")
+        if (status) {
+            status.innerHTML = `<span class="status-dot"></span>本地知识库 ${files.length} 个文件`
+        }
+
+        if (files.length === 0) {
+            panel.innerHTML = emptyState("知识库为空", "请先上传 PDF，或把 md / txt / pdf 文件放入 docs 后刷新。")
+            return
+        }
+
+        panel.innerHTML = files.map((file, index) => {
+            return `
+                <article class="knowledge-source">
+                    <div class="knowledge-source-header">
+                        <strong>${index + 1}. ${escapeHtml(file.name)}</strong>
+                        <span>${escapeHtml(file.type.toUpperCase())} · ${formatFileSize(Number(file.size || 0))}</span>
+                    </div>
+                    <div class="knowledge-actions">
+                        <button class="ghost-link open-knowledge-button" type="button" data-file-index="${index}">打开</button>
+                    </div>
+                </article>
+            `
+        }).join("")
+    } catch (error) {
+        panel.innerHTML = emptyState("知识库加载失败", error.message)
+    }
 }
 
 
 function renderSourcesPanel(sources) {
     if (!Array.isArray(sources) || sources.length === 0) {
-        return emptyState("本次没有来源", "如果需要引用知识库，请选择 RAG 模式或打开 RAG 检索。")
+        return emptyState("本次没有来源", "如果需要引用知识库，请选择知识库问答或打开 RAG 检索。")
     }
 
     return sources.map((source, index) => {
@@ -254,8 +563,10 @@ function renderSourcesPanel(sources) {
 
         return `
             <article class="source-card">
-                <strong>${index + 1}. ${sourceName}</strong>
-                <span class="source-score">相似度 ${score}</span>
+                <div class="knowledge-source-header">
+                    <strong>${index + 1}. ${sourceName}</strong>
+                    <span class="source-score">相似度 ${score}</span>
+                </div>
                 <div class="source-snippet">${snippet}</div>
             </article>
         `
@@ -316,12 +627,13 @@ function renderTracePanel(trace) {
 }
 
 
-function renderFlashcardsPanel(flashcards) {
+function renderFlashcardsPanel(flashcards, options = {}) {
     if (!Array.isArray(flashcards) || flashcards.length === 0) {
         return emptyState("本次没有记忆卡片", "让 Agent 生成记忆卡片后，可以在这里翻面和下载 PNG。")
     }
 
     return flashcards.map((card, index) => {
+        const displayIndex = (options.startIndex || 1) + index
         const front = escapeHtml(card.front || "")
         const back = escapeHtml(card.back || "")
         const rawDifficulty = String(card.difficulty || "medium").toLowerCase()
@@ -337,18 +649,24 @@ function renderFlashcardsPanel(flashcards) {
         return `
             <article
                 class="flashcard"
-                data-card-index="${index + 1}"
+                data-card-index="${displayIndex}"
                 data-front="${front}"
                 data-back="${back}"
                 data-tags="${tagsJson}"
                 data-difficulty="${escapeHtml(difficulty)}"
             >
                 <div class="flashcard-card-toolbar">
-                    <span class="flashcard-card-number">卡片 ${index + 1}</span>
+                    <span class="flashcard-card-number">卡片 ${displayIndex}</span>
                     <div class="flashcard-card-actions">
                         <button class="download-single-flashcard-button" type="button">下载</button>
                     </div>
                 </div>
+                ${options.showTopic ? `
+                    <div class="flashcard-library-meta">
+                        <span>${escapeHtml(card.topic || "本轮学习")}</span>
+                        <span>${escapeHtml(card.createdAt || "")}</span>
+                    </div>
+                ` : ""}
                 <div class="flashcard-inner">
                     <div class="flashcard-face flashcard-front">
                         <div class="flashcard-label">正面</div>
@@ -376,8 +694,53 @@ function renderFlashcardsPanel(flashcards) {
 function renderInsights(data) {
     getElement("sourcesPanel").innerHTML = renderSourcesPanel(data.sources)
     getElement("planPanel").innerHTML = renderPlanPanel(data.plan)
-    getElement("tracePanel").innerHTML = renderTracePanel(data.trace)
     getElement("flashcardsPanel").innerHTML = renderFlashcardsPanel(data.flashcards)
+    getElement("tracePanel").innerHTML = renderTracePanel(data.trace)
+}
+
+
+function addCardsToLibrary(cards, topic) {
+    if (!Array.isArray(cards) || cards.length === 0) {
+        return
+    }
+
+    const createdAt = new Date().toLocaleString()
+    const cleanTopic = String(topic || "本轮学习").trim()
+
+    cards.forEach(card => {
+        cardLibrary.push({
+            ...card,
+            topic: cleanTopic,
+            createdAt,
+        })
+    })
+
+    renderCardLibrary()
+}
+
+
+function clearCardLibrary() {
+    cardLibrary = []
+    renderCardLibrary()
+}
+
+
+function renderCardLibrary() {
+    const panel = getElement("cardLibraryPanel")
+
+    if (!panel) {
+        return
+    }
+
+    if (cardLibrary.length === 0) {
+        panel.innerHTML = emptyState("还没有卡片", "让 Agent 生成 flashcard 后，卡片会出现在这里。")
+        return
+    }
+
+    panel.innerHTML = renderFlashcardsPanel(cardLibrary, {
+        showTopic: true,
+        startIndex: 1,
+    })
 }
 
 
@@ -451,11 +814,11 @@ function drawCardFace(context, x, y, width, height, title, content, meta, fillCo
     context.fill()
     context.stroke()
 
-    context.fillStyle = "#65747c"
+    context.fillStyle = "#65727b"
     context.font = "700 22px Arial"
     context.fillText(title, x + 24, y + 36)
 
-    context.fillStyle = "#172126"
+    context.fillStyle = "#172026"
     context.font = "24px Arial"
     let currentY = y + 78
     wrapCanvasText(context, content, width - 48).slice(0, 6).forEach(line => {
@@ -463,7 +826,7 @@ function drawCardFace(context, x, y, width, height, title, content, meta, fillCo
         currentY += 34
     })
 
-    context.fillStyle = "#334155"
+    context.fillStyle = "#34454f"
     context.font = "18px Arial"
     wrapCanvasText(context, meta, width - 48).slice(0, 2).forEach((line, index) => {
         context.fillText(line, x + 24, y + height - 52 + index * 22)
@@ -500,7 +863,7 @@ function createFlashcardFaceCanvas(card, side) {
     canvas.width = width * scale
     canvas.height = height * scale
     context.scale(scale, scale)
-    context.fillStyle = "#f7faf9"
+    context.fillStyle = "#fafaf7"
     context.fillRect(0, 0, width, height)
 
     drawCardFace(
@@ -512,8 +875,8 @@ function createFlashcardFaceCanvas(card, side) {
         isFront ? "正面" : "背面",
         isFront ? card.front : card.back,
         meta,
-        isFront ? "#ffffff" : "#ecfdf5",
-        isFront ? "#d8e2df" : "#a7f3d0",
+        isFront ? "#ffffff" : "#fff6e6",
+        isFront ? "#e1e6e0" : "#f1dfb7",
     )
 
     return canvas
@@ -562,6 +925,17 @@ function handleFlashcardClick(event) {
 }
 
 
+function handleKnowledgeLibraryClick(event) {
+    const openButton = event.target.closest(".open-knowledge-button")
+
+    if (!openButton) {
+        return
+    }
+
+    openKnowledgeFile(Number(openButton.dataset.fileIndex))
+}
+
+
 async function uploadPDF() {
     const fileInput = getElement("pdfFile")
     const file = fileInput.files[0]
@@ -586,6 +960,8 @@ async function uploadPDF() {
 
         const data = await response.json()
         alert(data.message || "上传完成")
+        knowledgeLoaded = false
+        loadKnowledgeLibrary(true)
     } catch (error) {
         alert(`上传失败：${error.message}`)
     }
@@ -607,6 +983,9 @@ async function sendMessage(modeOverride) {
     appendUserMessage(requestBody.message)
     addHistoryMessage("user", requestBody.message)
     getElement("userInput").value = ""
+    loadingText.textContent = requestBody.use_rag
+        ? "正在检索知识库、规划回答并整理学习成果..."
+        : "正在组织解释、计划和复习卡片..."
     loadingText.style.display = "block"
 
     try {
@@ -624,7 +1003,7 @@ async function sendMessage(modeOverride) {
 
         const data = await response.json()
 
-        appendChatResponse(data)
+        appendChatResponse(data, requestBody.message)
         addHistoryMessage("assistant", data.answer || "")
         chatBox.scrollTop = chatBox.scrollHeight
     } catch (error) {
@@ -647,19 +1026,39 @@ function activateInsightTab(tabName) {
 }
 
 
-function setupQuickActions() {
-    document.querySelectorAll(".quick-action").forEach(button => {
-        button.addEventListener("click", async () => {
-            const mode = button.dataset.mode
-            getElement("modeSelect").value = mode
-            updateUseRagState()
+function activateMainView(viewName) {
+    document.querySelectorAll(".nav-item").forEach(button => {
+        button.classList.toggle("active", button.dataset.view === viewName)
+    })
 
-            if (getElement("userInput").value.trim()) {
-                await sendMessage(mode)
-            } else {
-                getElement("userInput").focus()
-            }
-        })
+    const resultsPanel = document.querySelector(".results-panel")
+    const views = {
+        study: getElement("studyView"),
+        knowledge: getElement("knowledgeView"),
+        cards: getElement("cardsView"),
+    }
+
+    Object.entries(views).forEach(([name, element]) => {
+        if (element) {
+            element.classList.toggle("active", name === viewName)
+        }
+    })
+
+    if (resultsPanel) {
+        resultsPanel.style.display = viewName === "study" ? "flex" : "none"
+    }
+
+    if (viewName === "knowledge") {
+        loadKnowledgeLibrary()
+    } else if (viewName === "cards") {
+        renderCardLibrary()
+    }
+}
+
+
+function setupModeCards() {
+    document.querySelectorAll(".mode-card").forEach(button => {
+        button.addEventListener("click", () => setMode(button.dataset.modeChoice))
     })
 }
 
@@ -669,8 +1068,23 @@ document.addEventListener("DOMContentLoaded", () => {
     getElement("sendButton").addEventListener("click", () => sendMessage())
     getElement("uploadButton").addEventListener("click", uploadPDF)
     getElement("clearChatButton").addEventListener("click", clearConversation)
+    getElement("newConversationButton").addEventListener("click", startNewConversation)
+    getElement("conversationHistoryPanel").addEventListener("click", event => {
+        const button = event.target.closest(".conversation-item")
+        if (button) {
+            restoreConversation(button.dataset.conversationId)
+        }
+    })
     getElement("flashcardsPanel").addEventListener("click", handleFlashcardClick)
-    setupQuickActions()
+    getElement("cardLibraryPanel").addEventListener("click", handleFlashcardClick)
+    getElement("knowledgeLibraryPanel").addEventListener("click", handleKnowledgeLibraryClick)
+    getElement("refreshKnowledgeButton").addEventListener("click", () => loadKnowledgeLibrary(true))
+    getElement("clearCardsButton").addEventListener("click", clearCardLibrary)
+    setupModeCards()
+
+    document.querySelectorAll(".nav-item").forEach(button => {
+        button.addEventListener("click", () => activateMainView(button.dataset.view))
+    })
 
     document.querySelectorAll(".insight-tab").forEach(tab => {
         tab.addEventListener("click", () => activateInsightTab(tab.dataset.tab))
@@ -682,5 +1096,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     })
 
+    renderWelcomeMessage()
+    resetInsights()
     updateUseRagState()
+    renderConversationHistory()
+    renderCardLibrary()
 })
