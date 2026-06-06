@@ -1,7 +1,6 @@
 import os
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 
 from backend.history_utils import context_prompt, history_prompt
 
@@ -10,6 +9,7 @@ load_dotenv()
 DEFAULT_MODEL = "mimo-v2.5"
 DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 SUPPORTED_MODELS = {DEFAULT_MODEL}
+_default_llm = None
 
 
 def normalize_model(model: str | None) -> str:
@@ -19,6 +19,8 @@ def normalize_model(model: str | None) -> str:
 
 
 def build_llm(model: str = DEFAULT_MODEL, temperature: float = 0.7, max_tokens: int = 2000):
+    from langchain_openai import ChatOpenAI
+
     api_key = (
         os.getenv("MY_MIMO_API_KEY")
         or os.getenv("MIMO_API_KEY")
@@ -35,7 +37,24 @@ def build_llm(model: str = DEFAULT_MODEL, temperature: float = 0.7, max_tokens: 
     )
 
 
-llm = build_llm()
+def get_default_llm():
+    global _default_llm
+
+    if _default_llm is None:
+        _default_llm = build_llm()
+
+    return _default_llm
+
+
+class LazyLLM:
+    def invoke(self, *args, **kwargs):
+        return get_default_llm().invoke(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(get_default_llm(), name)
+
+
+llm = LazyLLM()
 
 
 def chat(text: str, context=None, custom_llm=None, history_context: str | None = None) -> str:

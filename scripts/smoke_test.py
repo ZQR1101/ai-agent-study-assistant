@@ -3,6 +3,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -96,13 +97,16 @@ TEST_CASES = {
 }
 
 
+EXTRA_CASES = ["knowledge"]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Smoke test core AI Study Assistant /chat API paths.",
     )
     parser.add_argument(
         "--case",
-        choices=["all", *TEST_CASES.keys()],
+        choices=["all", *TEST_CASES.keys(), *EXTRA_CASES],
         default="all",
         help="Which smoke test case to run.",
     )
@@ -146,6 +150,22 @@ def request_json(url: str, payload: dict | None, timeout: int) -> tuple[int, dic
         return 0, "request timed out"
     except json.JSONDecodeError as error:
         return 0, f"invalid json response: {error}"
+
+
+def request_raw(url: str, timeout: int) -> tuple[int, bytes | str, dict[str, str]]:
+    request = urllib.request.Request(url)
+
+    try:
+        with NO_PROXY_OPENER.open(request, timeout=timeout) as response:
+            headers = dict(response.headers.items())
+            return response.status, response.read(), headers
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        return error.code, body, dict(error.headers.items())
+    except urllib.error.URLError as error:
+        return 0, f"connection failed: {error.reason}", {}
+    except TimeoutError:
+        return 0, "request timed out", {}
 
 
 def check_backend(base_url: str, timeout: int) -> bool:
@@ -219,6 +239,88 @@ def run_case(case_name: str, base_url: str, timeout: int) -> bool:
     return True
 
 
+def run_knowledge_case(base_url: str, timeout: int) -> bool:
+    failures = []
+    status_code, data = request_json(
+        base_url.rstrip("/") + "/knowledge-files",
+        None,
+        timeout,
+    )
+
+    if status_code != 200:
+        failures.append(f"list status_code expected 200, got {status_code}")
+    elif not isinstance(data, dict):
+        failures.append("list response is not a JSON object")
+    else:
+        files = data.get("files")
+        if not isinstance(data.get("count"), int):
+            failures.append("missing or invalid field: count")
+        if not isinstance(files, list):
+            failures.append("missing or invalid field: files")
+        elif not files:
+            failures.append("knowledge files list is empty")
+        else:
+            if data.get("count") != len(files):
+                failures.append("count does not match files length")
+
+            first_file = files[0]
+            if not isinstance(first_file, dict):
+                failures.append("file item is not a JSON object")
+            else:
+                for field in ["name", "type", "size", "url"]:
+                    if field not in first_file:
+                        failures.append(f"file item missing field: {field}")
+
+            if not failures and isinstance(first_file, dict):
+                file_url = base_url.rstrip("/") + first_file["url"]
+                file_status, file_body, _ = request_raw(file_url, timeout)
+                if file_status != 200:
+                    failures.append(f"open file status_code expected 200, got {file_status}")
+                elif isinstance(file_body, bytes) and len(file_body) == 0:
+                    failures.append("opened file response is empty")
+
+            preview_file = next(
+                (
+                    file
+                    for file in files
+                    if isinstance(file, dict) and file.get("type") in {"md", "txt"}
+                ),
+                None,
+            )
+            if preview_file is None:
+                failures.append("no md/txt knowledge file found for content preview")
+            else:
+                content_url = (
+                    base_url.rstrip("/")
+                    + "/knowledge-files/"
+                    + quote(preview_file["name"])
+                    + "/content"
+                )
+                content_status, content_data = request_json(content_url, None, timeout)
+                content_failures = validate_response(
+                    "knowledge",
+                    content_status,
+                    content_data,
+                    [
+                        ("name", "truthy"),
+                        ("type", "truthy"),
+                        ("content", "truthy"),
+                    ],
+                )
+                failures.extend(f"content {failure}" for failure in content_failures)
+
+    if failures:
+        print(f"[FAIL] knowledge failed: {'; '.join(failures)}")
+        if isinstance(data, dict) and data.get("detail"):
+            print(f"       detail: {data['detail']}")
+        elif isinstance(data, str):
+            print(f"       detail: {data}")
+        return False
+
+    print("[PASS] knowledge passed")
+    return True
+
+
 def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
@@ -226,12 +328,17 @@ def main() -> int:
     if not check_backend(base_url, args.timeout):
         return 1
 
-    case_names = list(TEST_CASES.keys()) if args.case == "all" else [args.case]
+    case_names = [*TEST_CASES.keys(), *EXTRA_CASES] if args.case == "all" else [args.case]
     passed = 0
     failed = 0
 
     for case_name in case_names:
-        if run_case(case_name, base_url, args.timeout):
+        if case_name == "knowledge":
+            case_passed = run_knowledge_case(base_url, args.timeout)
+        else:
+            case_passed = run_case(case_name, base_url, args.timeout)
+
+        if case_passed:
             passed += 1
         else:
             failed += 1
