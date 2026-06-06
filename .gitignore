@@ -5,3 +5,6 @@ __pycache__/
 venv/
 uploads/
 rag_index/
+DESIGN.md
+frontend_server.err.log
+frontend_server.out.log
