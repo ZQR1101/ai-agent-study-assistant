@@ -24,6 +24,10 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Run setup check
+        run: |
+          python scripts/check_setup.py
+
       - name: Run offline unit tests
         run: |
           python -m unittest discover tests

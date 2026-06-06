@@ -6,9 +6,13 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 ENV_FILE = PROJECT_ROOT / ".env"
 ENV_EXAMPLE_FILE = PROJECT_ROOT / ".env.example"
 REQUIREMENTS_FILE = PROJECT_ROOT / "requirements.txt"
+CORE_DIRS = ("backend", "frontend", "docs", "scripts")
 DOCS_DIR = PROJECT_ROOT / "docs"
 RAG_INDEX_FILE = PROJECT_ROOT / "rag_index" / "index.faiss"
 RAG_CHUNKS_FILE = PROJECT_ROOT / "rag_index" / "chunks.json"
@@ -27,6 +31,12 @@ REQUIREMENT_IMPORTS = {
     "faiss-cpu": "faiss",
     "langgraph": "langgraph",
 }
+
+CORE_MODULES = (
+    "backend.config",
+    "backend.history_utils",
+    "backend.schemas",
+)
 
 
 def print_result(status: str, message: str) -> None:
@@ -53,15 +63,35 @@ def read_dotenv(path: Path) -> dict[str, str]:
 def check_python() -> bool:
     version = sys.version_info
     ok = version >= (3, 10)
-    status = "OK" if ok else "FAIL"
+    status = "OK" if ok else "ERROR"
     print_result(status, f"Python {version.major}.{version.minor}.{version.micro}")
+    return ok
+
+
+def check_project_structure() -> bool:
+    ok = True
+
+    for directory in CORE_DIRS:
+        path = PROJECT_ROOT / directory
+        if path.is_dir():
+            print_result("OK", f"{directory}/ directory exists")
+        else:
+            print_result("ERROR", f"{directory}/ directory not found")
+            ok = False
+
+    if ENV_EXAMPLE_FILE.exists():
+        print_result("OK", ".env.example exists")
+    else:
+        print_result("ERROR", ".env.example not found")
+        ok = False
+
     return ok
 
 
 def check_dependencies() -> bool:
     if not REQUIREMENTS_FILE.exists():
-        print_result("WARN", "requirements.txt not found; dependency check skipped")
-        return True
+        print_result("ERROR", "requirements.txt not found")
+        return False
 
     missing = []
     for raw_line in REQUIREMENTS_FILE.read_text(encoding="utf-8").splitlines():
@@ -75,7 +105,7 @@ def check_dependencies() -> bool:
             missing.append(requirement)
 
     if missing:
-        print_result("FAIL", "Missing dependencies: " + ", ".join(missing))
+        print_result("ERROR", "Missing dependencies: " + ", ".join(missing))
         print_result("HINT", "Run: pip install -r requirements.txt")
         return False
 
@@ -83,13 +113,31 @@ def check_dependencies() -> bool:
     return True
 
 
+def check_core_modules() -> bool:
+    ok = True
+
+    for module_name in CORE_MODULES:
+        try:
+            __import__(module_name)
+            print_result("OK", f"Imported {module_name}")
+        except Exception as error:
+            print_result("ERROR", f"Cannot import {module_name}: {error}")
+            ok = False
+
+    try:
+        from backend.config import get_config
+
+        config = get_config()
+        print_result("OK", f"Config loaded; model={config.model}")
+    except Exception as error:
+        print_result("ERROR", f"backend.config cannot read config: {error}")
+        ok = False
+
+    return ok
+
+
 def check_env() -> bool:
     env_values = read_dotenv(ENV_FILE)
-
-    if ENV_EXAMPLE_FILE.exists():
-        print_result("OK", ".env.example exists")
-    else:
-        print_result("WARN", ".env.example not found")
 
     if ENV_FILE.exists():
         print_result("OK", ".env exists")
@@ -118,11 +166,11 @@ def check_env() -> bool:
 
 def check_docs_dir() -> bool:
     if not DOCS_DIR.exists():
-        print_result("WARN", "docs directory not found; RAG knowledge base is empty")
-        return True
+        print_result("ERROR", "docs directory not found")
+        return False
 
     if not DOCS_DIR.is_dir():
-        print_result("FAIL", "docs exists but is not a directory")
+        print_result("ERROR", "docs exists but is not a directory")
         return False
 
     supported_files = [
@@ -156,7 +204,9 @@ def check_rag_index() -> bool:
 def main() -> int:
     checks = [
         check_python(),
+        check_project_structure(),
         check_dependencies(),
+        check_core_modules(),
         check_env(),
         check_docs_dir(),
         check_rag_index(),
@@ -166,7 +216,7 @@ def main() -> int:
         print_result("OK", "Setup check completed")
         return 0
 
-    print_result("FAIL", "Setup check found blocking issues")
+    print_result("ERROR", "Setup check found blocking issues")
     return 1
 
 
