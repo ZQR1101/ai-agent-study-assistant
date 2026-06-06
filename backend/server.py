@@ -93,6 +93,16 @@ def chat_api(request: ChatRequest):
     return run_chat_request(request)
 
 
+@app.post("/debug-langgraph")
+def debug_langgraph(request: ChatRequest):
+    try:
+        from backend.langgraph_demo import LangGraphDemoUnavailableError, run_langgraph_demo
+
+        return run_langgraph_demo(request.message)
+    except LangGraphDemoUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.post("/explain")
 def explain_api(request: TextRequest):
     result = explain(request.text)
