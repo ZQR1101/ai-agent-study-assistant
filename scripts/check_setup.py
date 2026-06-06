@@ -1,0 +1,174 @@
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env"
+ENV_EXAMPLE_FILE = PROJECT_ROOT / ".env.example"
+REQUIREMENTS_FILE = PROJECT_ROOT / "requirements.txt"
+DOCS_DIR = PROJECT_ROOT / "docs"
+RAG_INDEX_FILE = PROJECT_ROOT / "rag_index" / "index.faiss"
+RAG_CHUNKS_FILE = PROJECT_ROOT / "rag_index" / "chunks.json"
+API_KEY_ENV_NAMES = ("MY_MIMO_API_KEY", "MIMO_API_KEY", "OPENAI_API_KEY")
+
+REQUIREMENT_IMPORTS = {
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "python-dotenv": "dotenv",
+    "langchain": "langchain",
+    "langchain-openai": "langchain_openai",
+    "sentence-transformers": "sentence_transformers",
+    "scikit-learn": "sklearn",
+    "pypdf": "pypdf",
+    "python-multipart": "multipart",
+    "faiss-cpu": "faiss",
+    "langgraph": "langgraph",
+}
+
+
+def print_result(status: str, message: str) -> None:
+    print(f"[{status}] {message}")
+
+
+def read_dotenv(path: Path) -> dict[str, str]:
+    values = {}
+
+    if not path.exists():
+        return values
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+
+    return values
+
+
+def check_python() -> bool:
+    version = sys.version_info
+    ok = version >= (3, 10)
+    status = "OK" if ok else "FAIL"
+    print_result(status, f"Python {version.major}.{version.minor}.{version.micro}")
+    return ok
+
+
+def check_dependencies() -> bool:
+    if not REQUIREMENTS_FILE.exists():
+        print_result("WARN", "requirements.txt not found; dependency check skipped")
+        return True
+
+    missing = []
+    for raw_line in REQUIREMENTS_FILE.read_text(encoding="utf-8").splitlines():
+        requirement = raw_line.strip()
+        if not requirement or requirement.startswith("#"):
+            continue
+
+        package_name = requirement.split("==", 1)[0].split(">=", 1)[0].split("<=", 1)[0].strip()
+        import_name = REQUIREMENT_IMPORTS.get(package_name, package_name.replace("-", "_"))
+        if importlib.util.find_spec(import_name) is None:
+            missing.append(requirement)
+
+    if missing:
+        print_result("FAIL", "Missing dependencies: " + ", ".join(missing))
+        print_result("HINT", "Run: pip install -r requirements.txt")
+        return False
+
+    print_result("OK", "All requirements imports are available")
+    return True
+
+
+def check_env() -> bool:
+    env_values = read_dotenv(ENV_FILE)
+
+    if ENV_EXAMPLE_FILE.exists():
+        print_result("OK", ".env.example exists")
+    else:
+        print_result("WARN", ".env.example not found")
+
+    if ENV_FILE.exists():
+        print_result("OK", ".env exists")
+    else:
+        print_result("WARN", ".env not found; copy .env.example to .env for model calls")
+
+    key_source = None
+    for name in API_KEY_ENV_NAMES:
+        if os.getenv(name) or env_values.get(name):
+            key_source = name
+            break
+
+    if key_source:
+        print_result("OK", f"API key configured via {key_source}")
+    else:
+        print_result("WARN", "No model API key found; offline tests work, LLM calls will fail")
+
+    base_url = os.getenv("MIMO_BASE_URL") or env_values.get("MIMO_BASE_URL")
+    if base_url:
+        print_result("OK", f"MIMO_BASE_URL={base_url}")
+    else:
+        print_result("OK", "MIMO_BASE_URL not set; default will be used")
+
+    return True
+
+
+def check_docs_dir() -> bool:
+    if not DOCS_DIR.exists():
+        print_result("WARN", "docs directory not found; RAG knowledge base is empty")
+        return True
+
+    if not DOCS_DIR.is_dir():
+        print_result("FAIL", "docs exists but is not a directory")
+        return False
+
+    supported_files = [
+        path
+        for path in DOCS_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in {".md", ".txt", ".pdf"}
+    ]
+    print_result("OK", f"docs directory exists; supported files={len(supported_files)}")
+    return True
+
+
+def check_rag_index() -> bool:
+    index_exists = RAG_INDEX_FILE.exists()
+    chunks_exists = RAG_CHUNKS_FILE.exists()
+
+    if not index_exists or not chunks_exists:
+        print_result("WARN", "RAG index is missing or incomplete")
+        print_result("HINT", "Start the backend and run: POST /rebuild-index")
+        return True
+
+    try:
+        chunks = json.loads(RAG_CHUNKS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        print_result("WARN", f"RAG chunks file exists but cannot be read: {error}")
+        return True
+
+    print_result("OK", f"RAG index files exist; chunks={len(chunks)}")
+    return True
+
+
+def main() -> int:
+    checks = [
+        check_python(),
+        check_dependencies(),
+        check_env(),
+        check_docs_dir(),
+        check_rag_index(),
+    ]
+
+    if all(checks):
+        print_result("OK", "Setup check completed")
+        return 0
+
+    print_result("FAIL", "Setup check found blocking issues")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

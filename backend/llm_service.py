@@ -1,14 +1,6 @@
-import os
-
-from dotenv import load_dotenv
-
+from backend.config import DEFAULT_BASE_URL, DEFAULT_MODEL, SUPPORTED_MODELS, get_config
 from backend.history_utils import context_prompt, history_prompt
 
-load_dotenv()
-
-DEFAULT_MODEL = "mimo-v2.5"
-DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
-SUPPORTED_MODELS = {DEFAULT_MODEL}
 _default_llm = None
 
 
@@ -21,16 +13,12 @@ def normalize_model(model: str | None) -> str:
 def build_llm(model: str = DEFAULT_MODEL, temperature: float = 0.7, max_tokens: int = 2000):
     from langchain_openai import ChatOpenAI
 
-    api_key = (
-        os.getenv("MY_MIMO_API_KEY")
-        or os.getenv("MIMO_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-    )
+    config = get_config()
     selected_model = normalize_model(model)
 
     return ChatOpenAI(
-        api_key=api_key,
-        base_url=os.getenv("MIMO_BASE_URL", DEFAULT_BASE_URL),
+        api_key=config.api_key,
+        base_url=config.base_url or DEFAULT_BASE_URL,
         model=selected_model,
         temperature=temperature,
         max_tokens=max_tokens,

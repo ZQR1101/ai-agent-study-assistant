@@ -216,6 +216,36 @@ def ensure_rag_index():
         rebuild_rag_index()
 
 
+def get_rag_index_status() -> dict:
+    chunks_count = None
+    chunks_error = None
+
+    if CHUNKS_FILE.exists():
+        try:
+            with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+                chunks_count = len(json.load(f))
+        except (OSError, json.JSONDecodeError) as error:
+            chunks_error = str(error)
+
+    ready = INDEX_FILE.exists() and CHUNKS_FILE.exists() and chunks_error is None
+    message = (
+        "RAG index is ready"
+        if ready
+        else "RAG index is missing or incomplete; run python scripts/check_setup.py or POST /rebuild-index"
+    )
+
+    return {
+        "ready": ready,
+        "index_file": str(INDEX_FILE),
+        "chunks_file": str(CHUNKS_FILE),
+        "index_exists": INDEX_FILE.exists(),
+        "chunks_exists": CHUNKS_FILE.exists(),
+        "chunks_count": chunks_count,
+        "chunks_error": chunks_error,
+        "message": message,
+    }
+
+
 def list_index_sources() -> list[str]:
     ensure_rag_index()
     return sorted(set(chunk["source"] for chunk in chunks))

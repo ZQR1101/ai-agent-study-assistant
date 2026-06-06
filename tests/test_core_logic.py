@@ -3,9 +3,10 @@ import unittest
 from pydantic import ValidationError
 
 from backend.agent_core import _extract_json_object, _fallback_agent_plan
+from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
 from backend import rag_store
-from backend.rag_store import expand_query, is_valid_chunk
+from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
 from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, FlashcardItem
 from backend.tools import TOOL_REGISTRY, ToolSpec
 
@@ -176,6 +177,26 @@ class ToolsTests(unittest.TestCase):
                 self.assertEqual(tool.name, name)
                 self.assertTrue(tool.description.strip())
                 self.assertTrue(callable(tool.run))
+
+
+class ConfigTests(unittest.TestCase):
+    def test_unknown_model_falls_back_to_default(self):
+        self.assertEqual(normalize_model("unknown-model"), DEFAULT_MODEL)
+
+    def test_config_paths_are_project_local(self):
+        config = get_config()
+
+        self.assertEqual(config.docs_path.name, "docs")
+        self.assertEqual(config.rag_index_dir.name, "rag_index")
+
+
+class RagIndexStatusTests(unittest.TestCase):
+    def test_rag_index_status_does_not_load_index(self):
+        status = get_rag_index_status()
+
+        self.assertIn("ready", status)
+        self.assertIn("message", status)
+        self.assertIsNone(rag_store.embedding_model)
 
 
 if __name__ == "__main__":

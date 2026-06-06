@@ -15,7 +15,13 @@ from backend.ai_core import (
     run_chat_request,
     summarize,
 )
-from backend.rag_store import list_index_sources, rebuild_rag_index, search_relevant_chunks
+from backend.config import get_config
+from backend.rag_store import (
+    get_rag_index_status,
+    list_index_sources,
+    rebuild_rag_index,
+    search_relevant_chunks,
+)
 from backend.schemas import ChatRequest, ChatResponse
 
 
@@ -64,7 +70,17 @@ def home():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    config = get_config()
+    return {
+        "status": "ok",
+        "config": {
+            "model": config.model,
+            "base_url": config.base_url,
+            "has_api_key": config.has_api_key,
+            "api_key_source": config.api_key_source,
+        },
+        "rag_index": get_rag_index_status(),
+    }
 
 
 @app.post("/echo")
