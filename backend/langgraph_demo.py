@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, TypedDict
 
-from backend.llm_service import explain, generate_questions
-from backend.rag_service import get_rag_context
+from backend.tools import TOOL_REGISTRY
 
 
 class LangGraphDemoUnavailableError(RuntimeError):
@@ -20,6 +19,8 @@ class LangGraphDemoState(TypedDict, total=False):
     sources: List[Dict[str, Any]]
     flashcards: List[Dict[str, Any]]
     trace: List[str]
+    step_outputs: List[Dict[str, Any]]
+    last_output: str
 
 
 def _append_trace(state: LangGraphDemoState, item: str) -> List[str]:
@@ -36,6 +37,171 @@ def _first_plan_input(state: LangGraphDemoState, tool_name: str) -> str:
 
 def _contains_any(text: str, keywords: List[str]) -> bool:
     return any(keyword in text for keyword in keywords)
+
+
+def _build_shared_context(state: LangGraphDemoState) -> dict:
+    return {
+        "original_input": state.get("message", ""),
+        "history_context": "",
+        "rag_context": state.get("rag_context", ""),
+        "sources": state.get("sources", []),
+        "step_outputs": state.get("step_outputs", []),
+        "last_output": state.get("last_output", ""),
+    }
+
+
+def run_registry_tool(
+    tool_name: str,
+    step_input: str,
+    state: LangGraphDemoState,
+    custom_llm=None,
+    top_k: int = 3,
+) -> dict:
+    tool_spec = TOOL_REGISTRY.get(tool_name)
+
+    if tool_spec is None:
+        return {
+            "answer": f"LangGraph demo tool not found: {tool_name}",
+            "sources": [],
+            "trace": [f"error: unknown tool {tool_name}"],
+            "context": "",
+            "flashcards": [],
+            "tool_name": tool_name,
+            "tool_description": "",
+            "tool_success": False,
+            "used_context": False,
+            "context_sources": [],
+            "error": f"Unknown tool: {tool_name}",
+        }
+
+    try:
+        result = tool_spec.run(
+            step_input=step_input,
+            original_input=state.get("message", ""),
+            custom_llm=custom_llm,
+            top_k=top_k,
+            shared_context=_build_shared_context(state),
+        )
+    except Exception as exc:
+        return {
+            "answer": f"LangGraph demo tool failed: {tool_name}",
+            "sources": [],
+            "trace": [],
+            "context": "",
+            "flashcards": [],
+            "tool_name": tool_name,
+            "tool_description": tool_spec.description,
+            "tool_success": False,
+            "used_context": False,
+            "context_sources": [],
+            "error": str(exc),
+        }
+
+    return {
+        "answer": result.get("answer", ""),
+        "sources": result.get("sources", []),
+        "trace": result.get("trace", []),
+        "context": result.get("context", ""),
+        "flashcards": result.get("flashcards", []),
+        "tool_name": tool_spec.name,
+        "tool_description": tool_spec.description,
+        "tool_success": True,
+        "used_context": result.get("used_context", False),
+        "context_sources": result.get("context_sources", []),
+        "error": "",
+    }
+
+
+def _merge_unique_sources(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged = [*existing]
+    seen = {
+        (
+            source.get("source"),
+            source.get("score"),
+            source.get("snippet") or source.get("text"),
+        )
+        for source in merged
+    }
+
+    for source in incoming:
+        key = (
+            source.get("source"),
+            source.get("score"),
+            source.get("snippet") or source.get("text"),
+        )
+        if key not in seen:
+            merged.append(source)
+            seen.add(key)
+
+    return merged
+
+
+def _tool_trace(node_name: str, tool_name: str, result: dict) -> List[str]:
+    trace = [
+        f"{node_name}: LangGraph node: {node_name}",
+        f"{node_name}: \u8c03\u7528\u5de5\u5177\uff1a{tool_name}",
+        f"{node_name}: \u5de5\u5177\u8bf4\u660e\uff1a{result.get('tool_description', '')}",
+        f"{node_name}: \u6267\u884c\u6210\u529f\uff1a{'\u662f' if result.get('tool_success') else '\u5426'}",
+        f"{node_name}: \u4f7f\u7528\u4e0a\u4e0b\u6587\uff1a{'\u662f' if result.get('used_context') else '\u5426'}",
+        f"{node_name}: call tool={tool_name}",
+        f"{node_name}: tool description={result.get('tool_description', '')}",
+        f"{node_name}: tool success={'yes' if result.get('tool_success') else 'no'}",
+        f"{node_name}: used context={'yes' if result.get('used_context') else 'no'}",
+    ]
+
+    if result.get("context_sources"):
+        trace.append(f"{node_name}: context sources={'+'.join(result['context_sources'])}")
+    if result.get("error"):
+        trace.append(f"{node_name}: \u9519\u8bef\uff1a{result['error']}")
+        trace.append(f"{node_name}: error={result['error']}")
+
+    trace.extend(result.get("trace", []))
+    return trace
+
+
+def _apply_tool_result(
+    state: LangGraphDemoState,
+    node_name: str,
+    tool_name: str,
+    step_input: str,
+    result: dict,
+    include_answer: bool = True,
+) -> LangGraphDemoState:
+    answer = result.get("answer", "")
+    sources = _merge_unique_sources(state.get("sources", []), result.get("sources", []))
+    flashcards = [*state.get("flashcards", []), *result.get("flashcards", [])]
+    answer_parts = [*state.get("answer_parts", [])]
+
+    if include_answer and answer:
+        answer_parts.append(answer)
+
+    step_outputs = [
+        *state.get("step_outputs", []),
+        {
+            "tool": tool_name,
+            "input": step_input,
+            "answer": answer,
+            "success": bool(result.get("tool_success")),
+        },
+    ]
+    trace = [
+        *state.get("trace", []),
+        *_tool_trace(node_name, tool_name, result),
+    ]
+    new_state = {
+        **state,
+        "answer_parts": answer_parts,
+        "sources": sources,
+        "flashcards": flashcards,
+        "step_outputs": step_outputs,
+        "last_output": answer,
+        "trace": trace,
+    }
+
+    if result.get("context"):
+        new_state["rag_context"] = result["context"]
+
+    return new_state
 
 
 def planner_node(state: LangGraphDemoState) -> LangGraphDemoState:
@@ -100,17 +266,12 @@ def route_after_planner(state: LangGraphDemoState) -> str:
 
 def rag_node(state: LangGraphDemoState) -> LangGraphDemoState:
     query = _first_plan_input(state, "rag")
-    trace = _append_trace(state, f"rag: query={query}")
-    rag_result = get_rag_context(query)
-    found = bool(rag_result.get("found"))
-    trace.append(f"rag: found={found}")
-
-    return {
+    state_with_trace = {
         **state,
-        "rag_context": rag_result.get("context", ""),
-        "sources": rag_result.get("sources", []),
-        "trace": trace,
+        "trace": _append_trace(state, f"rag: input={query}"),
     }
+    result = run_registry_tool("rag", query, state_with_trace)
+    return _apply_tool_result(state_with_trace, "rag", "rag", query, result)
 
 
 def route_after_rag(state: LangGraphDemoState) -> str:
@@ -119,16 +280,12 @@ def route_after_rag(state: LangGraphDemoState) -> str:
 
 def explain_node(state: LangGraphDemoState) -> LangGraphDemoState:
     topic = _first_plan_input(state, "explain")
-    context = state.get("rag_context") or None
-    trace = _append_trace(state, f"explain: context={'yes' if context else 'no'}")
-    answer = explain(topic, context=context)
-    answer_parts = [*state.get("answer_parts", []), answer]
-
-    return {
+    state_with_trace = {
         **state,
-        "answer_parts": answer_parts,
-        "trace": trace,
+        "trace": _append_trace(state, f"explain: input={topic}"),
     }
+    result = run_registry_tool("explain", topic, state_with_trace)
+    return _apply_tool_result(state_with_trace, "explain", "explain", topic, result)
 
 
 def route_after_explain(state: LangGraphDemoState) -> str:
@@ -143,28 +300,12 @@ def route_after_explain(state: LangGraphDemoState) -> str:
 
 def flashcard_node(state: LangGraphDemoState) -> LangGraphDemoState:
     topic = _first_plan_input(state, "flashcard")
-    trace = _append_trace(state, "flashcard: start")
-    source_text = state.get("rag_context") or topic
-    flashcards = [
-        {
-            "front": f"What is the key idea of {topic}?",
-            "back": "Review the explanation and retrieved context, then state the core concept in your own words.",
-            "tags": ["langgraph-demo"],
-            "difficulty": "medium",
-        }
-    ]
-    answer_parts = [
-        *state.get("answer_parts", []),
-        f"Flashcards generated: {len(flashcards)}\nSource basis: {source_text[:120]}",
-    ]
-    trace.append(f"flashcard: generated {len(flashcards)} card(s)")
-
-    return {
+    state_with_trace = {
         **state,
-        "flashcards": flashcards,
-        "answer_parts": answer_parts,
-        "trace": trace,
+        "trace": _append_trace(state, f"flashcard: input={topic}"),
     }
+    result = run_registry_tool("flashcard", topic, state_with_trace)
+    return _apply_tool_result(state_with_trace, "flashcard", "flashcard", topic, result)
 
 
 def route_after_flashcard(state: LangGraphDemoState) -> str:
@@ -176,16 +317,12 @@ def route_after_flashcard(state: LangGraphDemoState) -> str:
 
 def quiz_node(state: LangGraphDemoState) -> LangGraphDemoState:
     topic = _first_plan_input(state, "quiz")
-    context = state.get("rag_context") or None
-    trace = _append_trace(state, f"quiz: context={'yes' if context else 'no'}")
-    quiz = generate_questions(topic, context=context)
-    answer_parts = [*state.get("answer_parts", []), quiz]
-
-    return {
+    state_with_trace = {
         **state,
-        "answer_parts": answer_parts,
-        "trace": trace,
+        "trace": _append_trace(state, f"quiz: input={topic}"),
     }
+    result = run_registry_tool("quiz", topic, state_with_trace)
+    return _apply_tool_result(state_with_trace, "quiz", "quiz", topic, result)
 
 
 def build_demo_graph():
@@ -249,6 +386,8 @@ def run_langgraph_demo(message: str) -> dict:
         "answer_parts": [],
         "sources": [],
         "flashcards": [],
+        "step_outputs": [],
+        "last_output": "",
         "trace": ["langgraph_demo: start"],
     })
 

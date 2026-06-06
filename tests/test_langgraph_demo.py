@@ -1,6 +1,101 @@
 import builtins
 import unittest
+from dataclasses import dataclass, field
 from unittest.mock import patch
+
+
+@dataclass
+class FakeTool:
+    name: str
+    description: str
+    calls: list = field(default_factory=list)
+
+    def run(
+        self,
+        step_input: str,
+        original_input: str = "",
+        custom_llm=None,
+        top_k: int = 3,
+        shared_context: dict | None = None,
+    ) -> dict:
+        shared_context = shared_context or {}
+        self.calls.append({
+            "step_input": step_input,
+            "original_input": original_input,
+            "top_k": top_k,
+            "shared_context": shared_context,
+        })
+
+        if self.name == "rag":
+            return {
+                "answer": "rag answer",
+                "sources": [{"source": "rag.md", "score": 0.9}],
+                "trace": ["registry rag trace"],
+                "context": "mock rag context",
+                "flashcards": [],
+                "used_context": False,
+                "context_sources": [],
+            }
+
+        if self.name == "explain":
+            return {
+                "answer": "explain answer",
+                "sources": [
+                    {"source": "rag.md", "score": 0.9},
+                    {"source": "explain.md", "score": 0.8},
+                ],
+                "trace": ["registry explain trace"],
+                "context": "",
+                "flashcards": [],
+                "used_context": bool(shared_context.get("rag_context") or shared_context.get("last_output")),
+                "context_sources": ["rag_context"] if shared_context.get("rag_context") else [],
+            }
+
+        if self.name == "flashcard":
+            return {
+                "answer": "flashcard answer",
+                "sources": [],
+                "trace": ["registry flashcard trace"],
+                "context": "",
+                "flashcards": [
+                    {
+                        "front": "What is Agentic RAG?",
+                        "back": "Agentic RAG uses agent behavior around retrieval.",
+                        "tags": ["rag"],
+                        "difficulty": "medium",
+                    }
+                ],
+                "used_context": bool(shared_context.get("rag_context") or shared_context.get("last_output")),
+                "context_sources": ["rag_context", "previous_step_output"],
+            }
+
+        if self.name == "quiz":
+            return {
+                "answer": "quiz answer",
+                "sources": [],
+                "trace": ["registry quiz trace"],
+                "context": "",
+                "flashcards": [],
+                "used_context": bool(shared_context.get("rag_context") or shared_context.get("last_output")),
+                "context_sources": ["previous_step_output"],
+            }
+
+        return {
+            "answer": f"{self.name} answer",
+            "sources": [],
+            "trace": [],
+            "context": "",
+            "flashcards": [],
+            "used_context": False,
+            "context_sources": [],
+        }
+
+
+def make_fake_registry():
+    return {
+        name: FakeTool(name=name, description=f"{name} description")
+        for name in ["chat", "rag", "explain", "summarize", "quiz", "flashcard"]
+    }
 
 
 class LangGraphDemoTests(unittest.TestCase):
@@ -34,7 +129,7 @@ class LangGraphDemoTests(unittest.TestCase):
 
         self.assertTrue(hasattr(graph, "invoke"))
 
-    def _run_with_mocks(self, message):
+    def _run_with_fake_registry(self, message):
         import backend.langgraph_demo as demo
 
         try:
@@ -42,22 +137,12 @@ class LangGraphDemoTests(unittest.TestCase):
         except RuntimeError as exc:
             self.skipTest(str(exc))
 
-        with (
-            patch.object(
-                demo,
-                "get_rag_context",
-                return_value={
-                    "found": True,
-                    "context": "mock rag context",
-                    "sources": [{"source": "mock.md", "score": 0.9}],
-                },
-            ) as rag_mock,
-            patch.object(demo, "explain", return_value="mock explanation") as explain_mock,
-            patch.object(demo, "generate_questions", return_value="mock quiz") as quiz_mock,
-        ):
+        fake_registry = make_fake_registry()
+
+        with patch.object(demo, "TOOL_REGISTRY", fake_registry):
             result = demo.run_langgraph_demo(message)
 
-        return result, rag_mock, explain_mock, quiz_mock
+        return result, fake_registry
 
     def _trace_path(self, result):
         path = []
@@ -71,57 +156,73 @@ class LangGraphDemoTests(unittest.TestCase):
         return path
 
     def test_plain_explain_routes_to_explain_then_end(self):
-        result, rag_mock, explain_mock, quiz_mock = self._run_with_mocks("什么是 RAG")
+        result, registry = self._run_with_fake_registry("what is RAG")
 
         self.assertEqual(self._trace_path(result), ["planner", "explain"])
-        self.assertIn("mock explanation", result["answer"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["explain"])
-        rag_mock.assert_not_called()
-        explain_mock.assert_called_once()
-        quiz_mock.assert_not_called()
+        self.assertIn("explain answer", result["answer"])
+        self.assertEqual(len(registry["explain"].calls), 1)
+        self.assertEqual(len(registry["rag"].calls), 0)
+        self.assertEqual(len(registry["quiz"].calls), 0)
 
     def test_knowledge_base_explain_routes_through_rag(self):
-        result, rag_mock, explain_mock, quiz_mock = self._run_with_mocks("根据知识库解释 agentic rag")
+        result, registry = self._run_with_fake_registry("knowledge base explain agentic rag")
 
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain"])
-        self.assertEqual(result["sources"], [{"source": "mock.md", "score": 0.9}])
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain"])
-        rag_mock.assert_called_once()
-        explain_mock.assert_called_once()
-        quiz_mock.assert_not_called()
+        self.assertEqual([source["source"] for source in result["sources"]], ["rag.md", "explain.md"])
+        self.assertEqual(len(registry["rag"].calls), 1)
+        self.assertEqual(len(registry["explain"].calls), 1)
+        self.assertEqual(registry["explain"].calls[0]["shared_context"]["rag_context"], "mock rag context")
 
     def test_explain_and_quiz_routes_to_quiz(self):
-        result, rag_mock, explain_mock, quiz_mock = self._run_with_mocks("请解释 RAG，并出 3 道练习题")
+        result, registry = self._run_with_fake_registry("explain RAG and quiz me")
 
         self.assertEqual(self._trace_path(result), ["planner", "explain", "quiz"])
-        self.assertIn("mock quiz", result["answer"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["explain", "quiz"])
-        rag_mock.assert_not_called()
-        explain_mock.assert_called_once()
-        quiz_mock.assert_called_once()
+        self.assertIn("quiz answer", result["answer"])
+        self.assertEqual(len(registry["rag"].calls), 0)
+        self.assertEqual(len(registry["quiz"].calls), 1)
+        self.assertEqual(registry["quiz"].calls[0]["shared_context"]["last_output"], "explain answer")
 
     def test_knowledge_base_flashcard_routes_to_flashcard(self):
-        result, rag_mock, explain_mock, quiz_mock = self._run_with_mocks("根据知识库生成 agentic rag 记忆卡片")
+        result, registry = self._run_with_fake_registry("knowledge base generate agentic rag flashcard")
 
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain", "flashcard"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain", "flashcard"])
         self.assertEqual(len(result["flashcards"]), 1)
-        rag_mock.assert_called_once()
-        explain_mock.assert_called_once()
-        quiz_mock.assert_not_called()
+        self.assertEqual(result["flashcards"][0]["front"], "What is Agentic RAG?")
+        self.assertEqual(len(registry["flashcard"].calls), 1)
+        self.assertEqual(registry["flashcard"].calls[0]["shared_context"]["rag_context"], "mock rag context")
 
     def test_knowledge_base_flashcard_and_quiz_routes_through_all_nodes(self):
-        message = "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题"
-        result, rag_mock, explain_mock, quiz_mock = self._run_with_mocks(message)
+        message = "knowledge base explain agentic rag, generate flashcard, and quiz me"
+        result, registry = self._run_with_fake_registry(message)
 
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain", "flashcard", "quiz"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain", "flashcard", "quiz"])
-        self.assertIn("mock explanation", result["answer"])
-        self.assertIn("mock quiz", result["answer"])
+        self.assertIn("explain answer", result["answer"])
+        self.assertIn("flashcard answer", result["answer"])
+        self.assertIn("quiz answer", result["answer"])
         self.assertEqual(len(result["flashcards"]), 1)
-        rag_mock.assert_called_once()
-        explain_mock.assert_called_once()
-        quiz_mock.assert_called_once()
+        self.assertEqual(len(registry["quiz"].calls), 1)
+        self.assertEqual(registry["quiz"].calls[0]["shared_context"]["last_output"], "flashcard answer")
+
+    def test_registry_tool_error_is_friendly(self):
+        import backend.langgraph_demo as demo
+
+        result = demo.run_registry_tool("missing", "hello", {"message": "hello"})
+
+        self.assertFalse(result["tool_success"])
+        self.assertIn("Unknown tool", result["error"])
+
+    def test_trace_contains_registry_tool_metadata(self):
+        result, _ = self._run_with_fake_registry("knowledge base explain agentic rag")
+
+        self.assertTrue(any("rag: call tool=rag" in item for item in result["trace"]))
+        self.assertTrue(any("rag: tool description=rag description" in item for item in result["trace"]))
+        self.assertTrue(any("rag: tool success=yes" in item for item in result["trace"]))
+        self.assertTrue(any("explain: used context=yes" in item for item in result["trace"]))
 
 
 if __name__ == "__main__":
