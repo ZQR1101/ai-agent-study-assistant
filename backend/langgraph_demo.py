@@ -21,6 +21,8 @@ class LangGraphDemoState(TypedDict, total=False):
     trace: List[str]
     step_outputs: List[Dict[str, Any]]
     last_output: str
+    custom_llm: Any
+    top_k: int
 
 
 def _append_trace(state: LangGraphDemoState, item: str) -> List[str]:
@@ -270,7 +272,13 @@ def rag_node(state: LangGraphDemoState) -> LangGraphDemoState:
         **state,
         "trace": _append_trace(state, f"rag: input={query}"),
     }
-    result = run_registry_tool("rag", query, state_with_trace)
+    result = run_registry_tool(
+        "rag",
+        query,
+        state_with_trace,
+        custom_llm=state_with_trace.get("custom_llm"),
+        top_k=state_with_trace.get("top_k", 3),
+    )
     return _apply_tool_result(state_with_trace, "rag", "rag", query, result)
 
 
@@ -284,7 +292,13 @@ def explain_node(state: LangGraphDemoState) -> LangGraphDemoState:
         **state,
         "trace": _append_trace(state, f"explain: input={topic}"),
     }
-    result = run_registry_tool("explain", topic, state_with_trace)
+    result = run_registry_tool(
+        "explain",
+        topic,
+        state_with_trace,
+        custom_llm=state_with_trace.get("custom_llm"),
+        top_k=state_with_trace.get("top_k", 3),
+    )
     return _apply_tool_result(state_with_trace, "explain", "explain", topic, result)
 
 
@@ -304,7 +318,13 @@ def flashcard_node(state: LangGraphDemoState) -> LangGraphDemoState:
         **state,
         "trace": _append_trace(state, f"flashcard: input={topic}"),
     }
-    result = run_registry_tool("flashcard", topic, state_with_trace)
+    result = run_registry_tool(
+        "flashcard",
+        topic,
+        state_with_trace,
+        custom_llm=state_with_trace.get("custom_llm"),
+        top_k=state_with_trace.get("top_k", 3),
+    )
     return _apply_tool_result(state_with_trace, "flashcard", "flashcard", topic, result)
 
 
@@ -321,7 +341,13 @@ def quiz_node(state: LangGraphDemoState) -> LangGraphDemoState:
         **state,
         "trace": _append_trace(state, f"quiz: input={topic}"),
     }
-    result = run_registry_tool("quiz", topic, state_with_trace)
+    result = run_registry_tool(
+        "quiz",
+        topic,
+        state_with_trace,
+        custom_llm=state_with_trace.get("custom_llm"),
+        top_k=state_with_trace.get("top_k", 3),
+    )
     return _apply_tool_result(state_with_trace, "quiz", "quiz", topic, result)
 
 
@@ -377,7 +403,7 @@ def build_demo_graph():
     return graph_builder.compile()
 
 
-def run_langgraph_demo(message: str) -> dict:
+def run_langgraph_demo(message: str, custom_llm=None, top_k: int = 3) -> dict:
     graph = build_demo_graph()
     result = graph.invoke({
         "message": message,
@@ -388,6 +414,8 @@ def run_langgraph_demo(message: str) -> dict:
         "flashcards": [],
         "step_outputs": [],
         "last_output": "",
+        "custom_llm": custom_llm,
+        "top_k": top_k,
         "trace": ["langgraph_demo: start"],
     })
 
