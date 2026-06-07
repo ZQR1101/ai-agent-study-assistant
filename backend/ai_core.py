@@ -176,7 +176,16 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
     return blocks
 
 
+def run_langgraph_chat_request(request: ChatRequest) -> dict:
+    from backend.langgraph_runtime import run_langgraph_chat_request as run_runtime_chat_request
+
+    return run_runtime_chat_request(request)
+
+
 def run_chat_request(request: ChatRequest) -> dict:
+    if request.mode == "auto" and request.use_agent and request.use_langgraph:
+        return run_langgraph_chat_request(request)
+
     use_rag = request.use_rag or request.mode == "rag"
     agent_handles_rag = request.mode == "auto" and request.use_agent
     selected_model = normalize_model(request.model)

@@ -18,6 +18,7 @@ const MODE_LABELS = {
     summarize: "内容总结",
     quiz: "自动出题",
     learn: "学习模式",
+    langgraph: "LangGraph",
 }
 
 
@@ -253,6 +254,7 @@ function buildChatRequest(modeOverride) {
         temperature: clampNumber(getElement("temperatureInput").value, 0.7, 0, 2),
         use_agent: true,
         use_rag: getElement("useRagInput").checked,
+        use_langgraph: getElement("useLangGraphInput")?.checked || false,
         top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
         session_id: currentSessionId,
         history: getRecentHistory(),
@@ -366,14 +368,30 @@ function renderAnswer(data) {
 }
 
 
+function getExecutionModeLabel(mode) {
+    if (mode === "langgraph") {
+        return "\u6267\u884c\u65b9\u5f0f\uff1aLangGraph \u5de5\u4f5c\u6d41"
+    }
+
+    if (mode === "agent") {
+        return "\u6267\u884c\u65b9\u5f0f\uff1aAgent Planner + Executor"
+    }
+
+    return mode ? `\u6267\u884c\u65b9\u5f0f\uff1a${MODE_LABELS[mode] || mode}` : ""
+}
+
+
 function appendChatResponse(data, requestMessage = "") {
     const cards = Array.isArray(data.flashcards) ? data.flashcards : []
     const answerHtml = renderAnswer(data)
+    const modeLabel = MODE_LABELS[data.mode] || data.mode || ""
+    const executionModeLabel = getExecutionModeLabel(data.mode)
 
     getElement("chatBox").insertAdjacentHTML("beforeend", `
         <article class="ai-message">
             <div class="response-meta">
-                <span>模式：${escapeHtml(MODE_LABELS[data.mode] || data.mode || "")}</span>
+                ${executionModeLabel ? `<span>${escapeHtml(executionModeLabel)}</span>` : ""}
+                <span>模式：${escapeHtml(modeLabel)}</span>
                 <span>模型：${escapeHtml(data.model || "")}</span>
             </div>
             ${answerHtml}

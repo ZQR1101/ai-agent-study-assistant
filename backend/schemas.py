@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     temperature: float = Field(0.7, ge=0.0, le=2.0)
     use_agent: bool = False
     use_rag: bool = False
+    use_langgraph: bool = False
     top_k: int = Field(3, ge=1, le=10)
     session_id: str | None = None
     history: list[dict] = Field(default_factory=list)
