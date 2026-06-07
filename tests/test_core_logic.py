@@ -9,7 +9,7 @@ from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
 from backend import rag_store
 from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
-from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, FlashcardItem
+from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, ChatResponse, FlashcardItem
 from backend.tools import TOOL_REGISTRY, ToolSpec
 
 
@@ -241,8 +241,8 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         fake_llm = object()
 
         with (
-            patch("backend.ai_core.build_llm", return_value=fake_llm),
-            patch("backend.langgraph_demo.run_langgraph_demo", return_value=demo_result) as mock_demo,
+            patch("backend.langgraph_runtime.build_llm", return_value=fake_llm),
+            patch("backend.langgraph_runtime.run_langgraph_workflow", return_value=demo_result) as mock_workflow,
         ):
             result = run_langgraph_chat_request(request)
 
@@ -252,10 +252,13 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         self.assertEqual(result["plan"], [{"tool": "rag", "input": "use langgraph"}])
         self.assertEqual(len(result["flashcards"]), 1)
         self.assertTrue(any("LangGraph workflow enabled" in item for block in result["trace"] for item in block["items"]))
-        mock_demo.assert_called_once_with("use langgraph", custom_llm=fake_llm, top_k=5)
+        ChatResponse(**result)
+        mock_workflow.assert_called_once()
+        self.assertEqual(mock_workflow.call_args.kwargs["custom_llm"], fake_llm)
+        self.assertEqual(mock_workflow.call_args.kwargs["top_k"], 5)
 
     def test_langgraph_unavailable_returns_friendly_response(self):
-        from backend.langgraph_demo import LangGraphDemoUnavailableError
+        from backend.langgraph_runtime import LangGraphRuntimeUnavailableError
 
         request = ChatRequest(
             message="use langgraph",
@@ -265,10 +268,10 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         )
 
         with (
-            patch("backend.ai_core.build_llm", return_value=object()),
+            patch("backend.langgraph_runtime.build_llm", return_value=object()),
             patch(
-                "backend.langgraph_demo.run_langgraph_demo",
-                side_effect=LangGraphDemoUnavailableError("missing langgraph"),
+                "backend.langgraph_runtime.run_langgraph_workflow",
+                side_effect=LangGraphRuntimeUnavailableError("missing langgraph"),
             ),
         ):
             result = run_langgraph_chat_request(request)

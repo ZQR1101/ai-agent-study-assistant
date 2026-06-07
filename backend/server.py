@@ -96,10 +96,17 @@ def chat_api(request: ChatRequest):
 @app.post("/debug-langgraph")
 def debug_langgraph(request: ChatRequest):
     try:
-        from backend.langgraph_demo import LangGraphDemoUnavailableError, run_langgraph_demo
+        from backend.langgraph_runtime import LangGraphRuntimeUnavailableError, run_langgraph_workflow
 
-        return run_langgraph_demo(request.message)
-    except LangGraphDemoUnavailableError as exc:
+        return run_langgraph_workflow(
+            request.message,
+            top_k=request.top_k,
+            use_rag=request.use_rag,
+            model=request.model,
+            temperature=request.temperature,
+            history=request.history,
+        )
+    except LangGraphRuntimeUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

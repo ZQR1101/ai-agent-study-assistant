@@ -177,51 +177,9 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
 
 
 def run_langgraph_chat_request(request: ChatRequest) -> dict:
-    selected_model = normalize_model(request.model)
-    custom_llm = build_llm(model=selected_model, temperature=request.temperature)
-    trace = [
-        "执行方式：LangGraph",
-        "LangGraph workflow enabled",
-        f"mode: {request.mode}",
-        f"model: {selected_model}",
-        f"temperature: {request.temperature}",
-        f"use_agent: {request.use_agent}",
-        f"use_rag: {request.use_rag}",
-        f"use_langgraph: {request.use_langgraph}",
-        f"top_k: {request.top_k}",
-    ]
+    from backend.langgraph_runtime import run_langgraph_chat_request as run_runtime_chat_request
 
-    try:
-        from backend.langgraph_demo import LangGraphDemoUnavailableError, run_langgraph_demo
-
-        result = run_langgraph_demo(
-            request.message,
-            custom_llm=custom_llm,
-            top_k=request.top_k,
-        )
-    except LangGraphDemoUnavailableError as exc:
-        trace.append(f"LangGraph unavailable: {exc}")
-        return {
-            "answer": f"LangGraph workflow is unavailable: {exc}",
-            "mode": "langgraph",
-            "model": selected_model,
-            "sources": [],
-            "trace": _group_trace_items(trace),
-            "plan": [],
-            "flashcards": [],
-        }
-
-    trace.extend(result.get("trace", []))
-
-    return {
-        "answer": result.get("answer", ""),
-        "mode": "langgraph",
-        "model": selected_model,
-        "sources": result.get("sources", []),
-        "trace": _group_trace_items(trace),
-        "plan": result.get("plan", []),
-        "flashcards": result.get("flashcards", []),
-    }
+    return run_runtime_chat_request(request)
 
 
 def run_chat_request(request: ChatRequest) -> dict:

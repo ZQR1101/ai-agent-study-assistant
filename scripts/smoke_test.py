@@ -97,6 +97,30 @@ TEST_CASES = {
 }
 
 
+OPTIONAL_TEST_CASES = {
+    "langgraph": {
+        "payload": {
+            "message": "鏍规嵁鐭ヨ瘑搴撹В閲?agentic rag锛岀敓鎴愯蹇嗗崱鐗囷紝骞跺嚭 3 閬撻",
+            "mode": "auto",
+            "model": "mimo-v2.5",
+            "temperature": 0.3,
+            "use_agent": True,
+            "use_rag": True,
+            "use_langgraph": True,
+            "top_k": 3,
+        },
+        "checks": [
+            ("answer", "truthy"),
+            ("mode", "equals:langgraph"),
+            ("plan", "list"),
+            ("trace", "exists"),
+            ("sources", "list"),
+            ("flashcards", "list"),
+        ],
+    },
+}
+
+
 EXTRA_CASES = ["knowledge"]
 
 
@@ -106,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--case",
-        choices=["all", *TEST_CASES.keys(), *EXTRA_CASES],
+        choices=["all", *TEST_CASES.keys(), *OPTIONAL_TEST_CASES.keys(), *EXTRA_CASES],
         default="all",
         help="Which smoke test case to run.",
     )
@@ -214,12 +238,14 @@ def validate_response(case_name: str, status_code: int, data, checks: list[tuple
             failures.append(f"empty or missing field: {field}")
         elif rule == "list" and not isinstance(data.get(field), list):
             failures.append(f"field is not a list: {field}")
+        elif rule.startswith("equals:") and data.get(field) != rule.split(":", 1)[1]:
+            failures.append(f"field {field} expected {rule.split(':', 1)[1]}, got {data.get(field)}")
 
     return failures
 
 
 def run_case(case_name: str, base_url: str, timeout: int) -> bool:
-    case = TEST_CASES[case_name]
+    case = TEST_CASES.get(case_name) or OPTIONAL_TEST_CASES[case_name]
     status_code, data = request_json(
         base_url.rstrip("/") + "/chat",
         case["payload"],

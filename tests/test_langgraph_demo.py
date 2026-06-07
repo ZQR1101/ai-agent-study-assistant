@@ -53,7 +53,7 @@ class FakeTool:
 
         if self.name == "flashcard":
             return {
-                "answer": "flashcard answer",
+                "answer": "## Flashcard Markdown Very Long\nfront/back repeated content",
                 "sources": [],
                 "trace": ["registry flashcard trace"],
                 "context": "",
@@ -99,11 +99,27 @@ def make_fake_registry():
 
 
 class LangGraphDemoTests(unittest.TestCase):
+    def test_runtime_module_can_be_imported_without_running_graph(self):
+        import backend.langgraph_runtime as runtime
+
+        self.assertTrue(hasattr(runtime, "LangGraphAgentState"))
+        self.assertTrue(callable(runtime.run_langgraph_workflow))
+
     def test_module_can_be_imported_without_running_graph(self):
         import backend.langgraph_demo as demo
 
         self.assertTrue(hasattr(demo, "LangGraphDemoState"))
         self.assertTrue(callable(demo.run_langgraph_demo))
+
+    def test_detect_intent_rules(self):
+        from backend.langgraph_runtime import detect_intent
+
+        self.assertTrue(detect_intent("什么是 RAG")["need_explain"])
+        self.assertTrue(detect_intent("根据知识库解释 agentic rag")["use_rag"])
+        self.assertTrue(detect_intent("请总结这段内容")["need_summarize"])
+        self.assertTrue(detect_intent("生成记忆卡片")["need_flashcard"])
+        self.assertTrue(detect_intent("出 3 道题")["need_quiz"])
+        self.assertTrue(detect_intent("plain request", use_rag_requested=True)["use_rag"])
 
     def test_missing_langgraph_error_is_clear(self):
         import backend.langgraph_demo as demo
@@ -149,7 +165,7 @@ class LangGraphDemoTests(unittest.TestCase):
 
         for item in result["trace"]:
             node = item.split(":", 1)[0]
-            if node in {"planner", "rag", "explain", "flashcard", "quiz"}:
+            if node in {"planner", "rag", "explain", "summarize", "flashcard", "quiz"}:
                 if not path or path[-1] != node:
                     path.append(node)
 
@@ -185,6 +201,15 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertEqual(len(registry["quiz"].calls), 1)
         self.assertEqual(registry["quiz"].calls[0]["shared_context"]["last_output"], "explain answer")
 
+    def test_summarize_routes_to_summarize_then_finalizer(self):
+        result, registry = self._run_with_fake_registry("please summarize this content")
+
+        self.assertEqual(self._trace_path(result), ["planner", "summarize"])
+        self.assertEqual([step["tool"] for step in result["plan"]], ["summarize"])
+        self.assertIn("summarize answer", result["answer"])
+        self.assertEqual(len(registry["summarize"].calls), 1)
+        self.assertEqual(len(registry["explain"].calls), 0)
+
     def test_knowledge_base_flashcard_routes_to_flashcard(self):
         result, registry = self._run_with_fake_registry("knowledge base generate agentic rag flashcard")
 
@@ -202,11 +227,15 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain", "flashcard", "quiz"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain", "flashcard", "quiz"])
         self.assertIn("explain answer", result["answer"])
-        self.assertIn("flashcard answer", result["answer"])
         self.assertIn("quiz answer", result["answer"])
+        self.assertIn("1", result["answer"])
+        self.assertNotIn("## Flashcard Markdown Very Long", result["answer"])
         self.assertEqual(len(result["flashcards"]), 1)
         self.assertEqual(len(registry["quiz"].calls), 1)
-        self.assertEqual(registry["quiz"].calls[0]["shared_context"]["last_output"], "flashcard answer")
+        self.assertEqual(
+            registry["quiz"].calls[0]["shared_context"]["last_output"],
+            "## Flashcard Markdown Very Long\nfront/back repeated content",
+        )
 
     def test_registry_tool_error_is_friendly(self):
         import backend.langgraph_demo as demo
@@ -219,10 +248,68 @@ class LangGraphDemoTests(unittest.TestCase):
     def test_trace_contains_registry_tool_metadata(self):
         result, _ = self._run_with_fake_registry("knowledge base explain agentic rag")
 
-        self.assertTrue(any("rag: call tool=rag" in item for item in result["trace"]))
-        self.assertTrue(any("rag: tool description=rag description" in item for item in result["trace"]))
-        self.assertTrue(any("rag: tool success=yes" in item for item in result["trace"]))
-        self.assertTrue(any("explain: used context=yes" in item for item in result["trace"]))
+        self.assertTrue(any("LangGraph node: rag" in item for item in result["trace"]))
+        self.assertTrue(any("rag" in item for item in result["trace"] if "\u8c03\u7528\u5de5\u5177" in item))
+        self.assertTrue(any("rag description" in item for item in result["trace"]))
+        self.assertTrue(any("\u6267\u884c\u6210\u529f" in item and "\u662f" in item for item in result["trace"]))
+        self.assertTrue(any("\u4f7f\u7528\u4e0a\u4e0b\u6587" in item and "\u662f" in item for item in result["trace"]))
+        self.assertFalse(any("call tool=" in item for item in result["trace"]))
+        self.assertFalse(any("tool success=" in item for item in result["trace"]))
+
+    def test_compose_final_answer_omits_flashcard_markdown(self):
+        import backend.langgraph_demo as demo
+
+        state = {
+            "step_outputs": [
+                {"tool": "rag", "answer": "raw rag answer"},
+                {"tool": "explain", "answer": "explain content"},
+                {
+                    "tool": "flashcard",
+                    "answer": "## Flashcard Markdown Very Long\nfront/back repeated content",
+                    "flashcards": [{"front": "Q", "back": "A"}],
+                },
+                {"tool": "quiz", "answer": "quiz content"},
+            ],
+            "flashcards": [{"front": "Q", "back": "A"}],
+        }
+
+        answer = demo.compose_final_answer(state)
+
+        self.assertIn("explain content", answer)
+        self.assertIn("quiz content", answer)
+        self.assertIn("1", answer)
+        self.assertNotIn("## Flashcard Markdown Very Long", answer)
+        self.assertNotIn("raw rag answer", answer)
+
+    def test_compose_final_answer_keeps_quiz_and_explain_but_not_rag_stack(self):
+        import backend.langgraph_runtime as runtime
+
+        answer = runtime.compose_final_answer({
+            "step_outputs": [
+                {"tool": "rag", "answer": "rag context answer"},
+                {"tool": "explain", "answer": "explain body"},
+                {"tool": "quiz", "answer": "quiz body"},
+            ],
+            "flashcards": [],
+        })
+
+        self.assertIn("explain body", answer)
+        self.assertIn("quiz body", answer)
+        self.assertNotIn("rag context answer", answer)
+
+    def test_compose_final_answer_mentions_structured_flashcards_only(self):
+        import backend.langgraph_runtime as runtime
+
+        answer = runtime.compose_final_answer({
+            "step_outputs": [
+                {"tool": "explain", "answer": "explain body"},
+                {"tool": "flashcard", "answer": "markdown flashcard body"},
+            ],
+            "flashcards": [{"front": "Q", "back": "A"}],
+        })
+
+        self.assertIn("已生成 1 张记忆卡片", answer)
+        self.assertNotIn("markdown flashcard body", answer)
 
 
 if __name__ == "__main__":
