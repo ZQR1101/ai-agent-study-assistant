@@ -116,6 +116,7 @@ OPTIONAL_TEST_CASES = {
             ("trace", "exists"),
             ("sources", "list"),
             ("flashcards", "list"),
+            ("runtime_info", "dict_has:runtime=langgraph"),
         ],
     },
 }
@@ -238,6 +239,15 @@ def validate_response(case_name: str, status_code: int, data, checks: list[tuple
             failures.append(f"empty or missing field: {field}")
         elif rule == "list" and not isinstance(data.get(field), list):
             failures.append(f"field is not a list: {field}")
+        elif rule.startswith("dict_has:"):
+            expected_key, expected_value = rule.split(":", 1)[1].split("=", 1)
+            value = data.get(field)
+            if not isinstance(value, dict):
+                failures.append(f"field is not a dict: {field}")
+            elif str(value.get(expected_key)) != expected_value:
+                failures.append(
+                    f"field {field}.{expected_key} expected {expected_value}, got {value.get(expected_key)}"
+                )
         elif rule.startswith("equals:") and data.get(field) != rule.split(":", 1)[1]:
             failures.append(f"field {field} expected {rule.split(':', 1)[1]}, got {data.get(field)}")
 

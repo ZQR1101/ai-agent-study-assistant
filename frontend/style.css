@@ -386,7 +386,7 @@ summary {
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: 48px;
+    gap: 18px;
     margin: 0 auto;
     max-width: 840px;
     overflow-y: auto;
@@ -396,26 +396,28 @@ summary {
 
 .user-message,
 .ai-message {
-    border: 1px solid var(--outline-soft);
     font-size: 16px;
     line-height: 24px;
     max-width: 85%;
-    padding: 16px 24px;
+    padding: 14px 18px;
     white-space: pre-wrap;
 }
 
 .user-message {
     align-self: flex-end;
-    background: var(--surface-container);
-    border-radius: 16px 4px 16px 16px;
+    background: #f3f4f1;
+    border: 1px solid var(--outline-soft);
+    border-radius: 18px;
+    max-width: min(72%, 680px);
 }
 
 .ai-message {
     align-self: flex-start;
-    background: var(--surface-low);
-    border-left: 4px solid var(--primary);
-    border-radius: 4px 16px 16px 16px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
     color: var(--ink);
+    max-width: min(88%, 760px);
 }
 
 .welcome-message {
@@ -445,6 +447,43 @@ summary {
     background: #fff1f2;
     border-color: #fecdd3;
     color: var(--error);
+}
+
+.message-artifacts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.message-artifact {
+    background: var(--surface-lowest);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.message-artifact summary {
+    color: var(--primary);
+    font-size: 13px;
+}
+
+.message-artifact ul {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding-left: 18px;
+}
+
+.message-artifact li {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.message-artifact li span {
+    display: block;
 }
 
 .fallback-note {
@@ -531,7 +570,7 @@ summary {
     flex-direction: column;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px 24px 24px;
+    padding: 12px 16px 24px;
 }
 
 .results-header {
@@ -545,10 +584,11 @@ summary {
 
 .insight-tabs {
     border-bottom: 1px solid var(--outline);
-    display: flex;
-    gap: 22px;
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     margin-bottom: 24px;
-    overflow-x: auto;
+    overflow: visible;
     padding: 12px 0 0;
 }
 
@@ -556,10 +596,12 @@ summary {
     background: transparent;
     border-bottom: 2px solid transparent;
     color: var(--muted);
-    flex: 0 0 auto;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
-    padding: 8px 0 10px;
+    min-width: 0;
+    overflow: hidden;
+    padding: 8px 2px 10px;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
@@ -575,7 +617,9 @@ summary {
 .empty-state,
 .source-card,
 .trace-block,
-.plan-item {
+.plan-item,
+.runtime-info-panel,
+.runtime-tool-call {
     background: var(--surface-low);
     border: 1px solid var(--outline-soft);
     border-radius: 8px;
@@ -598,7 +642,9 @@ summary {
 .empty-state span,
 .source-snippet,
 .trace-block li,
-.plan-item div {
+.plan-item div,
+.runtime-summary,
+.runtime-detail-grid {
     color: var(--muted);
     font-size: 12px;
     line-height: 18px;
@@ -617,6 +663,116 @@ summary {
     padding: 2px 6px;
 }
 
+.turn-panel-card {
+    background: var(--surface-low);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+}
+
+.turn-panel-card h3 {
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 20px;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.turn-detail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style-position: outside;
+    margin: 0;
+    padding-left: 18px;
+}
+
+.turn-detail-list li {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.turn-detail-list strong,
+.turn-detail-list span {
+    display: block;
+}
+
+.turn-detail-list strong {
+    color: var(--primary);
+}
+
+.execution-path-line {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.execution-path-line span {
+    background: rgba(72, 163, 138, 0.16);
+    border: 1px solid rgba(72, 163, 138, 0.22);
+    border-radius: 999px;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 800;
+    padding: 4px 8px;
+}
+
+.execution-path-line b {
+    color: var(--muted-soft);
+    font-size: 12px;
+}
+
+.execution-path-line.muted {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.execution-summary {
+    background: var(--surface-lowest);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    color: var(--muted);
+    display: grid;
+    font-size: 12px;
+    gap: 6px 10px;
+    grid-template-columns: minmax(72px, auto) 1fr;
+    line-height: 18px;
+    margin: 0;
+    padding: 10px;
+}
+
+.execution-summary dt {
+    color: var(--muted-soft);
+    font-weight: 800;
+}
+
+.execution-summary dd {
+    margin: 0;
+}
+
+.trace-debug-details {
+    background: var(--surface-lowest);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.trace-debug-details summary {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.trace-debug-details .trace-block {
+    background: transparent;
+    border: 0;
+    padding: 8px 0 0;
+}
+
 .plan-list,
 .trace-block ul {
     margin: 0;
@@ -626,6 +782,93 @@ summary {
 .plan-step {
     color: var(--primary);
     font-weight: 800;
+}
+
+.runtime-info-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.runtime-info-header,
+.runtime-tool-header {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+}
+
+.runtime-info-header strong,
+.runtime-tool-calls > strong,
+.runtime-tool-header strong {
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.runtime-engine,
+.runtime-status {
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 8px;
+}
+
+.runtime-engine {
+    background: rgba(72, 163, 138, 0.16);
+    color: var(--primary);
+}
+
+.runtime-status.success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.runtime-status.failed {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.runtime-summary,
+.runtime-detail-grid {
+    display: grid;
+    gap: 6px 10px;
+    grid-template-columns: minmax(72px, auto) 1fr;
+    margin: 0;
+}
+
+.runtime-summary dt,
+.runtime-detail-grid dt {
+    color: var(--muted-soft);
+    font-weight: 800;
+}
+
+.runtime-summary dd,
+.runtime-detail-grid dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.runtime-graph-path {
+    color: var(--primary);
+    font-weight: 800;
+}
+
+.runtime-tool-calls {
+    border-top: 1px solid var(--outline-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+}
+
+.runtime-tool-call {
+    background: var(--surface-lowest);
+}
+
+.runtime-error-text {
+    color: var(--error);
+    font-weight: 700;
 }
 
 .study-progress {

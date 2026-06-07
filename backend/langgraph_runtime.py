@@ -32,6 +32,8 @@ class LangGraphAgentState(TypedDict, total=False):
     sources: list[dict]
     flashcards: list[dict]
     trace: list[str]
+    graph_path: list[str]
+    tool_calls: list[dict]
 
     rag_context: str
     step_outputs: list[dict]
@@ -43,6 +45,10 @@ class LangGraphAgentState(TypedDict, total=False):
 
 def _append_trace(state: LangGraphAgentState, item: str) -> list[str]:
     return [*state.get("trace", []), item]
+
+
+def _append_graph_path(state: LangGraphAgentState, node_name: str) -> list[str]:
+    return [*state.get("graph_path", []), node_name]
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:
@@ -268,11 +274,24 @@ def run_registry_tool_for_state(
         *state.get("trace", []),
         *_tool_trace(tool_name, tool_name, result),
     ]
+    tool_call = {
+        "node": tool_name,
+        "tool": tool_name,
+        "description": result.get("tool_description", ""),
+        "success": bool(result.get("tool_success")),
+        "used_context": bool(result.get("used_context")),
+        "context_sources": result.get("context_sources", []),
+        "output_length": len(answer),
+    }
+    if result.get("error"):
+        tool_call["error"] = result["error"]
+
     new_state: LangGraphAgentState = {
         **state,
         "sources": sources,
         "flashcards": flashcards,
         "step_outputs": step_outputs,
+        "tool_calls": [*state.get("tool_calls", []), tool_call],
         "last_output": answer,
         "trace": trace,
     }
@@ -306,6 +325,7 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
         **intent,
         "plan": plan,
         "trace": trace,
+        "graph_path": _append_graph_path(state, "planner"),
     }
 
 
@@ -321,7 +341,11 @@ def route_after_planner(state: LangGraphAgentState) -> str:
 
 def rag_node(state: LangGraphAgentState) -> LangGraphAgentState:
     query = _first_plan_input(state, "rag")
-    state_with_trace = {**state, "trace": _append_trace(state, f"rag: input={query}")}
+    state_with_trace = {
+        **state,
+        "trace": _append_trace(state, f"rag: input={query}"),
+        "graph_path": _append_graph_path(state, "rag"),
+    }
     return run_registry_tool_for_state("rag", query, state_with_trace)
 
 
@@ -334,13 +358,21 @@ def route_after_rag(state: LangGraphAgentState) -> str:
 
 def explain_node(state: LangGraphAgentState) -> LangGraphAgentState:
     topic = _first_plan_input(state, "explain")
-    state_with_trace = {**state, "trace": _append_trace(state, f"explain: input={topic}")}
+    state_with_trace = {
+        **state,
+        "trace": _append_trace(state, f"explain: input={topic}"),
+        "graph_path": _append_graph_path(state, "explain"),
+    }
     return run_registry_tool_for_state("explain", topic, state_with_trace)
 
 
 def summarize_node(state: LangGraphAgentState) -> LangGraphAgentState:
     topic = _first_plan_input(state, "summarize")
-    state_with_trace = {**state, "trace": _append_trace(state, f"summarize: input={topic}")}
+    state_with_trace = {
+        **state,
+        "trace": _append_trace(state, f"summarize: input={topic}"),
+        "graph_path": _append_graph_path(state, "summarize"),
+    }
     return run_registry_tool_for_state("summarize", topic, state_with_trace)
 
 
@@ -356,7 +388,11 @@ def route_after_main_content(state: LangGraphAgentState) -> str:
 
 def flashcard_node(state: LangGraphAgentState) -> LangGraphAgentState:
     topic = _first_plan_input(state, "flashcard")
-    state_with_trace = {**state, "trace": _append_trace(state, f"flashcard: input={topic}")}
+    state_with_trace = {
+        **state,
+        "trace": _append_trace(state, f"flashcard: input={topic}"),
+        "graph_path": _append_graph_path(state, "flashcard"),
+    }
     return run_registry_tool_for_state("flashcard", topic, state_with_trace)
 
 
@@ -369,7 +405,11 @@ def route_after_flashcard(state: LangGraphAgentState) -> str:
 
 def quiz_node(state: LangGraphAgentState) -> LangGraphAgentState:
     topic = _first_plan_input(state, "quiz")
-    state_with_trace = {**state, "trace": _append_trace(state, f"quiz: input={topic}")}
+    state_with_trace = {
+        **state,
+        "trace": _append_trace(state, f"quiz: input={topic}"),
+        "graph_path": _append_graph_path(state, "quiz"),
+    }
     return run_registry_tool_for_state("quiz", topic, state_with_trace)
 
 
@@ -434,7 +474,20 @@ def finalizer_node(state: LangGraphAgentState) -> LangGraphAgentState:
     return {
         **state,
         "final_answer": final_answer,
+        "graph_path": _append_graph_path(state, "finalizer"),
         "trace": _append_trace(state, "finalizer: composed final answer"),
+    }
+
+
+def build_runtime_info(state: LangGraphAgentState) -> dict:
+    graph_path = state.get("graph_path", [])
+    return {
+        "runtime": "langgraph",
+        "graph_path": graph_path,
+        "node_count": len(graph_path),
+        "tool_calls": state.get("tool_calls", []),
+        "finalizer_used": "finalizer" in graph_path,
+        "error": state.get("error") or None,
     }
 
 
@@ -535,6 +588,8 @@ def run_langgraph_workflow(
         "sources": [],
         "flashcards": [],
         "trace": ["langgraph_runtime: start"],
+        "graph_path": [],
+        "tool_calls": [],
         "rag_context": "",
         "step_outputs": [],
         "last_output": "",
@@ -548,6 +603,7 @@ def run_langgraph_workflow(
         "plan": result.get("plan", []),
         "flashcards": result.get("flashcards", []),
         "step_outputs": result.get("step_outputs", []),
+        "runtime_info": build_runtime_info(result),
     }
 
 
@@ -596,6 +652,14 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
             "trace": _group_langgraph_trace(trace),
             "plan": [],
             "flashcards": [],
+            "runtime_info": {
+                "runtime": "langgraph",
+                "graph_path": [],
+                "node_count": 0,
+                "tool_calls": [],
+                "finalizer_used": False,
+                "error": str(exc),
+            },
         }
 
     trace.extend(result.get("trace", []))
@@ -607,4 +671,5 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
         "trace": _group_langgraph_trace(trace),
         "plan": result.get("plan", []),
         "flashcards": result.get("flashcards", []),
+        "runtime_info": result.get("runtime_info", {}),
     }

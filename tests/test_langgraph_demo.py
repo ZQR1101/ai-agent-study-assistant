@@ -175,6 +175,7 @@ class LangGraphDemoTests(unittest.TestCase):
         result, registry = self._run_with_fake_registry("what is RAG")
 
         self.assertEqual(self._trace_path(result), ["planner", "explain"])
+        self.assertEqual(result["runtime_info"]["graph_path"], ["planner", "explain", "finalizer"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["explain"])
         self.assertIn("explain answer", result["answer"])
         self.assertEqual(len(registry["explain"].calls), 1)
@@ -190,6 +191,16 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertEqual(len(registry["rag"].calls), 1)
         self.assertEqual(len(registry["explain"].calls), 1)
         self.assertEqual(registry["explain"].calls[0]["shared_context"]["rag_context"], "mock rag context")
+
+    def test_runtime_info_default_fields(self):
+        result, _ = self._run_with_fake_registry("knowledge base explain agentic rag")
+        runtime_info = result["runtime_info"]
+
+        self.assertEqual(runtime_info["runtime"], "langgraph")
+        self.assertIsInstance(runtime_info["graph_path"], list)
+        self.assertEqual(runtime_info["node_count"], len(runtime_info["graph_path"]))
+        self.assertTrue(runtime_info["finalizer_used"])
+        self.assertIsNone(runtime_info["error"])
 
     def test_explain_and_quiz_routes_to_quiz(self):
         result, registry = self._run_with_fake_registry("explain RAG and quiz me")
@@ -225,6 +236,10 @@ class LangGraphDemoTests(unittest.TestCase):
         result, registry = self._run_with_fake_registry(message)
 
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain", "flashcard", "quiz"])
+        self.assertEqual(
+            result["runtime_info"]["graph_path"],
+            ["planner", "rag", "explain", "flashcard", "quiz", "finalizer"],
+        )
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain", "flashcard", "quiz"])
         self.assertIn("explain answer", result["answer"])
         self.assertIn("quiz answer", result["answer"])
@@ -236,6 +251,18 @@ class LangGraphDemoTests(unittest.TestCase):
             registry["quiz"].calls[0]["shared_context"]["last_output"],
             "## Flashcard Markdown Very Long\nfront/back repeated content",
         )
+
+    def test_runtime_info_records_tool_calls(self):
+        result, _ = self._run_with_fake_registry("knowledge base explain agentic rag, generate flashcard, and quiz me")
+        tool_calls = result["runtime_info"]["tool_calls"]
+
+        self.assertEqual([call["tool"] for call in tool_calls], ["rag", "explain", "flashcard", "quiz"])
+
+        for call in tool_calls:
+            self.assertIn("success", call)
+            self.assertIn("used_context", call)
+            self.assertIn("output_length", call)
+            self.assertIsInstance(call["output_length"], int)
 
     def test_registry_tool_error_is_friendly(self):
         import backend.langgraph_demo as demo

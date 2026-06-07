@@ -34,7 +34,7 @@
           </button>
           <button class="side-nav-item nav-item" type="button" data-view="cards">
             <span>◫</span>
-            闪卡复习
+            卡片复习
           </button>
         </nav>
 
@@ -67,7 +67,6 @@
           <details>
             <summary>设置</summary>
             <input type="hidden" id="modeSelect" value="auto" />
-            <input type="checkbox" id="useAgentInput" checked hidden />
             <div class="advanced-grid">
               <label>
                 模型
@@ -85,6 +84,10 @@
               </label>
             </div>
             <div class="toggle-list">
+              <label class="toggle-row">
+                <span>Agent 模式</span>
+                <input type="checkbox" id="useAgentInput" checked />
+              </label>
               <label class="toggle-row">
                 <span>RAG 检索</span>
                 <input type="checkbox" id="useRagInput" />
@@ -174,7 +177,7 @@
             <span class="metadata-chip warm">温习模式</span>
           </div>
           <p class="workspace-copy">
-            本轮生成的记忆卡片会自动出现在这里。刷新页面后卡片库会清空。
+            每轮对话生成的卡片会自动保存在这里，方便后续复习、翻面和下载。
           </p>
           <div id="cardLibraryPanel" class="card-library-grid">
             <div class="empty-state">
@@ -196,7 +199,7 @@
         <nav class="insight-tabs" aria-label="成果类型">
           <button type="button" class="insight-tab active" data-tab="sources">来源追踪</button>
           <button type="button" class="insight-tab" data-tab="plan">学习计划</button>
-          <button type="button" class="insight-tab" data-tab="flashcards">闪卡复习</button>
+          <button type="button" class="insight-tab" data-tab="flashcards">卡片</button>
           <button type="button" class="insight-tab" data-tab="trace">执行路径</button>
         </nav>
 

@@ -104,6 +104,11 @@ class SchemaTests(unittest.TestCase):
 
         self.assertTrue(request.use_langgraph)
 
+    def test_chat_response_runtime_info_defaults_to_empty_dict(self):
+        response = ChatResponse(answer="ok", mode="chat", model="mimo-v2.5")
+
+        self.assertEqual(response.runtime_info, {})
+
     def test_chat_request_rejects_invalid_values(self):
         invalid_payloads = [
             {"message": ""},
@@ -212,6 +217,7 @@ class LangGraphChatRoutingTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "agent")
         self.assertEqual(result["answer"], "agent answer")
+        self.assertEqual(result["runtime_info"], {})
         mock_langgraph.assert_not_called()
         mock_agent.assert_called_once()
 
@@ -237,6 +243,14 @@ class LangGraphChatRoutingTests(unittest.TestCase):
                     "difficulty": "medium",
                 }
             ],
+            "runtime_info": {
+                "runtime": "langgraph",
+                "graph_path": ["planner", "rag", "finalizer"],
+                "node_count": 3,
+                "tool_calls": [],
+                "finalizer_used": True,
+                "error": None,
+            },
         }
         fake_llm = object()
 
@@ -251,6 +265,8 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         self.assertEqual(result["sources"], [{"source": "demo.md", "score": 0.9}])
         self.assertEqual(result["plan"], [{"tool": "rag", "input": "use langgraph"}])
         self.assertEqual(len(result["flashcards"]), 1)
+        self.assertEqual(result["runtime_info"]["runtime"], "langgraph")
+        self.assertEqual(result["runtime_info"]["node_count"], 3)
         self.assertTrue(any("LangGraph workflow enabled" in item for block in result["trace"] for item in block["items"]))
         ChatResponse(**result)
         mock_workflow.assert_called_once()
@@ -278,6 +294,8 @@ class LangGraphChatRoutingTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "langgraph")
         self.assertIn("missing langgraph", result["answer"])
+        self.assertEqual(result["runtime_info"]["runtime"], "langgraph")
+        self.assertEqual(result["runtime_info"]["error"], "missing langgraph")
 
 
 class ToolsTests(unittest.TestCase):

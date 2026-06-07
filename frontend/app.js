@@ -1,11 +1,12 @@
 const API_BASE_URL = "http://127.0.0.1:8000"
 const HISTORY_LIMIT = 6
 const CONVERSATIONS_KEY = "aiStudyAssistant.conversations.v1"
+const CARD_LIBRARY_KEY = "aiStudyAssistant.cardLibrary.v1"
 
 let currentSessionId = createSessionId()
 let chatHistory = []
 let conversations = loadConversations()
-let cardLibrary = []
+let cardLibrary = loadCardLibrary()
 let knowledgeFiles = []
 let knowledgeLoaded = false
 let activeKnowledgeObjectUrl = ""
@@ -69,6 +70,21 @@ function loadConversations() {
 
 function saveConversations() {
     localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations.slice(0, 20)))
+}
+
+
+function loadCardLibrary() {
+    try {
+        const value = JSON.parse(localStorage.getItem(CARD_LIBRARY_KEY) || "[]")
+        return Array.isArray(value) ? value : []
+    } catch (error) {
+        return []
+    }
+}
+
+
+function saveCardLibrary() {
+    localStorage.setItem(CARD_LIBRARY_KEY, JSON.stringify(cardLibrary.slice(0, 200)))
 }
 
 
@@ -163,7 +179,7 @@ function restoreConversation(conversationId) {
     currentSessionId = conversation.id
     chatHistory = conversation.messages.map(message => ({ ...message }))
     renderChatMessages()
-    resetInsights()
+    restoreInsightsFromHistory()
     renderConversationHistory()
 }
 
@@ -178,13 +194,17 @@ function renderChatMessages() {
         const isAssistant = message.role === "assistant"
         const messageClass = isAssistant ? "ai-message" : "user-message"
         const roleLabel = isAssistant ? "助手" : "你"
+        const response = isAssistant ? message.response : null
+        const contentHtml = response
+            ? renderAnswer(response)
+            : `<div>${escapeHtml(message.content)}</div>`
 
         return `
             <article class="${messageClass}">
                 <div class="message-meta">
                     <span>${roleLabel}</span>
                 </div>
-                <div>${escapeHtml(message.content)}</div>
+                ${contentHtml}
             </article>
         `
     }).join("")
@@ -192,24 +212,51 @@ function renderChatMessages() {
 
 
 function getRecentHistory() {
-    return chatHistory.slice(-HISTORY_LIMIT)
+    return chatHistory
+        .slice(-HISTORY_LIMIT)
+        .map(message => ({
+            role: message.role,
+            content: message.content,
+        }))
 }
 
 
-function addHistoryMessage(role, content) {
+function addHistoryMessage(role, content, extra = {}) {
     const cleanContent = String(content || "").trim()
 
     if (!cleanContent) {
         return
     }
 
-    chatHistory.push({ role, content: cleanContent })
+    chatHistory.push({ role, content: cleanContent, ...extra })
 
     if (chatHistory.length > HISTORY_LIMIT * 2) {
         chatHistory = chatHistory.slice(-HISTORY_LIMIT * 2)
     }
 
     persistCurrentConversation()
+}
+
+
+function getResponseSnapshot(data) {
+    return {
+        answer: data.answer || "",
+        mode: data.mode || "",
+        model: data.model || "",
+        sources: Array.isArray(data.sources) ? data.sources : [],
+        plan: Array.isArray(data.plan) ? data.plan : [],
+        trace: Array.isArray(data.trace) ? data.trace : [],
+        flashcards: Array.isArray(data.flashcards) ? data.flashcards : [],
+        runtime_info: hasRuntimeInfo(data.runtime_info) ? data.runtime_info : {},
+    }
+}
+
+
+function addAssistantHistoryMessage(data, requestMessage = "") {
+    addHistoryMessage("assistant", data.answer || "", {
+        response: getResponseSnapshot(data),
+        requestMessage,
+    })
 }
 
 
@@ -237,6 +284,26 @@ function updateUseRagState() {
 }
 
 
+function updateRuntimeModeState(changedMode = "") {
+    const useAgentInput = getElement("useAgentInput")
+    const useLangGraphInput = getElement("useLangGraphInput")
+
+    if (!useAgentInput || !useLangGraphInput) {
+        return
+    }
+
+    if (changedMode === "langgraph" && useLangGraphInput.checked) {
+        useAgentInput.checked = false
+    } else if (changedMode === "agent" && useAgentInput.checked) {
+        useLangGraphInput.checked = false
+    }
+
+    if (!useAgentInput.checked && !useLangGraphInput.checked) {
+        useAgentInput.checked = true
+    }
+}
+
+
 function setMode(mode) {
     getElement("modeSelect").value = mode
     updateUseRagState()
@@ -252,7 +319,7 @@ function buildChatRequest(modeOverride) {
         mode,
         model: getElement("modelSelect").value,
         temperature: clampNumber(getElement("temperatureInput").value, 0.7, 0, 2),
-        use_agent: true,
+        use_agent: getElement("useAgentInput")?.checked ?? true,
         use_rag: getElement("useRagInput").checked,
         use_langgraph: getElement("useLangGraphInput")?.checked || false,
         top_k: Math.round(clampNumber(getElement("topKInput").value, 3, 1, 10)),
@@ -382,7 +449,6 @@ function getExecutionModeLabel(mode) {
 
 
 function appendChatResponse(data, requestMessage = "") {
-    const cards = Array.isArray(data.flashcards) ? data.flashcards : []
     const answerHtml = renderAnswer(data)
     const modeLabel = MODE_LABELS[data.mode] || data.mode || ""
     const executionModeLabel = getExecutionModeLabel(data.mode)
@@ -397,9 +463,6 @@ function appendChatResponse(data, requestMessage = "") {
             ${answerHtml}
         </article>
     `)
-
-    renderInsights(data)
-    addCardsToLibrary(cards, requestMessage)
 }
 
 
@@ -418,6 +481,223 @@ function resetInsights() {
     getElement("planPanel").innerHTML = emptyState("等待 Agent 计划", "启用 Agent 后，复杂学习任务会拆成工具步骤。")
     getElement("flashcardsPanel").innerHTML = emptyState("还没有记忆卡片", "请求生成 flashcard 后，可以在这里翻看和下载 PNG。")
     getElement("tracePanel").innerHTML = emptyState("暂无执行路径", "这里会记录检索、规划、fallback 等运行细节。")
+}
+
+
+function getLatestAssistantResponse() {
+    for (let index = chatHistory.length - 1; index >= 0; index -= 1) {
+        const message = chatHistory[index]
+        if (message.role === "assistant" && message.response) {
+            return message.response
+        }
+    }
+
+    return null
+}
+
+
+function restoreInsightsFromHistory() {
+    if (getConversationTurns().length > 0) {
+        renderConversationInsights()
+    } else {
+        resetInsights()
+    }
+}
+
+
+function getConversationTurns() {
+    const turns = []
+    let pendingQuestion = ""
+
+    chatHistory.forEach(message => {
+        if (message.role === "user") {
+            pendingQuestion = message.content || ""
+            return
+        }
+
+        if (message.role === "assistant" && message.response) {
+            turns.push({
+                question: message.requestMessage || pendingQuestion || "本轮问题",
+                response: message.response,
+            })
+            pendingQuestion = ""
+        }
+    })
+
+    return turns
+}
+
+
+function getTurnTitle(turn, index) {
+    return `${index + 1}. ${turn.question || "本轮问题"}`
+}
+
+
+function renderConversationSourcesPanel(turns) {
+    if (turns.length === 0) {
+        return emptyState("本次没有来源", "如果需要引用知识库，请选择知识库问答或打开 RAG 检索。")
+    }
+
+    return turns.map((turn, turnIndex) => {
+        const sources = Array.isArray(turn.response.sources) ? turn.response.sources : []
+        const body = sources.length > 0
+            ? sources.map((source, sourceIndex) => {
+                const sourceName = typeof source === "string" ? source : source.source || "未知来源"
+                const score = typeof source === "string" || source.score === null || source.score === undefined
+                    ? ""
+                    : `相似度 ${Number(source.score).toFixed(4)}`
+                const snippet = typeof source === "string" ? "" : source.text || source.snippet || ""
+
+                return `
+                    <li>
+                        <strong>${sourceIndex + 1}. ${escapeHtml(sourceName)}</strong>
+                        ${score ? `<span>${escapeHtml(score)}</span>` : ""}
+                        ${snippet ? `<span>${escapeHtml(snippet)}</span>` : ""}
+                    </li>
+                `
+            }).join("")
+            : `<li><span>本轮没有来源。若启用 RAG 且命中知识库，来源会显示在这里。</span></li>`
+
+        return `
+            <article class="turn-panel-card">
+                <h3>${escapeHtml(getTurnTitle(turn, turnIndex))}</h3>
+                <ul class="turn-detail-list">${body}</ul>
+            </article>
+        `
+    }).join("")
+}
+
+
+function renderConversationPlanPanel(turns) {
+    if (turns.length === 0) {
+        return emptyState("本次没有学习计划", "发送问题后，每轮的 Agent 或 LangGraph 计划会显示在这里。")
+    }
+
+    return turns.map((turn, turnIndex) => {
+        const plan = Array.isArray(turn.response.plan) ? turn.response.plan : []
+        const body = plan.length > 0
+            ? plan.map((step, stepIndex) => `
+                <li>
+                    <strong>${stepIndex + 1}. ${escapeHtml(step.tool || "unknown")}</strong>
+                    ${step.input ? `<span>输入：${escapeHtml(step.input)}</span>` : ""}
+                    ${step.reason ? `<span>原因：${escapeHtml(step.reason)}</span>` : ""}
+                </li>
+            `).join("")
+            : `<li><span>本轮没有返回学习计划。</span></li>`
+
+        return `
+            <article class="turn-panel-card">
+                <h3>${escapeHtml(getTurnTitle(turn, turnIndex))}</h3>
+                <ul class="turn-detail-list">${body}</ul>
+            </article>
+        `
+    }).join("")
+}
+
+
+function renderConversationFlashcardsPanel(turns) {
+    if (turns.length === 0) {
+        return emptyState("本次没有卡片", "让 Agent 或 LangGraph 生成卡片后，会按每轮问题保存在这里。")
+    }
+
+    let nextIndex = 1
+    return turns.map((turn, turnIndex) => {
+        const cards = Array.isArray(turn.response.flashcards) ? turn.response.flashcards : []
+        const body = cards.length > 0
+            ? renderFlashcardsPanel(cards, {
+                startIndex: nextIndex,
+                showTopic: true,
+            })
+            : emptyState("本轮没有卡片", "如果请求生成记忆卡片，结果会显示在这里。")
+        nextIndex += cards.length
+
+        return `
+            <article class="turn-panel-card">
+                <h3>${escapeHtml(getTurnTitle(turn, turnIndex))}</h3>
+                ${body}
+            </article>
+        `
+    }).join("")
+}
+
+
+function renderConversationTracePanel(turns) {
+    if (turns.length === 0) {
+        return emptyState("本次没有执行路径", "每轮对话的执行路径会保存在这里。")
+    }
+
+    return turns.map((turn, turnIndex) => {
+        const runtimeInfo = turn.response.runtime_info || {}
+        const path = getExecutionPathForResponse(turn.response)
+        const pathHtml = path.length > 0
+            ? `
+                <div class="execution-path-line">
+                    ${path.map(node => `<span>${escapeHtml(node)}</span>`).join("<b>→</b>")}
+                </div>
+            `
+            : `<div class="execution-path-line muted">暂无执行路径摘要</div>`
+        const runtimeSummaryHtml = hasRuntimeInfo(runtimeInfo)
+            ? `
+                <dl class="execution-summary">
+                    <dt>执行引擎</dt>
+                    <dd>${escapeHtml(runtimeInfo.runtime || "langgraph")}</dd>
+                    <dt>节点数量</dt>
+                    <dd>${escapeHtml(runtimeInfo.node_count ?? path.length)}</dd>
+                    <dt>Finalizer</dt>
+                    <dd>${runtimeInfo.finalizer_used ? "已启用" : "未启用"}</dd>
+                    ${runtimeInfo.error ? `
+                        <dt>Error</dt>
+                        <dd class="runtime-error-text">${escapeHtml(runtimeInfo.error)}</dd>
+                    ` : ""}
+                </dl>
+            `
+            : ""
+        const detailHtml = renderTracePanel(turn.response.trace)
+
+        return `
+            <article class="turn-panel-card">
+                <h3>${escapeHtml(getTurnTitle(turn, turnIndex))}</h3>
+                ${pathHtml}
+                ${runtimeSummaryHtml}
+                <details class="trace-debug-details">
+                    <summary>调试详情</summary>
+                    ${detailHtml}
+                </details>
+            </article>
+        `
+    }).join("")
+}
+
+
+function getExecutionPathForResponse(response) {
+    const runtimeInfo = response.runtime_info || {}
+
+    if (Array.isArray(runtimeInfo.graph_path) && runtimeInfo.graph_path.length > 0) {
+        return runtimeInfo.graph_path
+    }
+
+    const plan = Array.isArray(response.plan) ? response.plan : []
+    if (plan.length > 0) {
+        return ["agent", ...plan.map(step => step.tool || "tool")]
+    }
+
+    const traceItems = flattenTraceItems(response.trace)
+    const finalMode = traceItems.find(item => String(item).includes("最终执行的模式"))
+    if (finalMode) {
+        const mode = String(finalMode).split(/[：:]/).pop().trim()
+        return mode ? [mode] : []
+    }
+
+    return []
+}
+
+
+function renderConversationInsights() {
+    const turns = getConversationTurns()
+    getElement("sourcesPanel").innerHTML = renderConversationSourcesPanel(turns)
+    getElement("planPanel").innerHTML = renderConversationPlanPanel(turns)
+    getElement("flashcardsPanel").innerHTML = renderConversationFlashcardsPanel(turns)
+    getElement("tracePanel").innerHTML = renderConversationTracePanel(turns)
 }
 
 
@@ -645,6 +925,174 @@ function renderTracePanel(trace) {
 }
 
 
+function hasRuntimeInfo(runtimeInfo) {
+    return runtimeInfo
+        && typeof runtimeInfo === "object"
+        && !Array.isArray(runtimeInfo)
+        && Object.keys(runtimeInfo).length > 0
+}
+
+
+function renderRuntimeInfoPanel(runtimeInfo) {
+    if (!hasRuntimeInfo(runtimeInfo)) {
+        return ""
+    }
+
+    const graphPath = Array.isArray(runtimeInfo.graph_path) ? runtimeInfo.graph_path : []
+    const toolCalls = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
+    const graphPathText = graphPath.length > 0 ? graphPath.join(" → ") : "无"
+    const finalizerText = runtimeInfo.finalizer_used ? "已启用" : "未启用"
+    const error = runtimeInfo.error ? String(runtimeInfo.error) : ""
+    const toolCallsHtml = toolCalls.length > 0
+        ? `
+            <div class="runtime-tool-calls">
+                <strong>工具调用</strong>
+                ${toolCalls.map((call, index) => {
+                    const success = Boolean(call.success)
+                    const contextSources = Array.isArray(call.context_sources) && call.context_sources.length > 0
+                        ? call.context_sources.join(" / ")
+                        : "无"
+
+                    return `
+                        <article class="runtime-tool-call">
+                            <div class="runtime-tool-header">
+                                <strong>${index + 1}. ${escapeHtml(call.tool || "unknown")}</strong>
+                                <span class="runtime-status ${success ? "success" : "failed"}">
+                                    ${success ? "成功" : "失败"}
+                                </span>
+                            </div>
+                            <dl class="runtime-detail-grid">
+                                <dt>节点</dt>
+                                <dd>${escapeHtml(call.node || "")}</dd>
+                                <dt>工具说明</dt>
+                                <dd>${escapeHtml(call.description || "")}</dd>
+                                <dt>使用上下文</dt>
+                                <dd>${call.used_context ? "是" : "否"}</dd>
+                                <dt>上下文来源</dt>
+                                <dd>${escapeHtml(contextSources)}</dd>
+                                <dt>输出长度</dt>
+                                <dd>${escapeHtml(call.output_length ?? 0)}</dd>
+                                ${call.error ? `
+                                    <dt>错误</dt>
+                                    <dd class="runtime-error-text">${escapeHtml(call.error)}</dd>
+                                ` : ""}
+                            </dl>
+                        </article>
+                    `
+                }).join("")}
+            </div>
+        `
+        : ""
+
+    return `
+        <article class="runtime-info-panel">
+            <div class="runtime-info-header">
+                <strong>Runtime 信息</strong>
+                <span class="runtime-engine">${escapeHtml(runtimeInfo.runtime || "")}</span>
+            </div>
+            <dl class="runtime-summary">
+                <dt>执行引擎</dt>
+                <dd>${escapeHtml(runtimeInfo.runtime || "")}</dd>
+                <dt>图路径</dt>
+                <dd class="runtime-graph-path">${escapeHtml(graphPathText)}</dd>
+                <dt>节点数量</dt>
+                <dd>${escapeHtml(runtimeInfo.node_count ?? graphPath.length)}</dd>
+                <dt>Finalizer</dt>
+                <dd>${finalizerText}</dd>
+                ${error ? `
+                    <dt>Error</dt>
+                    <dd class="runtime-error-text">${escapeHtml(error)}</dd>
+                ` : ""}
+            </dl>
+            ${toolCallsHtml}
+        </article>
+    `
+}
+
+
+function renderResponseArtifacts(data) {
+    const sections = []
+    const sources = Array.isArray(data.sources) ? data.sources : []
+    const plan = Array.isArray(data.plan) ? data.plan : []
+    const flashcards = Array.isArray(data.flashcards) ? data.flashcards : []
+    const traceItems = flattenTraceItems(data.trace)
+    const runtimePath = hasRuntimeInfo(data.runtime_info) && Array.isArray(data.runtime_info.graph_path)
+        ? data.runtime_info.graph_path
+        : []
+
+    if (sources.length > 0) {
+        const items = sources.slice(0, 5).map((source, index) => {
+            const sourceName = typeof source === "string" ? source : source.source || "未知来源"
+            const snippet = typeof source === "string" ? "" : source.snippet || source.text || ""
+
+            return `
+                <li>
+                    <strong>${index + 1}. ${escapeHtml(sourceName)}</strong>
+                    ${snippet ? `<span>${escapeHtml(snippet)}</span>` : ""}
+                </li>
+            `
+        }).join("")
+
+        sections.push(`
+            <details class="message-artifact">
+                <summary>本轮来源追踪（${sources.length}）</summary>
+                <ul>${items}</ul>
+            </details>
+        `)
+    }
+
+    if (plan.length > 0) {
+        const items = plan.map((step, index) => `
+            <li>
+                <strong>${index + 1}. ${escapeHtml(step.tool || "unknown")}</strong>
+                <span>${escapeHtml(step.reason || step.input || "")}</span>
+            </li>
+        `).join("")
+
+        sections.push(`
+            <details class="message-artifact">
+                <summary>本轮学习计划（${plan.length}）</summary>
+                <ul>${items}</ul>
+            </details>
+        `)
+    }
+
+    if (flashcards.length > 0) {
+        const items = flashcards.map((card, index) => `
+            <li>
+                <strong>${index + 1}. ${escapeHtml(card.front || "卡片")}</strong>
+                <span>${escapeHtml(card.back || "")}</span>
+            </li>
+        `).join("")
+
+        sections.push(`
+            <details class="message-artifact">
+                <summary>本轮卡片（${flashcards.length}）</summary>
+                <ul>${items}</ul>
+            </details>
+        `)
+    }
+
+    if (traceItems.length > 0 || runtimePath.length > 0) {
+        const pathLine = runtimePath.length > 0
+            ? `<li><strong>Graph Path</strong><span>${escapeHtml(runtimePath.join(" → "))}</span></li>`
+            : ""
+        const items = traceItems.slice(0, 8).map(item => `<li><span>${escapeHtml(item)}</span></li>`).join("")
+
+        sections.push(`
+            <details class="message-artifact">
+                <summary>本轮执行路径</summary>
+                <ul>${pathLine}${items}</ul>
+            </details>
+        `)
+    }
+
+    return sections.length > 0
+        ? `<div class="message-artifacts">${sections.join("")}</div>`
+        : ""
+}
+
+
 function renderFlashcardsPanel(flashcards, options = {}) {
     if (!Array.isArray(flashcards) || flashcards.length === 0) {
         return emptyState("本次没有记忆卡片", "让 Agent 生成记忆卡片后，可以在这里翻面和下载 PNG。")
@@ -710,10 +1158,7 @@ function renderFlashcardsPanel(flashcards, options = {}) {
 
 
 function renderInsights(data) {
-    getElement("sourcesPanel").innerHTML = renderSourcesPanel(data.sources)
-    getElement("planPanel").innerHTML = renderPlanPanel(data.plan)
-    getElement("flashcardsPanel").innerHTML = renderFlashcardsPanel(data.flashcards)
-    getElement("tracePanel").innerHTML = renderTracePanel(data.trace)
+    renderConversationInsights()
 }
 
 
@@ -733,12 +1178,14 @@ function addCardsToLibrary(cards, topic) {
         })
     })
 
+    saveCardLibrary()
     renderCardLibrary()
 }
 
 
 function clearCardLibrary() {
     cardLibrary = []
+    saveCardLibrary()
     renderCardLibrary()
 }
 
@@ -988,6 +1435,7 @@ async function uploadPDF() {
 
 async function sendMessage(modeOverride) {
     updateUseRagState()
+    updateRuntimeModeState()
     const requestBody = buildChatRequest(modeOverride)
 
     if (!requestBody.message) {
@@ -1020,9 +1468,12 @@ async function sendMessage(modeOverride) {
         }
 
         const data = await response.json()
+        const cards = Array.isArray(data.flashcards) ? data.flashcards : []
 
         appendChatResponse(data, requestBody.message)
-        addHistoryMessage("assistant", data.answer || "")
+        addAssistantHistoryMessage(data, requestBody.message)
+        addCardsToLibrary(cards, requestBody.message)
+        renderConversationInsights()
         chatBox.scrollTop = chatBox.scrollHeight
     } catch (error) {
         appendErrorMessage(error.message)
@@ -1083,6 +1534,8 @@ function setupModeCards() {
 
 document.addEventListener("DOMContentLoaded", () => {
     getElement("modeSelect").addEventListener("change", updateUseRagState)
+    getElement("useAgentInput").addEventListener("change", () => updateRuntimeModeState("agent"))
+    getElement("useLangGraphInput").addEventListener("change", () => updateRuntimeModeState("langgraph"))
     getElement("sendButton").addEventListener("click", () => sendMessage())
     getElement("uploadButton").addEventListener("click", uploadPDF)
     getElement("clearChatButton").addEventListener("click", clearConversation)
@@ -1117,6 +1570,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderWelcomeMessage()
     resetInsights()
     updateUseRagState()
+    updateRuntimeModeState()
     renderConversationHistory()
     renderCardLibrary()
 })

@@ -183,7 +183,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
 
 
 def run_chat_request(request: ChatRequest) -> dict:
-    if request.mode == "auto" and request.use_agent and request.use_langgraph:
+    if request.mode == "auto" and request.use_langgraph:
         return run_langgraph_chat_request(request)
 
     use_rag = request.use_rag or request.mode == "rag"
@@ -391,4 +391,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "trace": _group_trace_items(trace),
         "plan": plan,
         "flashcards": flashcards,
+        "runtime_info": {},
     }

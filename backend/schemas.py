@@ -63,3 +63,4 @@ class ChatResponse(BaseModel):
     trace: list[TraceBlock] = Field(default_factory=list)
     plan: list[AgentPlanStep] = Field(default_factory=list)
     flashcards: list[FlashcardItem] = Field(default_factory=list)
+    runtime_info: dict = Field(default_factory=dict)
