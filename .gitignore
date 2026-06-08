@@ -7,6 +7,8 @@ uploads/
 rag_index/
 outputs/
 *.log
+frontend/dist/
+node_modules/
 DESIGN.md
 frontend_server.err.log
 frontend_server.out.log

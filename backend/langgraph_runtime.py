@@ -55,30 +55,138 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+def _has_positive_intent(text: str, keywords: list[str], negative_keywords: list[str]) -> bool:
+    if _contains_any(text, negative_keywords):
+        return False
+
+    return _contains_any(text, keywords)
+
+
 def detect_intent(message: str, use_rag_requested: bool = False) -> dict:
     normalized = message.lower()
-    use_rag = use_rag_requested or _contains_any(
+    rag_keywords = [
+        "根据知识库",
+        "根据文档",
+        "根据资料",
+        "基于资料",
+        "结合知识库",
+        "只用知识库",
+        "只根据知识库",
+        "从文档中",
+        "根据上传内容",
+        "根据刚才资料",
+        "知识库",
+        "文档",
+        "资料",
+        "knowledge base",
+        "rag context",
+    ]
+    rag_negative_keywords = [
+        "不用知识库",
+        "不要用知识库",
+        "不使用知识库",
+        "不根据知识库",
+        "不要根据知识库",
+    ]
+    explain_keywords = [
+        "什么是",
+        "解释",
+        "讲解",
+        "用简单话说",
+        "通俗解释",
+        "帮我理解",
+        "这个概念",
+        "为什么",
+        "区别是什么",
+        "帮我复习",
+        "what is",
+        "explain",
+    ]
+    summarize_keywords = [
+        "总结",
+        "概括",
+        "提炼",
+        "归纳",
+        "核心思想",
+        "主要内容",
+        "简短总结",
+        "summarize",
+        "summary",
+    ]
+    summarize_negative_keywords = [
+        "不需要总结",
+        "不要总结",
+        "不用总结",
+        "不总结",
+    ]
+    quiz_keywords = [
+        "出题",
+        "练习题",
+        "测验",
+        "quiz",
+        "自测题",
+        "检查我",
+        "题目",
+        "选择题",
+        "问答题",
+        "3 道题",
+        "3道题",
+        "三道题",
+        "quiz me",
+        "question",
+    ]
+    quiz_negative_keywords = [
+        "不要出题",
+        "不用出题",
+        "不出题",
+        "不生成练习题",
+        "不要生成练习题",
+        "不用生成练习题",
+    ]
+    flashcard_keywords = [
+        "记忆卡片",
+        "flashcard",
+        "卡片",
+        "复习卡",
+        "背诵卡",
+        "做成卡片",
+        "生成卡片",
+        "帮我复习",
+    ]
+    flashcard_negative_keywords = [
+        "不要卡片",
+        "不用卡片",
+        "不生成卡片",
+        "不要生成卡片",
+        "不用生成卡片",
+    ]
+
+    explicit_no_rag = _contains_any(normalized, rag_negative_keywords)
+    use_rag = (use_rag_requested or _contains_any(normalized, rag_keywords)) and not explicit_no_rag
+    need_summarize = _has_positive_intent(
         normalized,
-        [
-            "知识库",
-            "根据文档",
-            "根据资料",
-            "根据知识库",
-            "文档",
-            "资料",
-            "knowledge base",
-            "rag context",
-        ],
+        summarize_keywords,
+        summarize_negative_keywords,
     )
-    need_summarize = _contains_any(normalized, ["总结", "概括", "summarize", "summary"])
-    need_quiz = _contains_any(normalized, ["出题", "练习题", "测验", "quiz", "question", "题"])
-    need_flashcard = _contains_any(normalized, ["记忆卡片", "flashcard", "卡片"])
-    need_explain = not need_summarize
+    need_quiz = _has_positive_intent(normalized, quiz_keywords, quiz_negative_keywords)
+    need_flashcard = _has_positive_intent(
+        normalized,
+        flashcard_keywords,
+        flashcard_negative_keywords,
+    )
+    need_explain = _contains_any(normalized, explain_keywords)
+    if use_rag and not need_summarize and not need_explain:
+        need_explain = True
+    if not any([need_explain, need_summarize, need_quiz, need_flashcard]):
+        need_explain = True
 
     intent_parts = []
     if use_rag:
         intent_parts.append("rag")
-    intent_parts.append("summarize" if need_summarize else "explain")
+    if need_summarize:
+        intent_parts.append("summarize")
+    if need_explain:
+        intent_parts.append("explain")
     if need_flashcard:
         intent_parts.append("flashcard")
     if need_quiz:
@@ -97,33 +205,33 @@ def detect_intent(message: str, use_rag_requested: bool = False) -> dict:
 def _plan_from_intent(message: str, intent: dict) -> list[dict]:
     steps: list[dict] = []
 
-    if intent.get("use_rag"):
+    def add_step(tool: str, reason: str) -> None:
+        if any(step["tool"] == tool for step in steps):
+            return
+
         steps.append({
-            "tool": "rag",
+            "tool": tool,
             "input": message,
-            "reason": "User requested knowledge-base grounded context.",
+            "reason": reason,
         })
 
-    main_tool = "summarize" if intent.get("need_summarize") else "explain"
-    steps.append({
-        "tool": main_tool,
-        "input": message,
-        "reason": "Main learning content requested by the user.",
-    })
+    if intent.get("use_rag"):
+        add_step("rag", "User requested knowledge-base grounded context.")
+
+    if intent.get("need_summarize"):
+        add_step("summarize", "User requested a concise summary.")
+
+    if intent.get("need_explain"):
+        add_step("explain", "User requested an explanation.")
 
     if intent.get("need_flashcard"):
-        steps.append({
-            "tool": "flashcard",
-            "input": message,
-            "reason": "User requested memory cards.",
-        })
+        add_step("flashcard", "User requested memory cards.")
 
     if intent.get("need_quiz"):
-        steps.append({
-            "tool": "quiz",
-            "input": message,
-            "reason": "User requested practice questions.",
-        })
+        add_step("quiz", "User requested practice questions.")
+
+    if not steps:
+        add_step("explain", "Default learning response.")
 
     return steps
 
@@ -336,6 +444,15 @@ def route_after_planner(state: LangGraphAgentState) -> str:
     if state.get("need_summarize"):
         return "summarize"
 
+    if state.get("need_explain"):
+        return "explain"
+
+    if state.get("need_flashcard"):
+        return "flashcard"
+
+    if state.get("need_quiz"):
+        return "quiz"
+
     return "explain"
 
 
@@ -352,6 +469,15 @@ def rag_node(state: LangGraphAgentState) -> LangGraphAgentState:
 def route_after_rag(state: LangGraphAgentState) -> str:
     if state.get("need_summarize"):
         return "summarize"
+
+    if state.get("need_explain"):
+        return "explain"
+
+    if state.get("need_flashcard"):
+        return "flashcard"
+
+    if state.get("need_quiz"):
+        return "quiz"
 
     return "explain"
 
@@ -516,6 +642,8 @@ def build_langgraph_workflow():
             "rag": "rag",
             "explain": "explain",
             "summarize": "summarize",
+            "flashcard": "flashcard",
+            "quiz": "quiz",
         },
     )
     graph_builder.add_conditional_edges(
@@ -524,6 +652,8 @@ def build_langgraph_workflow():
         {
             "explain": "explain",
             "summarize": "summarize",
+            "flashcard": "flashcard",
+            "quiz": "quiz",
         },
     )
     graph_builder.add_conditional_edges(

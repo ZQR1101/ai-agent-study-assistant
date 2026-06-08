@@ -121,6 +121,117 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertTrue(detect_intent("出 3 道题")["need_quiz"])
         self.assertTrue(detect_intent("plain request", use_rag_requested=True)["use_rag"])
 
+    def test_detect_intent_handles_chinese_learning_tasks_and_negations(self):
+        from backend.langgraph_runtime import detect_intent
+
+        cases = [
+            (
+                "什么是 RAG",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "请解释 RAG，不要出题",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
+                {
+                    "use_rag": True,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": True,
+                    "need_quiz": True,
+                },
+            ),
+            (
+                "请总结 prompt engineering 的核心思想",
+                {
+                    "use_rag": False,
+                    "need_explain": False,
+                    "need_summarize": True,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "帮我复习 RAG",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": True,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "只根据知识库回答，不要出题",
+                {
+                    "use_rag": True,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "不要生成卡片，只解释 agentic rag",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "根据刚才内容出 3 道题",
+                {
+                    "use_rag": False,
+                    "need_explain": False,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": True,
+                },
+            ),
+        ]
+
+        for message, expected in cases:
+            with self.subTest(message=message):
+                intent = detect_intent(message)
+                for key, value in expected.items():
+                    self.assertEqual(intent[key], value)
+
+    def test_planner_builds_plan_from_enhanced_intent_rules(self):
+        from backend.langgraph_runtime import planner_node
+
+        cases = [
+            ("什么是 RAG", ["explain"]),
+            ("请解释 RAG，不要出题", ["explain"]),
+            ("根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题", ["rag", "explain", "flashcard", "quiz"]),
+            ("请总结 prompt engineering 的核心思想", ["summarize"]),
+            ("帮我复习 RAG", ["explain", "flashcard"]),
+            ("只根据知识库回答，不要出题", ["rag", "explain"]),
+            ("不要生成卡片，只解释 agentic rag", ["explain"]),
+            ("根据刚才内容出 3 道题", ["quiz"]),
+        ]
+
+        for message, expected_plan in cases:
+            with self.subTest(message=message):
+                state = planner_node({"message": message})
+                self.assertEqual([step["tool"] for step in state["plan"]], expected_plan)
+
     def test_missing_langgraph_error_is_clear(self):
         import backend.langgraph_demo as demo
 
@@ -251,6 +362,26 @@ class LangGraphDemoTests(unittest.TestCase):
             registry["quiz"].calls[0]["shared_context"]["last_output"],
             "## Flashcard Markdown Very Long\nfront/back repeated content",
         )
+
+    def test_enhanced_intent_graph_paths_use_expected_routes(self):
+        cases = [
+            ("什么是 RAG", ["planner", "explain", "finalizer"]),
+            ("请解释 RAG，不要出题", ["planner", "explain", "finalizer"]),
+            (
+                "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
+                ["planner", "rag", "explain", "flashcard", "quiz", "finalizer"],
+            ),
+            ("请总结 prompt engineering 的核心思想", ["planner", "summarize", "finalizer"]),
+            ("帮我复习 RAG", ["planner", "explain", "flashcard", "finalizer"]),
+            ("只根据知识库回答，不要出题", ["planner", "rag", "explain", "finalizer"]),
+            ("不要生成卡片，只解释 agentic rag", ["planner", "explain", "finalizer"]),
+            ("根据刚才内容出 3 道题", ["planner", "quiz", "finalizer"]),
+        ]
+
+        for message, expected_path in cases:
+            with self.subTest(message=message):
+                result, _ = self._run_with_fake_registry(message)
+                self.assertEqual(result["runtime_info"]["graph_path"], expected_path)
 
     def test_runtime_info_records_tool_calls(self):
         result, _ = self._run_with_fake_registry("knowledge base explain agentic rag, generate flashcard, and quiz me")
