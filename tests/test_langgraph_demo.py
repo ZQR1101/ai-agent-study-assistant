@@ -4,6 +4,21 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 
+class FakeLLMResponse:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class FakeLLM:
+    def __init__(self, content: str):
+        self.content = content
+        self.prompts = []
+
+    def invoke(self, prompt: str):
+        self.prompts.append(prompt)
+        return FakeLLMResponse(self.content)
+
+
 @dataclass
 class FakeTool:
     name: str
@@ -232,6 +247,52 @@ class LangGraphDemoTests(unittest.TestCase):
                 state = planner_node({"message": message})
                 self.assertEqual([step["tool"] for step in state["plan"]], expected_plan)
 
+    def test_llm_planner_success_sets_intent_and_plan(self):
+        from backend.langgraph_runtime import planner_node
+
+        fake_llm = FakeLLM("""
+{
+  "goal": "解释并出题",
+  "steps": [
+    {"tool": "explain", "input": "RAG", "reason": "解释概念"},
+    {"tool": "quiz", "input": "RAG", "reason": "生成题目"}
+  ],
+  "fallback": false
+}
+""")
+
+        state = planner_node({
+            "message": "请解释 RAG 并出题",
+            "planner_mode": "llm",
+            "custom_llm": fake_llm,
+        })
+
+        self.assertEqual(state["planner_mode"], "llm")
+        self.assertFalse(state["planner_fallback"])
+        self.assertEqual(state["planner_error"], "")
+        self.assertEqual([step["tool"] for step in state["plan"]], ["explain", "quiz"])
+        self.assertTrue(state["need_explain"])
+        self.assertTrue(state["need_quiz"])
+        self.assertTrue(any("planner: mode=llm" in item for item in state["trace"]))
+        self.assertEqual(len(fake_llm.prompts), 1)
+
+    def test_llm_planner_invalid_json_falls_back_to_rule_planner(self):
+        from backend.langgraph_runtime import planner_node
+
+        state = planner_node({
+            "message": "请解释 RAG，不要出题",
+            "planner_mode": "llm",
+            "custom_llm": FakeLLM("not json"),
+        })
+
+        self.assertEqual(state["planner_mode"], "llm")
+        self.assertTrue(state["planner_fallback"])
+        self.assertIn("JSON parse failed", state["planner_error"])
+        self.assertEqual([step["tool"] for step in state["plan"]], ["explain"])
+        self.assertTrue(state["need_explain"])
+        self.assertFalse(state["need_quiz"])
+        self.assertTrue(any("planner: fallback reason=JSON parse failed" in item for item in state["trace"]))
+
     def test_missing_langgraph_error_is_clear(self):
         import backend.langgraph_demo as demo
 
@@ -268,6 +329,21 @@ class LangGraphDemoTests(unittest.TestCase):
 
         with patch.object(demo, "TOOL_REGISTRY", fake_registry):
             result = demo.run_langgraph_demo(message)
+
+        return result, fake_registry
+
+    def _run_runtime_with_fake_registry(self, message, **kwargs):
+        import backend.langgraph_runtime as runtime
+
+        try:
+            runtime.build_langgraph_workflow()
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+
+        fake_registry = make_fake_registry()
+
+        with patch.object(runtime, "TOOL_REGISTRY", fake_registry):
+            result = runtime.run_langgraph_workflow(message, **kwargs)
 
         return result, fake_registry
 
@@ -311,6 +387,9 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertIsInstance(runtime_info["graph_path"], list)
         self.assertEqual(runtime_info["node_count"], len(runtime_info["graph_path"]))
         self.assertTrue(runtime_info["finalizer_used"])
+        self.assertEqual(runtime_info["planner_mode"], "rule")
+        self.assertFalse(runtime_info["planner_fallback"])
+        self.assertIsNone(runtime_info["planner_error"])
         self.assertIsNone(runtime_info["error"])
 
     def test_explain_and_quiz_routes_to_quiz(self):
@@ -394,6 +473,46 @@ class LangGraphDemoTests(unittest.TestCase):
             self.assertIn("used_context", call)
             self.assertIn("output_length", call)
             self.assertIsInstance(call["output_length"], int)
+
+    def test_llm_planner_runtime_info_records_success(self):
+        result, registry = self._run_runtime_with_fake_registry(
+            "请解释 RAG 并出题",
+            planner_mode="llm",
+            custom_llm=FakeLLM("""
+{
+  "goal": "解释并出题",
+  "steps": [
+    {"tool": "explain", "input": "RAG", "reason": "解释概念"},
+    {"tool": "quiz", "input": "RAG", "reason": "生成题目"}
+  ],
+  "fallback": false
+}
+"""),
+        )
+
+        runtime_info = result["runtime_info"]
+        self.assertEqual(runtime_info["planner_mode"], "llm")
+        self.assertFalse(runtime_info["planner_fallback"])
+        self.assertIsNone(runtime_info["planner_error"])
+        self.assertEqual(runtime_info["graph_path"], ["planner", "explain", "quiz", "finalizer"])
+        self.assertEqual([step["tool"] for step in result["plan"]], ["explain", "quiz"])
+        self.assertEqual(len(registry["explain"].calls), 1)
+        self.assertEqual(len(registry["quiz"].calls), 1)
+
+    def test_llm_planner_runtime_info_records_fallback(self):
+        result, registry = self._run_runtime_with_fake_registry(
+            "请解释 RAG，不要出题",
+            planner_mode="llm",
+            custom_llm=FakeLLM("not json"),
+        )
+
+        runtime_info = result["runtime_info"]
+        self.assertEqual(runtime_info["planner_mode"], "llm")
+        self.assertTrue(runtime_info["planner_fallback"])
+        self.assertIn("JSON parse failed", runtime_info["planner_error"])
+        self.assertEqual(runtime_info["graph_path"], ["planner", "explain", "finalizer"])
+        self.assertEqual([step["tool"] for step in result["plan"]], ["explain"])
+        self.assertEqual(len(registry["explain"].calls), 1)
 
     def test_registry_tool_error_is_friendly(self):
         import backend.langgraph_demo as demo

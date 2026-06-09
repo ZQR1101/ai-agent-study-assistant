@@ -948,8 +948,8 @@ function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChang
         <label>
           Planner 模式
           <select value={settings.plannerMode} onChange={(event) => onSettingsChange({ plannerMode: event.target.value })}>
-            <option value="rule">rule</option>
-            <option value="llm">llm</option>
+            <option value="rule">rule（规则）</option>
+            <option value="llm">llm（模型规划）</option>
           </select>
         </label>
         <label>
@@ -1176,12 +1176,12 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
   const toolCalls = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
 
   return (
-    <section className="runtime-info-panel compact-runtime">
+    <section className="runtime-panel runtime-info-panel compact-runtime">
       <div className="runtime-info-header">
         <strong>Runtime Info</strong>
         <span className="runtime-engine">{formatRuntimeValue(runtimeInfo.runtime, "runtime")}</span>
       </div>
-      <dl className="execution-summary">
+      <dl className="runtime-grid execution-summary">
         <dt>runtime</dt>
         <dd>{formatRuntimeValue(runtimeInfo.runtime)}</dd>
         <dt>planner_mode</dt>
@@ -1193,9 +1193,17 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
           {formatRuntimeValue(runtimeInfo.planner_error)}
         </dd>
         <dt>graph_path</dt>
-        <dd>{path.length > 0 ? path.join(" → ") : "无"}</dd>
+        <dd className="runtime-path">{path.length > 0 ? path.join(" → ") : "无"}</dd>
         <dt>node_count</dt>
         <dd>{formatRuntimeValue(runtimeInfo.node_count ?? path.length)}</dd>
+        <dt>finalizer</dt>
+        <dd>{runtimeInfo.finalizer_used ? "启用" : "未启用"}</dd>
+        {runtimeInfo.error ? (
+          <>
+            <dt>error</dt>
+            <dd className="runtime-error-text">{String(runtimeInfo.error)}</dd>
+          </>
+        ) : null}
       </dl>
       <div className="runtime-tool-calls">
         <strong>tool_calls</strong>
@@ -1206,17 +1214,25 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
             <article className="runtime-tool-call" key={`${call.tool || "tool"}-${index}`}>
               <div className="runtime-tool-header">
                 <strong>{index + 1}. {call.tool || call.name || "unknown"}</strong>
-                <span className={`runtime-status ${call.success === false ? "failed" : "success"}`}>
+                <span className={`runtime-badge runtime-status ${call.success === false ? "failed" : "success"}`}>
                   {call.success === false ? "失败" : "成功"}
                 </span>
               </div>
-              <dl className="runtime-detail-grid">
+              <dl className="runtime-grid runtime-detail-grid">
                 <dt>node</dt>
                 <dd>{formatRuntimeValue(call.node)}</dd>
                 <dt>description</dt>
                 <dd>{formatRuntimeValue(call.description)}</dd>
+                <dt>success</dt>
+                <dd>{formatRuntimeValue(call.success)}</dd>
                 <dt>used_context</dt>
                 <dd>{formatRuntimeValue(call.used_context)}</dd>
+                <dt>context_sources</dt>
+                <dd>
+                  {Array.isArray(call.context_sources) && call.context_sources.length > 0
+                    ? call.context_sources.join("、")
+                    : "无"}
+                </dd>
                 <dt>output_length</dt>
                 <dd>{formatRuntimeValue(call.output_length, "0")}</dd>
                 {call.error ? (

@@ -874,6 +874,7 @@ summary {
     font-weight: 800;
 }
 
+.runtime-panel,
 .runtime-info-panel {
     display: flex;
     flex-direction: column;
@@ -897,6 +898,7 @@ summary {
 }
 
 .runtime-engine,
+.runtime-badge,
 .runtime-status {
     border-radius: 999px;
     font-size: 11px;
@@ -919,6 +921,7 @@ summary {
     color: #b91c1c;
 }
 
+.runtime-grid,
 .runtime-summary,
 .runtime-detail-grid {
     display: grid;
@@ -927,18 +930,21 @@ summary {
     margin: 0;
 }
 
+.runtime-grid dt,
 .runtime-summary dt,
 .runtime-detail-grid dt {
     color: var(--muted-soft);
     font-weight: 800;
 }
 
+.runtime-grid dd,
 .runtime-summary dd,
 .runtime-detail-grid dd {
     margin: 0;
     overflow-wrap: anywhere;
 }
 
+.runtime-path,
 .runtime-graph-path {
     color: var(--primary);
     font-weight: 800;
