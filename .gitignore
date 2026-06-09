@@ -8,6 +8,8 @@ rag_index/
 outputs/
 *.log
 frontend/dist/
+dist/
+.vite/
 node_modules/
 DESIGN.md
 frontend_server.err.log
