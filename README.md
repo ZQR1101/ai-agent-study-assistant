@@ -118,19 +118,37 @@ RAG Store / FAISS / Docs
 
 ## 6. Demo Screenshots
 
-当前 README 已包含两张实际存在的展示图：
+当前 README 已包含并引用以下真实截图：
 
-- `images/cover.png`
-- `images/architecture.png`
+### Dashboard Main View
 
-后续建议补充以下产品截图。当前这些截图文件尚未加入仓库，因此 README 暂不硬引用对应路径：
+![Dashboard Main View](images/dashboard.png)
 
-- [ ] Dashboard main view：展示左侧导航、当前学习会话、运行设置和输入框。
-- [ ] LangGraph runtime info：展示 LangGraph Workflow、Planner Mode、runtime_info、graph_path 和 tool_calls。
-- [ ] Agent plan and trace：展示 Agent Plan、Trace / 执行路径和 sources。
-- [ ] Flashcards：展示结构化卡片、翻面效果和 PNG 下载按钮。
-- [ ] Knowledge files：展示 Knowledge Files 面板、docs 文件列表和文件预览。
-- [ ] Runtime settings：展示 RAG 开关、LangGraph 开关、Planner Mode、model、temperature 和 top_k。
+展示 React / Vite 学习工作台，包括对话区、运行设置、知识库入口、历史对话和学习空间。
+
+### LangGraph Runtime Overview
+
+![LangGraph Runtime Overview](images/langgraph-runtime-overview.png)
+
+展示 LangGraph Runtime 的 `planner_mode`、`planner_fallback`、`graph_path`、`node_count` 和 finalizer 状态。
+
+### LangGraph Tool Calls
+
+![LangGraph Tool Calls](images/langgraph-tool-calls.png)
+
+展示 LangGraph Runtime 中各个节点对 Tool Registry 的调用情况，包括 `rag`、`explain`、`flashcard`、`quiz` 等工具调用。
+
+### Flashcards
+
+![Flashcards](images/flashcards.png)
+
+展示结构化记忆卡片、翻面复习和 PNG 下载能力。
+
+后续仍建议补充：
+
+- [ ] Agent Plan / Trace
+- [ ] Knowledge Files
+- [ ] Runtime Settings
 
 截图建议见：
 

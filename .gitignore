@@ -9,6 +9,7 @@ outputs/
 node_modules/
 frontend/dist/
 dist/
+.vite/
 *.log
 DESIGN.md
 frontend_server.err.log
