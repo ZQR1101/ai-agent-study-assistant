@@ -116,7 +116,44 @@ Tool Registry
 RAG Store / FAISS / Docs
 ```
 
-## 6. 运行时架构
+## 6. Demo Screenshots
+
+当前 README 已包含两张实际存在的展示图：
+
+- `images/cover.png`
+- `images/architecture.png`
+
+后续建议补充以下产品截图。当前这些截图文件尚未加入仓库，因此 README 暂不硬引用对应路径：
+
+- [ ] Dashboard main view：展示左侧导航、当前学习会话、运行设置和输入框。
+- [ ] LangGraph runtime info：展示 LangGraph Workflow、Planner Mode、runtime_info、graph_path 和 tool_calls。
+- [ ] Agent plan and trace：展示 Agent Plan、Trace / 执行路径和 sources。
+- [ ] Flashcards：展示结构化卡片、翻面效果和 PNG 下载按钮。
+- [ ] Knowledge files：展示 Knowledge Files 面板、docs 文件列表和文件预览。
+- [ ] Runtime settings：展示 RAG 开关、LangGraph 开关、Planner Mode、model、temperature 和 top_k。
+
+截图建议见：
+
+```text
+docs/SCREENSHOT_GUIDE.md
+```
+
+推荐截图前先启动后端和前端：
+
+```bash
+uvicorn backend.server:app --reload
+npm run dev
+```
+
+然后在前端测试：
+
+```text
+根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题
+```
+
+建议截图时开启 RAG，勾选 LangGraph Workflow，并选择 `planner_mode=rule` 或 `planner_mode=llm`。
+
+## 7. 运行时架构
 
 ### Legacy Agent Runtime
 
@@ -169,7 +206,7 @@ END
 - finalizer 负责整理最终 answer，减少重复堆叠。
 - 返回结构化 `runtime_info`，包括 `graph_path`、`tool_calls`、`planner_mode`、`planner_fallback` 等。
 
-## 7. 项目结构
+## 8. 项目结构
 
 ```text
 ai-agent-study-assistant/
@@ -206,7 +243,7 @@ ai-agent-study-assistant/
 └── README.md
 ```
 
-## 8. 快速开始
+## 9. 快速开始
 
 ### 1. 安装后端依赖
 
@@ -261,7 +298,7 @@ FastAPI Docs: http://127.0.0.1:8000/docs
 Frontend: http://127.0.0.1:5500
 ```
 
-## 9. 环境变量配置
+## 10. 环境变量配置
 
 `.env.example` 中包含可用配置项：
 
@@ -289,7 +326,7 @@ MY_MIMO_API_KEY > MIMO_API_KEY > OPENAI_API_KEY
 - `MIMO_BASE_URL` 可选，默认使用项目配置中的 OpenAI-compatible endpoint。
 - CI 不配置真实 API key，也不会运行真实 LLM 调用。
 
-## 10. 后端启动
+## 11. 后端启动
 
 ```bash
 uvicorn backend.server:app --reload
@@ -308,7 +345,7 @@ uvicorn backend.server:app --reload
 - `GET /debug-index-sources`
 - `POST /debug-rag`
 
-## 11. 前端启动
+## 12. 前端启动
 
 前端基于 React / Vite，源码位于：
 
@@ -336,7 +373,7 @@ npm run build
 
 构建产物不提交到 Git。
 
-## 12. API 示例
+## 13. API 示例
 
 ### `/chat` 请求
 
@@ -366,7 +403,7 @@ npm run build
 - `flashcards`：结构化卡片数据。
 - `runtime_info`：LangGraph Runtime 的结构化运行元数据。
 
-## 13. 前端 Dashboard 说明
+## 14. 前端 Dashboard 说明
 
 新版前端是 React / Vite Dashboard，核心源码：
 
@@ -393,7 +430,7 @@ frontend/src/App.jsx
 - PNG 正反面下载。
 - 卡片库 / 学习空间相关区域。
 
-## 14. RAG 工作流程
+## 15. RAG 工作流程
 
 RAG 流程：
 
@@ -424,7 +461,7 @@ RAG 返回的 source 通常包含：
 
 当前 RAG 重点不是追求复杂检索算法，而是保证学习场景中的来源可追踪、低置信度可 fallback、回答不被无关文档污染。
 
-## 15. Agent / Tool Registry 工作流程
+## 16. Agent / Tool Registry 工作流程
 
 Legacy Agent 工作流程：
 
@@ -467,7 +504,7 @@ rag -> explain -> quiz
 
 先检索知识库，再基于 RAG context 解释，最后基于前序输出生成题目。
 
-## 16. LangGraph Runtime 工作流程
+## 17. LangGraph Runtime 工作流程
 
 LangGraph Runtime 位于 `backend/langgraph_runtime.py`。
 
@@ -504,7 +541,7 @@ END
 - finalizer 组合最终 answer，并避免 flashcard markdown 大段重复堆叠。
 - 返回 `runtime_info`，方便前端和评估脚本分析。
 
-## 17. planner_mode 说明
+## 18. planner_mode 说明
 
 `planner_mode=rule` 是默认模式，稳定可控。
 
@@ -525,7 +562,7 @@ rule planner 仍是 LangGraph Runtime 默认 planner。
 llm planner 作为可选增强路径继续评估。
 ```
 
-## 18. runtime_info 说明
+## 19. runtime_info 说明
 
 LangGraph Runtime 返回结构化 `runtime_info`：
 
@@ -562,7 +599,7 @@ LangGraph Runtime 返回结构化 `runtime_info`：
 - 帮助前端展示 Runtime Info。
 - 支持评估脚本统计。
 
-## 19. Flashcard 功能说明
+## 20. Flashcard 功能说明
 
 Flashcard 工具返回结构化卡片：
 
@@ -582,7 +619,7 @@ Flashcard 工具返回结构化卡片：
 
 Flashcard 内容会作为结构化数据返回，LangGraph finalizer 会尽量避免把完整卡片 markdown 重复堆进 answer。
 
-## 20. Knowledge Files 功能说明
+## 21. Knowledge Files 功能说明
 
 后端提供 knowledge-files API：
 
@@ -603,7 +640,7 @@ Flashcard 内容会作为结构化数据返回，LangGraph finalizer 会尽量�
 - `uploads/`
 - 本地 FAISS index
 
-## 21. Testing / CI
+## 22. Testing / CI
 
 ### 离线单元测试
 
@@ -666,7 +703,7 @@ CI 不运行：
 
 CI 不需要真实 API key。
 
-## 22. Evaluation Tools
+## 23. Evaluation Tools
 
 ### compare_runtimes.py
 
@@ -711,7 +748,7 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - `docs/PLANNER_EVALUATION.md`
 - `docs/LLM_PLANNER_EVAL_CASES.md`
 
-## 23. 当前限制
+## 24. 当前限制
 
 - LLM Planner 仍是可选模式，不是默认。
 - LangGraph Runtime 目前仍是可选执行路径，不替代默认 Legacy Agent。
@@ -724,7 +761,7 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - RAG 当前没有 reranker，也没有 hybrid search。
 - 前端还没有正式截图和 GIF 展示。
 
-## 24. Roadmap
+## 25. Roadmap
 
 - 增加更多 LLM Planner evaluation case。
 - 优化 LLM Planner prompt。
