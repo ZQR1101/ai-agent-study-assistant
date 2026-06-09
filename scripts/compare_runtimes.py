@@ -63,6 +63,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Save raw responses and summary to outputs/runtime_compare_<timestamp>.json",
     )
+    parser.add_argument(
+        "--include-llm-planner",
+        action="store_true",
+        help="Also compare LangGraph with planner_mode=llm. This may consume one extra LLM request.",
+    )
     return parser.parse_args()
 
 
@@ -107,7 +112,14 @@ def check_backend(base_url: str, timeout: int) -> bool:
     return False
 
 
-def build_payload(message: str, use_rag: bool, top_k: int, use_langgraph: bool) -> dict:
+def build_payload(
+    message: str,
+    use_rag: bool,
+    top_k: int,
+    *,
+    use_langgraph: bool,
+    planner_mode: str = "rule",
+) -> dict:
     return {
         "message": message,
         "mode": "auto",
@@ -116,6 +128,7 @@ def build_payload(message: str, use_rag: bool, top_k: int, use_langgraph: bool) 
         "use_agent": True,
         "use_rag": use_rag,
         "use_langgraph": use_langgraph,
+        "planner_mode": planner_mode,
         "top_k": top_k,
     }
 
@@ -216,6 +229,9 @@ def summarize_response(label: str, response: dict) -> dict:
     return {
         "label": label,
         "mode": response.get("mode"),
+        "planner_mode": runtime.get("planner_mode"),
+        "planner_fallback": runtime.get("planner_fallback"),
+        "planner_error": runtime.get("planner_error"),
         "answer_length": answer_length(response),
         "sources_count": len(source_keys(response)),
         "plan": plan_path(response),
@@ -237,6 +253,10 @@ def summarize_response(label: str, response: dict) -> dict:
 def print_runtime_summary(title: str, summary: dict, is_langgraph: bool = False) -> None:
     print(f"[{title}]")
     print(f"mode: {summary['mode']}")
+    if is_langgraph:
+        print(f"planner_mode: {summary.get('planner_mode') or '(unknown)'}")
+        print(f"planner_fallback: {summary.get('planner_fallback')}")
+        print(f"planner_error: {summary.get('planner_error') or '(none)'}")
     print(f"answer length: {summary['answer_length']}")
     print(f"sources count: {summary['sources_count']}")
     print(f"plan: {summary['plan']}")
@@ -254,17 +274,56 @@ def print_runtime_summary(title: str, summary: dict, is_langgraph: bool = False)
     print("")
 
 
-def print_comparison(legacy: dict, langgraph: dict) -> None:
+def source_overlap(left: dict, right: dict) -> int:
+    return len(source_keys(left) & source_keys(right))
+
+
+def yes_no(value: object) -> str:
+    return "yes" if value else "no"
+
+
+def print_comparison(legacy: dict, langgraph_rule: dict, langgraph_llm: dict | None = None) -> None:
     legacy_sources = source_keys(legacy)
-    langgraph_sources = source_keys(langgraph)
-    overlap = legacy_sources & langgraph_sources
+    rule_sources = source_keys(langgraph_rule)
 
     print("[Comparison]")
-    print(f"sources overlap: {len(overlap)}")
-    print(f"legacy has repeated flashcard markdown: {'yes' if has_repeated_flashcard_markdown(legacy) else 'no'}")
-    print(f"langgraph finalizer used: {'yes' if runtime_info(langgraph).get('finalizer_used') else 'no'}")
-    both_flashcards = flashcards_count(legacy) > 0 and flashcards_count(langgraph) > 0
-    print(f"both returned flashcards: {'yes' if both_flashcards else 'no'}")
+    print(f"sources overlap legacy/rule: {len(legacy_sources & rule_sources)}")
+    if langgraph_llm is not None:
+        llm_sources = source_keys(langgraph_llm)
+        print(f"sources overlap legacy/llm: {len(legacy_sources & llm_sources)}")
+        print(f"sources overlap rule/llm: {len(rule_sources & llm_sources)}")
+    print(f"legacy has repeated flashcard markdown: {yes_no(has_repeated_flashcard_markdown(legacy))}")
+    print(f"rule finalizer used: {yes_no(runtime_info(langgraph_rule).get('finalizer_used'))}")
+    if langgraph_llm is not None:
+        llm_runtime = runtime_info(langgraph_llm)
+        print(f"llm finalizer used: {yes_no(llm_runtime.get('finalizer_used'))}")
+        print(f"llm planner fallback: {yes_no(llm_runtime.get('planner_fallback'))}")
+    both_rule_flashcards = flashcards_count(legacy) > 0 and flashcards_count(langgraph_rule) > 0
+    print(f"legacy/rule both returned flashcards: {yes_no(both_rule_flashcards)}")
+    if langgraph_llm is not None:
+        both_llm_flashcards = flashcards_count(legacy) > 0 and flashcards_count(langgraph_llm) > 0
+        print(f"legacy/llm both returned flashcards: {yes_no(both_llm_flashcards)}")
+
+
+def build_comparison(legacy: dict, langgraph_rule: dict, langgraph_llm: dict | None = None) -> dict:
+    comparison = {
+        "sources_overlap_legacy_rule": source_overlap(legacy, langgraph_rule),
+        "legacy_repeated_flashcard_markdown": has_repeated_flashcard_markdown(legacy),
+        "rule_finalizer_used": bool(runtime_info(langgraph_rule).get("finalizer_used")),
+        "legacy_rule_both_returned_flashcards": flashcards_count(legacy) > 0 and flashcards_count(langgraph_rule) > 0,
+    }
+
+    if langgraph_llm is not None:
+        comparison.update({
+            "sources_overlap_legacy_llm": source_overlap(legacy, langgraph_llm),
+            "sources_overlap_rule_llm": source_overlap(langgraph_rule, langgraph_llm),
+            "llm_finalizer_used": bool(runtime_info(langgraph_llm).get("finalizer_used")),
+            "llm_planner_fallback": bool(runtime_info(langgraph_llm).get("planner_fallback")),
+            "legacy_llm_both_returned_flashcards": flashcards_count(legacy) > 0
+            and flashcards_count(langgraph_llm) > 0,
+        })
+
+    return comparison
 
 
 def save_result(payload: dict) -> Path:
@@ -282,8 +341,29 @@ def main() -> int:
     if not check_backend(base_url, args.timeout):
         return 1
 
-    legacy_payload = build_payload(args.message, args.use_rag, args.top_k, use_langgraph=False)
-    langgraph_payload = build_payload(args.message, args.use_rag, args.top_k, use_langgraph=True)
+    legacy_payload = build_payload(
+        args.message,
+        args.use_rag,
+        args.top_k,
+        use_langgraph=False,
+        planner_mode="rule",
+    )
+    langgraph_rule_payload = build_payload(
+        args.message,
+        args.use_rag,
+        args.top_k,
+        use_langgraph=True,
+        planner_mode="rule",
+    )
+    langgraph_llm_payload = None
+    if args.include_llm_planner:
+        langgraph_llm_payload = build_payload(
+            args.message,
+            args.use_rag,
+            args.top_k,
+            use_langgraph=True,
+            planner_mode="llm",
+        )
 
     print("=== Runtime Compare ===")
     print(f"Message: {args.message}")
@@ -291,29 +371,65 @@ def main() -> int:
 
     try:
         legacy_response = post_chat(base_url, legacy_payload, args.timeout)
-        langgraph_response = post_chat(base_url, langgraph_payload, args.timeout)
+        langgraph_rule_response = post_chat(base_url, langgraph_rule_payload, args.timeout)
+        langgraph_llm_response = (
+            post_chat(base_url, langgraph_llm_payload, args.timeout)
+            if langgraph_llm_payload is not None
+            else None
+        )
     except RuntimeError as exc:
         print(f"[ERROR] {exc}")
         return 1
 
     legacy_summary = summarize_response("Legacy Agent", legacy_response)
-    langgraph_summary = summarize_response("LangGraph Runtime", langgraph_response)
+    langgraph_rule_summary = summarize_response("LangGraph Rule Planner", langgraph_rule_response)
+    langgraph_llm_summary = (
+        summarize_response("LangGraph LLM Planner", langgraph_llm_response)
+        if langgraph_llm_response is not None
+        else None
+    )
+    comparison = build_comparison(legacy_response, langgraph_rule_response, langgraph_llm_response)
 
     print_runtime_summary("Legacy Agent", legacy_summary)
-    print_runtime_summary("LangGraph Runtime", langgraph_summary, is_langgraph=True)
-    print_comparison(legacy_response, langgraph_response)
+    print_runtime_summary("LangGraph Rule Planner", langgraph_rule_summary, is_langgraph=True)
+    if langgraph_llm_summary is not None:
+        print_runtime_summary("LangGraph LLM Planner", langgraph_llm_summary, is_langgraph=True)
+    print_comparison(legacy_response, langgraph_rule_response, langgraph_llm_response)
 
     if args.save:
-        output_path = save_result({
+        payload = {
             "message": args.message,
             "base_url": base_url,
             "legacy_payload": legacy_payload,
-            "langgraph_payload": langgraph_payload,
+            "langgraph_payload": langgraph_rule_payload,
             "legacy_summary": legacy_summary,
-            "langgraph_summary": langgraph_summary,
+            "langgraph_summary": langgraph_rule_summary,
             "legacy_response": legacy_response,
-            "langgraph_response": langgraph_response,
-        })
+            "langgraph_response": langgraph_rule_response,
+            "comparison": comparison,
+        }
+        if langgraph_llm_payload is not None and langgraph_llm_summary is not None:
+            payload = {
+                "message": args.message,
+                "base_url": base_url,
+                "legacy": {
+                    "payload": legacy_payload,
+                    "summary": legacy_summary,
+                    "response": legacy_response,
+                },
+                "langgraph_rule": {
+                    "payload": langgraph_rule_payload,
+                    "summary": langgraph_rule_summary,
+                    "response": langgraph_rule_response,
+                },
+                "langgraph_llm": {
+                    "payload": langgraph_llm_payload,
+                    "summary": langgraph_llm_summary,
+                    "response": langgraph_llm_response,
+                },
+                "comparison": comparison,
+            }
+        output_path = save_result(payload)
         print("")
         print(f"Saved result: {output_path}")
 
