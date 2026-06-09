@@ -15,6 +15,7 @@ const MODE_LABELS = {
   learn: "学习模式",
   langgraph: "LangGraph",
   agent: "Agent",
+  image: "Image",
 }
 
 const EMPTY_INSIGHTS = {
@@ -39,6 +40,89 @@ function compactText(value) {
     .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
+}
+
+function renderAnswerContent(text) {
+  const content = String(text || "")
+  const imagePattern = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g
+  const nodes = []
+  let lastIndex = 0
+  let match
+
+  while ((match = imagePattern.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex, match.index)}</span>)
+    }
+    nodes.push(
+      <a className="answer-image-link" href={match[2]} target="_blank" rel="noreferrer" key={`image-${match.index}`}>
+        <ImagePreview className="answer-image" url={match[2]} alt={match[1] || "generated image"} />
+      </a>,
+    )
+    lastIndex = imagePattern.lastIndex
+  }
+
+  if (lastIndex < content.length) {
+    nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex)}</span>)
+  }
+
+  return nodes.length > 0 ? nodes : content
+}
+
+function getImagePreviewUrl(url) {
+  return url ? `${API_BASE_URL}/image-proxy?url=${encodeURIComponent(url)}` : ""
+}
+
+function ImagePreview({ url, alt, className }) {
+  const [failed, setFailed] = useState(false)
+  const previewUrl = getImagePreviewUrl(url)
+
+  if (!url || failed) {
+    return (
+      <span className={`${className || ""} image-preview-fallback`}>
+        <strong>图片预览加载失败</strong>
+        <em>点击打开原图</em>
+      </span>
+    )
+  }
+
+  return (
+    <img
+      className={className}
+      src={previewUrl}
+      alt={alt || "generated image"}
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
+function extractImageCardsFromAnswer(answer, prompt = "") {
+  const content = String(answer || "")
+  const imagePattern = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g
+  const cards = []
+  let match
+
+  while ((match = imagePattern.exec(content)) !== null) {
+    cards.push({
+      front: "图卡",
+      back: prompt || "生成图片",
+      tags: ["image"],
+      difficulty: "easy",
+      card_type: "image",
+      image_url: match[2],
+      image_alt: match[1] || prompt || "图卡",
+    })
+  }
+
+  return cards
+}
+
+function getResponseCards(response, prompt = "") {
+  const cards = Array.isArray(response?.flashcards) ? response.flashcards : []
+  if (cards.length > 0) {
+    return cards
+  }
+
+  return extractImageCardsFromAnswer(response?.answer, prompt)
 }
 
 function clampNumber(value, fallback, min, max) {
@@ -70,6 +154,10 @@ function getConversationTitle(messages) {
 }
 
 function getResponseSnapshot(data) {
+  const flashcards = Array.isArray(data.flashcards) && data.flashcards.length > 0
+    ? data.flashcards
+    : extractImageCardsFromAnswer(data.answer)
+
   return {
     answer: data.answer || "",
     mode: data.mode || "",
@@ -77,7 +165,7 @@ function getResponseSnapshot(data) {
     sources: Array.isArray(data.sources) ? data.sources : [],
     plan: Array.isArray(data.plan) ? data.plan : [],
     trace: Array.isArray(data.trace) ? data.trace : [],
-    flashcards: Array.isArray(data.flashcards) ? data.flashcards : [],
+    flashcards,
     runtime_info: hasRuntimeInfo(data.runtime_info) ? data.runtime_info : {},
   }
 }
@@ -165,6 +253,18 @@ function getExecutionPath(response) {
   }
 
   return []
+}
+
+function formatRuntimeValue(value, fallback = "无") {
+  if (value === null || value === undefined || value === "") {
+    return fallback
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "是" : "否"
+  }
+
+  return String(value)
 }
 
 function getConversationTurns(messages) {
@@ -503,7 +603,7 @@ function AnswerBlock({ response }) {
     <div className="answer">
       {title ? <strong>{title}</strong> : null}
       {note ? <div className="fallback-note">{note}</div> : null}
-      <div>{rawAnswer.replace(/^知识内容：\s*/, "")}</div>
+      <div>{renderAnswerContent(rawAnswer.replace(/^知识内容：\s*/, ""))}</div>
     </div>
   )
 }
@@ -721,6 +821,7 @@ function KnowledgeViewer({ viewer }) {
 function Flashcard({ card, index, showTopic = false }) {
   const [flipped, setFlipped] = useState(false)
   const tags = Array.isArray(card.tags) ? card.tags : []
+  const isImageCard = card.card_type === "image" || Boolean(card.image_url)
   const difficulty = ["easy", "medium", "hard"].includes(String(card.difficulty || "").toLowerCase())
     ? String(card.difficulty).toLowerCase()
     : "medium"
@@ -739,29 +840,41 @@ function Flashcard({ card, index, showTopic = false }) {
       }}
     >
       <div className="flashcard-card-toolbar">
-        <span className="flashcard-card-number">#{index}</span>
+        <span className="flashcard-card-number">{isImageCard ? "图卡" : `#${index}`}</span>
         <span className="flashcard-card-actions">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              downloadFlashcardFiles([{ ...card, index }], "both")
-            }}
-          >
-            下载
-          </button>
+          {isImageCard ? (
+            <a href={card.image_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+              打开
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                downloadFlashcardFiles([{ ...card, index }], "both")
+              }}
+            >
+              下载
+            </button>
+          )}
         </span>
       </div>
       {showTopic && card.topic ? <div className="flashcard-library-meta">{card.topic}</div> : null}
       <div className="flashcard-inner">
         <div className="flashcard-face flashcard-front">
-          <span className="flashcard-label">正面</span>
-          <div className="flashcard-content">{card.front || "空白卡片"}</div>
+          <span className="flashcard-label">{isImageCard ? "图卡" : "正面"}</span>
+          {isImageCard ? (
+            <a className="flashcard-image-link" href={card.image_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+              <ImagePreview className="flashcard-image" url={card.image_url} alt={card.image_alt || card.front || "图卡"} />
+            </a>
+          ) : (
+            <div className="flashcard-content">{card.front || "空白卡片"}</div>
+          )}
           <FlashcardMeta difficulty={difficulty} tags={tags} />
         </div>
         <div className="flashcard-face flashcard-back">
-          <span className="flashcard-label">背面</span>
-          <div className="flashcard-content">{card.back || "暂无答案"}</div>
+          <span className="flashcard-label">{isImageCard ? "提示词" : "背面"}</span>
+          <div className="flashcard-content">{card.back || (isImageCard ? "点击正面图片查看原图" : "暂无答案")}</div>
           <FlashcardMeta difficulty={difficulty} tags={tags} />
         </div>
       </div>
@@ -833,9 +946,20 @@ function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChang
       <details className="inspector-form inspector-settings" aria-label="运行设置">
         <summary>运行设置</summary>
         <label>
+          Planner 模式
+          <select value={settings.plannerMode} onChange={(event) => onSettingsChange({ plannerMode: event.target.value })}>
+            <option value="rule">rule</option>
+            <option value="llm">llm</option>
+          </select>
+        </label>
+        <label>
           模型
           <select value={settings.model} onChange={(event) => onSettingsChange({ model: event.target.value })}>
             <option value="mimo-v2.5">mimo-v2.5</option>
+            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+            <option value="qwen3.7-max">qwen3.7-max</option>
+            <option value="wanx2.1-t2i-plus">wanx2.1-t2i-plus</option>
           </select>
         </label>
         <div className="inspector-grid">
@@ -1004,7 +1128,7 @@ function InsightContent({ tab, turns }) {
   if (tab === "flashcards") {
     let nextIndex = 1
     return turns.map((turn, turnIndex) => {
-      const cards = Array.isArray(turn.response.flashcards) ? turn.response.flashcards : []
+      const cards = getResponseCards(turn.response, turn.question)
       const startIndex = nextIndex
       nextIndex += cards.length
       return (
@@ -1038,19 +1162,76 @@ function InsightContent({ tab, turns }) {
           <div className="execution-path-line muted">暂无执行路径摘要</div>
         )}
         {hasRuntimeInfo(runtimeInfo) ? (
-          <dl className="execution-summary">
-            <dt>执行引擎</dt>
-            <dd>{runtimeInfo.runtime || "langgraph"}</dd>
-            <dt>节点数量</dt>
-            <dd>{runtimeInfo.node_count ?? path.length}</dd>
-            <dt>Finalizer</dt>
-            <dd>{runtimeInfo.finalizer_used ? "已启用" : "未启用"}</dd>
-          </dl>
+          <RuntimeInfoPanel runtimeInfo={runtimeInfo} fallbackPath={path} />
         ) : null}
         <TraceBlocks trace={turn.response.trace} />
       </article>
     )
   })
+}
+
+function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
+  const graphPath = Array.isArray(runtimeInfo.graph_path) ? runtimeInfo.graph_path : []
+  const path = graphPath.length > 0 ? graphPath : fallbackPath
+  const toolCalls = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
+
+  return (
+    <section className="runtime-info-panel compact-runtime">
+      <div className="runtime-info-header">
+        <strong>Runtime Info</strong>
+        <span className="runtime-engine">{formatRuntimeValue(runtimeInfo.runtime, "runtime")}</span>
+      </div>
+      <dl className="execution-summary">
+        <dt>runtime</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.runtime)}</dd>
+        <dt>planner_mode</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.planner_mode)}</dd>
+        <dt>planner_fallback</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.planner_fallback)}</dd>
+        <dt>planner_error</dt>
+        <dd className={runtimeInfo.planner_error ? "runtime-error-text" : ""}>
+          {formatRuntimeValue(runtimeInfo.planner_error)}
+        </dd>
+        <dt>graph_path</dt>
+        <dd>{path.length > 0 ? path.join(" → ") : "无"}</dd>
+        <dt>node_count</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.node_count ?? path.length)}</dd>
+      </dl>
+      <div className="runtime-tool-calls">
+        <strong>tool_calls</strong>
+        {toolCalls.length === 0 ? (
+          <span className="runtime-empty">无工具调用</span>
+        ) : (
+          toolCalls.map((call, index) => (
+            <article className="runtime-tool-call" key={`${call.tool || "tool"}-${index}`}>
+              <div className="runtime-tool-header">
+                <strong>{index + 1}. {call.tool || call.name || "unknown"}</strong>
+                <span className={`runtime-status ${call.success === false ? "failed" : "success"}`}>
+                  {call.success === false ? "失败" : "成功"}
+                </span>
+              </div>
+              <dl className="runtime-detail-grid">
+                <dt>node</dt>
+                <dd>{formatRuntimeValue(call.node)}</dd>
+                <dt>description</dt>
+                <dd>{formatRuntimeValue(call.description)}</dd>
+                <dt>used_context</dt>
+                <dd>{formatRuntimeValue(call.used_context)}</dd>
+                <dt>output_length</dt>
+                <dd>{formatRuntimeValue(call.output_length, "0")}</dd>
+                {call.error ? (
+                  <>
+                    <dt>error</dt>
+                    <dd className="runtime-error-text">{String(call.error)}</dd>
+                  </>
+                ) : null}
+              </dl>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  )
 }
 
 function TraceBlocks({ trace }) {
@@ -1091,6 +1272,7 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [settings, setSettings] = useState({
     model: "mimo-v2.5",
+    plannerMode: "rule",
     temperature: "0.7",
     topK: "3",
     useAgent: true,
@@ -1271,6 +1453,7 @@ export default function App() {
       mode: "auto",
       model: normalizedSettings.model,
       temperature: clampNumber(normalizedSettings.temperature, 0.7, 0, 2),
+      planner_mode: normalizedSettings.plannerMode || "rule",
       use_agent: normalizedSettings.useAgent,
       use_rag: normalizedSettings.useRag,
       use_langgraph: normalizedSettings.useLangGraph,
@@ -1307,8 +1490,9 @@ export default function App() {
 
       setMessages(nextMessages)
       persistConversation(nextMessages)
-      addCardsToLibrary(data.flashcards, message)
-      setActiveTab("sources")
+      const responseCards = getResponseCards(data, message)
+      addCardsToLibrary(responseCards, message)
+      setActiveTab(data.mode === "image" && responseCards.length > 0 ? "flashcards" : "sources")
     } catch (error) {
       const errorMessage = {
         id: createSessionId(),

@@ -1,5 +1,7 @@
 from backend.agent_core import agent_router, run_agent
+from backend.config import is_image_model
 from backend.history_utils import format_history, normalize_history
+from backend.image_service import generate_image
 from backend.llm_service import (
     build_llm,
     chat,
@@ -183,12 +185,52 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
 
 
 def run_chat_request(request: ChatRequest) -> dict:
+    selected_model = normalize_model(request.model)
+    if is_image_model(selected_model):
+        trace = [
+            "received image generation request",
+            f"model: {selected_model}",
+            "provider: DashScope Wanx",
+        ]
+        try:
+            result = generate_image(request.message, selected_model)
+            image_markdown = "\n".join(f"![generated image]({url})" for url in result["image_urls"])
+            image_cards = [
+                {
+                    "front": "图卡",
+                    "back": request.message,
+                    "tags": ["image", selected_model],
+                    "difficulty": "easy",
+                    "card_type": "image",
+                    "image_url": url,
+                    "image_alt": request.message,
+                }
+                for url in result["image_urls"]
+            ]
+            answer = f"已生成图片：\n\n{image_markdown}"
+            trace.append(f"task_id: {result['task_id']}")
+            trace.append(f"api_key_source: {result['api_key_source']}")
+        except RuntimeError as exc:
+            answer = str(exc)
+            image_cards = []
+            trace.append(f"error: {exc}")
+
+        return {
+            "answer": answer,
+            "mode": "image",
+            "model": selected_model,
+            "sources": [],
+            "trace": _group_trace_items(trace),
+            "plan": [],
+            "flashcards": image_cards,
+            "runtime_info": {},
+        }
+
     if request.mode == "auto" and request.use_langgraph:
         return run_langgraph_chat_request(request)
 
     use_rag = request.use_rag or request.mode == "rag"
     agent_handles_rag = request.mode == "auto" and request.use_agent
-    selected_model = normalize_model(request.model)
     history_messages = normalize_history(request.history)
     history_context = format_history(history_messages)
     rag_question = (

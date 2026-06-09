@@ -956,6 +956,21 @@ summary {
     background: rgba(255, 255, 255, 0.64);
 }
 
+.compact-runtime {
+    gap: 8px;
+    padding: 10px;
+}
+
+.compact-runtime .execution-summary {
+    grid-template-columns: minmax(108px, auto) 1fr;
+}
+
+.runtime-empty {
+    color: var(--stack-muted);
+    font-size: 12px;
+    line-height: 18px;
+}
+
 .runtime-error-text {
     color: var(--error);
     font-weight: 700;
@@ -1136,6 +1151,20 @@ summary {
     padding: 4px 8px;
 }
 
+.flashcard-card-actions a {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.64);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    color: var(--primary);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 700;
+    min-height: 28px;
+    padding: 4px 8px;
+    text-decoration: none;
+}
+
 .flashcard-inner {
     height: 172px;
     margin: 8px 10px 10px;
@@ -1183,6 +1212,49 @@ summary {
     color: var(--ink);
     font-size: 14px;
     line-height: 20px;
+}
+
+.flashcard-image-link {
+    align-items: center;
+    display: flex;
+    flex: 1;
+    justify-content: center;
+    min-height: 0;
+}
+
+.flashcard-image {
+    border-radius: 8px;
+    display: block;
+    max-height: 104px;
+    max-width: 100%;
+    object-fit: contain;
+}
+
+.image-preview-fallback {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px dashed rgba(11, 95, 81, 0.28);
+    color: var(--primary);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    justify-content: center;
+    min-height: 96px;
+    padding: 12px;
+    text-align: center;
+}
+
+.image-preview-fallback strong {
+    color: var(--primary-ink);
+    font-size: 13px;
+    line-height: 18px;
+}
+
+.image-preview-fallback em {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 16px;
 }
 
 .flashcard-meta {
@@ -1241,6 +1313,26 @@ summary {
 
 .ai-message .answer {
     text-wrap: pretty;
+}
+
+.answer-image {
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    display: block;
+    height: auto;
+    margin-top: 12px;
+    max-width: min(100%, 560px);
+}
+
+.answer-image-link {
+    display: inline-block;
+    max-width: 100%;
+    text-decoration: none;
+}
+
+.answer-image-link:hover .answer-image {
+    border-color: rgba(11, 95, 81, 0.36);
+    box-shadow: 0 12px 30px rgba(17, 24, 20, 0.12);
 }
 
 .primary-button:hover,

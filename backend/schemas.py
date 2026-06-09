@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
 AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz", "flashcard"]
+PlannerMode = Literal["rule", "llm"]
 
 
 class ChatRequest(BaseModel):
@@ -15,6 +16,7 @@ class ChatRequest(BaseModel):
     use_agent: bool = False
     use_rag: bool = False
     use_langgraph: bool = False
+    planner_mode: PlannerMode = "rule"
     top_k: int = Field(3, ge=1, le=10)
     session_id: str | None = None
     history: list[dict] = Field(default_factory=list)
@@ -49,6 +51,9 @@ class FlashcardItem(BaseModel):
     back: str = Field(..., min_length=1)
     tags: list[str] = Field(default_factory=list)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+    card_type: Literal["text", "image"] = "text"
+    image_url: str | None = None
+    image_alt: str | None = None
 
 
 class FlashcardPayload(BaseModel):
