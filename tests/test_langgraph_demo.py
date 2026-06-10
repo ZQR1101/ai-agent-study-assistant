@@ -4,6 +4,21 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 
+class FakeLLMResponse:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class FakeLLM:
+    def __init__(self, content: str):
+        self.content = content
+        self.prompts = []
+
+    def invoke(self, prompt: str):
+        self.prompts.append(prompt)
+        return FakeLLMResponse(self.content)
+
+
 @dataclass
 class FakeTool:
     name: str
@@ -121,6 +136,163 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertTrue(detect_intent("出 3 道题")["need_quiz"])
         self.assertTrue(detect_intent("plain request", use_rag_requested=True)["use_rag"])
 
+    def test_detect_intent_handles_chinese_learning_tasks_and_negations(self):
+        from backend.langgraph_runtime import detect_intent
+
+        cases = [
+            (
+                "什么是 RAG",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "请解释 RAG，不要出题",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
+                {
+                    "use_rag": True,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": True,
+                    "need_quiz": True,
+                },
+            ),
+            (
+                "请总结 prompt engineering 的核心思想",
+                {
+                    "use_rag": False,
+                    "need_explain": False,
+                    "need_summarize": True,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "帮我复习 RAG",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": True,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "只根据知识库回答，不要出题",
+                {
+                    "use_rag": True,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "不要生成卡片，只解释 agentic rag",
+                {
+                    "use_rag": False,
+                    "need_explain": True,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": False,
+                },
+            ),
+            (
+                "根据刚才内容出 3 道题",
+                {
+                    "use_rag": False,
+                    "need_explain": False,
+                    "need_summarize": False,
+                    "need_flashcard": False,
+                    "need_quiz": True,
+                },
+            ),
+        ]
+
+        for message, expected in cases:
+            with self.subTest(message=message):
+                intent = detect_intent(message)
+                for key, value in expected.items():
+                    self.assertEqual(intent[key], value)
+
+    def test_planner_builds_plan_from_enhanced_intent_rules(self):
+        from backend.langgraph_runtime import planner_node
+
+        cases = [
+            ("什么是 RAG", ["explain"]),
+            ("请解释 RAG，不要出题", ["explain"]),
+            ("根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题", ["rag", "explain", "flashcard", "quiz"]),
+            ("请总结 prompt engineering 的核心思想", ["summarize"]),
+            ("帮我复习 RAG", ["explain", "flashcard"]),
+            ("只根据知识库回答，不要出题", ["rag", "explain"]),
+            ("不要生成卡片，只解释 agentic rag", ["explain"]),
+            ("根据刚才内容出 3 道题", ["quiz"]),
+        ]
+
+        for message, expected_plan in cases:
+            with self.subTest(message=message):
+                state = planner_node({"message": message})
+                self.assertEqual([step["tool"] for step in state["plan"]], expected_plan)
+
+    def test_llm_planner_success_sets_intent_and_plan(self):
+        from backend.langgraph_runtime import planner_node
+
+        fake_llm = FakeLLM("""
+{
+  "goal": "解释并出题",
+  "steps": [
+    {"tool": "explain", "input": "RAG", "reason": "解释概念"},
+    {"tool": "quiz", "input": "RAG", "reason": "生成题目"}
+  ],
+  "fallback": false
+}
+""")
+
+        state = planner_node({
+            "message": "请解释 RAG 并出题",
+            "planner_mode": "llm",
+            "custom_llm": fake_llm,
+        })
+
+        self.assertEqual(state["planner_mode"], "llm")
+        self.assertFalse(state["planner_fallback"])
+        self.assertEqual(state["planner_error"], "")
+        self.assertEqual([step["tool"] for step in state["plan"]], ["explain", "quiz"])
+        self.assertTrue(state["need_explain"])
+        self.assertTrue(state["need_quiz"])
+        self.assertTrue(any("planner: mode=llm" in item for item in state["trace"]))
+        self.assertEqual(len(fake_llm.prompts), 1)
+
+    def test_llm_planner_invalid_json_falls_back_to_rule_planner(self):
+        from backend.langgraph_runtime import planner_node
+
+        state = planner_node({
+            "message": "请解释 RAG，不要出题",
+            "planner_mode": "llm",
+            "custom_llm": FakeLLM("not json"),
+        })
+
+        self.assertEqual(state["planner_mode"], "llm")
+        self.assertTrue(state["planner_fallback"])
+        self.assertIn("JSON parse failed", state["planner_error"])
+        self.assertEqual([step["tool"] for step in state["plan"]], ["explain"])
+        self.assertTrue(state["need_explain"])
+        self.assertFalse(state["need_quiz"])
+        self.assertTrue(any("planner: fallback reason=JSON parse failed" in item for item in state["trace"]))
+
     def test_missing_langgraph_error_is_clear(self):
         import backend.langgraph_demo as demo
 
@@ -160,6 +332,21 @@ class LangGraphDemoTests(unittest.TestCase):
 
         return result, fake_registry
 
+    def _run_runtime_with_fake_registry(self, message, **kwargs):
+        import backend.langgraph_runtime as runtime
+
+        try:
+            runtime.build_langgraph_workflow()
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+
+        fake_registry = make_fake_registry()
+
+        with patch.object(runtime, "TOOL_REGISTRY", fake_registry):
+            result = runtime.run_langgraph_workflow(message, **kwargs)
+
+        return result, fake_registry
+
     def _trace_path(self, result):
         path = []
 
@@ -175,6 +362,7 @@ class LangGraphDemoTests(unittest.TestCase):
         result, registry = self._run_with_fake_registry("what is RAG")
 
         self.assertEqual(self._trace_path(result), ["planner", "explain"])
+        self.assertEqual(result["runtime_info"]["graph_path"], ["planner", "explain", "finalizer"])
         self.assertEqual([step["tool"] for step in result["plan"]], ["explain"])
         self.assertIn("explain answer", result["answer"])
         self.assertEqual(len(registry["explain"].calls), 1)
@@ -190,6 +378,19 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertEqual(len(registry["rag"].calls), 1)
         self.assertEqual(len(registry["explain"].calls), 1)
         self.assertEqual(registry["explain"].calls[0]["shared_context"]["rag_context"], "mock rag context")
+
+    def test_runtime_info_default_fields(self):
+        result, _ = self._run_with_fake_registry("knowledge base explain agentic rag")
+        runtime_info = result["runtime_info"]
+
+        self.assertEqual(runtime_info["runtime"], "langgraph")
+        self.assertIsInstance(runtime_info["graph_path"], list)
+        self.assertEqual(runtime_info["node_count"], len(runtime_info["graph_path"]))
+        self.assertTrue(runtime_info["finalizer_used"])
+        self.assertEqual(runtime_info["planner_mode"], "rule")
+        self.assertFalse(runtime_info["planner_fallback"])
+        self.assertIsNone(runtime_info["planner_error"])
+        self.assertIsNone(runtime_info["error"])
 
     def test_explain_and_quiz_routes_to_quiz(self):
         result, registry = self._run_with_fake_registry("explain RAG and quiz me")
@@ -225,6 +426,10 @@ class LangGraphDemoTests(unittest.TestCase):
         result, registry = self._run_with_fake_registry(message)
 
         self.assertEqual(self._trace_path(result), ["planner", "rag", "explain", "flashcard", "quiz"])
+        self.assertEqual(
+            result["runtime_info"]["graph_path"],
+            ["planner", "rag", "explain", "flashcard", "quiz", "finalizer"],
+        )
         self.assertEqual([step["tool"] for step in result["plan"]], ["rag", "explain", "flashcard", "quiz"])
         self.assertIn("explain answer", result["answer"])
         self.assertIn("quiz answer", result["answer"])
@@ -236,6 +441,78 @@ class LangGraphDemoTests(unittest.TestCase):
             registry["quiz"].calls[0]["shared_context"]["last_output"],
             "## Flashcard Markdown Very Long\nfront/back repeated content",
         )
+
+    def test_enhanced_intent_graph_paths_use_expected_routes(self):
+        cases = [
+            ("什么是 RAG", ["planner", "explain", "finalizer"]),
+            ("请解释 RAG，不要出题", ["planner", "explain", "finalizer"]),
+            (
+                "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
+                ["planner", "rag", "explain", "flashcard", "quiz", "finalizer"],
+            ),
+            ("请总结 prompt engineering 的核心思想", ["planner", "summarize", "finalizer"]),
+            ("帮我复习 RAG", ["planner", "explain", "flashcard", "finalizer"]),
+            ("只根据知识库回答，不要出题", ["planner", "rag", "explain", "finalizer"]),
+            ("不要生成卡片，只解释 agentic rag", ["planner", "explain", "finalizer"]),
+            ("根据刚才内容出 3 道题", ["planner", "quiz", "finalizer"]),
+        ]
+
+        for message, expected_path in cases:
+            with self.subTest(message=message):
+                result, _ = self._run_with_fake_registry(message)
+                self.assertEqual(result["runtime_info"]["graph_path"], expected_path)
+
+    def test_runtime_info_records_tool_calls(self):
+        result, _ = self._run_with_fake_registry("knowledge base explain agentic rag, generate flashcard, and quiz me")
+        tool_calls = result["runtime_info"]["tool_calls"]
+
+        self.assertEqual([call["tool"] for call in tool_calls], ["rag", "explain", "flashcard", "quiz"])
+
+        for call in tool_calls:
+            self.assertIn("success", call)
+            self.assertIn("used_context", call)
+            self.assertIn("output_length", call)
+            self.assertIsInstance(call["output_length"], int)
+
+    def test_llm_planner_runtime_info_records_success(self):
+        result, registry = self._run_runtime_with_fake_registry(
+            "请解释 RAG 并出题",
+            planner_mode="llm",
+            custom_llm=FakeLLM("""
+{
+  "goal": "解释并出题",
+  "steps": [
+    {"tool": "explain", "input": "RAG", "reason": "解释概念"},
+    {"tool": "quiz", "input": "RAG", "reason": "生成题目"}
+  ],
+  "fallback": false
+}
+"""),
+        )
+
+        runtime_info = result["runtime_info"]
+        self.assertEqual(runtime_info["planner_mode"], "llm")
+        self.assertFalse(runtime_info["planner_fallback"])
+        self.assertIsNone(runtime_info["planner_error"])
+        self.assertEqual(runtime_info["graph_path"], ["planner", "explain", "quiz", "finalizer"])
+        self.assertEqual([step["tool"] for step in result["plan"]], ["explain", "quiz"])
+        self.assertEqual(len(registry["explain"].calls), 1)
+        self.assertEqual(len(registry["quiz"].calls), 1)
+
+    def test_llm_planner_runtime_info_records_fallback(self):
+        result, registry = self._run_runtime_with_fake_registry(
+            "请解释 RAG，不要出题",
+            planner_mode="llm",
+            custom_llm=FakeLLM("not json"),
+        )
+
+        runtime_info = result["runtime_info"]
+        self.assertEqual(runtime_info["planner_mode"], "llm")
+        self.assertTrue(runtime_info["planner_fallback"])
+        self.assertIn("JSON parse failed", runtime_info["planner_error"])
+        self.assertEqual(runtime_info["graph_path"], ["planner", "explain", "finalizer"])
+        self.assertEqual([step["tool"] for step in result["plan"]], ["explain"])
+        self.assertEqual(len(registry["explain"].calls), 1)
 
     def test_registry_tool_error_is_friendly(self):
         import backend.langgraph_demo as demo

@@ -6,11 +6,11 @@ venv/
 uploads/
 rag_index/
 outputs/
-node_modules/
+*.log
 frontend/dist/
 dist/
 .vite/
-*.log
+node_modules/
 DESIGN.md
 frontend_server.err.log
 frontend_server.out.log

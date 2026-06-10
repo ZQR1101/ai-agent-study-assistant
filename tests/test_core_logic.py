@@ -98,11 +98,22 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(request.message, "What is RAG?")
         self.assertEqual(request.mode, "explain")
         self.assertFalse(request.use_langgraph)
+        self.assertEqual(request.planner_mode, "rule")
 
     def test_chat_request_accepts_langgraph_flag(self):
         request = ChatRequest(message="What is RAG?", use_langgraph=True)
 
         self.assertTrue(request.use_langgraph)
+
+    def test_chat_request_accepts_llm_planner_mode(self):
+        request = ChatRequest(message="What is RAG?", planner_mode="llm")
+
+        self.assertEqual(request.planner_mode, "llm")
+
+    def test_chat_response_runtime_info_defaults_to_empty_dict(self):
+        response = ChatResponse(answer="ok", mode="chat", model="mimo-v2.5")
+
+        self.assertEqual(response.runtime_info, {})
 
     def test_chat_request_rejects_invalid_values(self):
         invalid_payloads = [
@@ -111,6 +122,7 @@ class SchemaTests(unittest.TestCase):
             {"message": "hello", "temperature": 2.1},
             {"message": "hello", "top_k": 0},
             {"message": "hello", "top_k": 11},
+            {"message": "hello", "planner_mode": "bad"},
         ]
 
         for payload in invalid_payloads:
@@ -212,6 +224,35 @@ class LangGraphChatRoutingTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "agent")
         self.assertEqual(result["answer"], "agent answer")
+        self.assertEqual(result["runtime_info"], {})
+        mock_langgraph.assert_not_called()
+        mock_agent.assert_called_once()
+
+    def test_legacy_agent_ignores_llm_planner_mode_without_langgraph(self):
+        request = ChatRequest(
+            message="use agent",
+            mode="auto",
+            use_agent=True,
+            use_langgraph=False,
+            planner_mode="llm",
+        )
+        agent_result = {
+            "answer": "agent answer",
+            "sources": [],
+            "trace": ["Agent trace"],
+            "plan": {"steps": [{"tool": "chat", "input": "use agent"}]},
+            "flashcards": [],
+            "fallback_used": False,
+        }
+
+        with (
+            patch("backend.ai_core.run_langgraph_chat_request") as mock_langgraph,
+            patch("backend.ai_core.build_llm", return_value=object()),
+            patch("backend.ai_core.run_agent", return_value=agent_result) as mock_agent,
+        ):
+            result = run_chat_request(request)
+
+        self.assertEqual(result["mode"], "agent")
         mock_langgraph.assert_not_called()
         mock_agent.assert_called_once()
 
@@ -237,6 +278,14 @@ class LangGraphChatRoutingTests(unittest.TestCase):
                     "difficulty": "medium",
                 }
             ],
+            "runtime_info": {
+                "runtime": "langgraph",
+                "graph_path": ["planner", "rag", "finalizer"],
+                "node_count": 3,
+                "tool_calls": [],
+                "finalizer_used": True,
+                "error": None,
+            },
         }
         fake_llm = object()
 
@@ -251,11 +300,41 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         self.assertEqual(result["sources"], [{"source": "demo.md", "score": 0.9}])
         self.assertEqual(result["plan"], [{"tool": "rag", "input": "use langgraph"}])
         self.assertEqual(len(result["flashcards"]), 1)
+        self.assertEqual(result["runtime_info"]["runtime"], "langgraph")
+        self.assertEqual(result["runtime_info"]["node_count"], 3)
         self.assertTrue(any("LangGraph workflow enabled" in item for block in result["trace"] for item in block["items"]))
         ChatResponse(**result)
         mock_workflow.assert_called_once()
         self.assertEqual(mock_workflow.call_args.kwargs["custom_llm"], fake_llm)
         self.assertEqual(mock_workflow.call_args.kwargs["top_k"], 5)
+        self.assertEqual(mock_workflow.call_args.kwargs["planner_mode"], "rule")
+
+    def test_langgraph_chat_request_passes_llm_planner_mode(self):
+        request = ChatRequest(
+            message="use langgraph",
+            mode="auto",
+            use_agent=True,
+            use_langgraph=True,
+            planner_mode="llm",
+        )
+
+        with (
+            patch("backend.langgraph_runtime.build_llm", return_value=object()),
+            patch(
+                "backend.langgraph_runtime.run_langgraph_workflow",
+                return_value={
+                    "answer": "ok",
+                    "sources": [],
+                    "trace": [],
+                    "plan": [],
+                    "flashcards": [],
+                    "runtime_info": {"runtime": "langgraph"},
+                },
+            ) as mock_workflow,
+        ):
+            run_langgraph_chat_request(request)
+
+        self.assertEqual(mock_workflow.call_args.kwargs["planner_mode"], "llm")
 
     def test_langgraph_unavailable_returns_friendly_response(self):
         from backend.langgraph_runtime import LangGraphRuntimeUnavailableError
@@ -278,6 +357,8 @@ class LangGraphChatRoutingTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "langgraph")
         self.assertIn("missing langgraph", result["answer"])
+        self.assertEqual(result["runtime_info"]["runtime"], "langgraph")
+        self.assertEqual(result["runtime_info"]["error"], "missing langgraph")
 
 
 class ToolsTests(unittest.TestCase):

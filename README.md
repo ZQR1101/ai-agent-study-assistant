@@ -118,8 +118,6 @@ RAG Store / FAISS / Docs
 
 ## 6. Demo Screenshots
 
-当前 README 已包含并引用以下真实截图：
-
 ### Dashboard Main View
 
 ![Dashboard Main View](images/dashboard.png)
@@ -149,27 +147,6 @@ RAG Store / FAISS / Docs
 - [ ] Agent Plan / Trace
 - [ ] Knowledge Files
 - [ ] Runtime Settings
-
-截图建议见：
-
-```text
-docs/SCREENSHOT_GUIDE.md
-```
-
-推荐截图前先启动后端和前端：
-
-```bash
-uvicorn backend.server:app --reload
-npm run dev
-```
-
-然后在前端测试：
-
-```text
-根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题
-```
-
-建议截图时开启 RAG，勾选 LangGraph Workflow，并选择 `planner_mode=rule` 或 `planner_mode=llm`。
 
 ## 7. 运行时架构
 

@@ -1,9 +1,15 @@
 from pathlib import Path
+import ipaddress
+import socket
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.parse import urlparse
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from backend.ai_core import (
@@ -43,6 +49,28 @@ app.add_middleware(
 
 class TextRequest(BaseModel):
     text: str
+
+
+def _is_public_image_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror:
+        return False
+
+    for item in addresses:
+        host = item[4][0]
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_multicast:
+            return False
+
+    return True
 
 
 def _safe_doc_path(filename: str) -> Path:
@@ -91,6 +119,31 @@ def echo_api(request: TextRequest):
 @app.post("/chat", response_model=ChatResponse)
 def chat_api(request: ChatRequest):
     return run_chat_request(request)
+
+
+@app.get("/image-proxy")
+def image_proxy(url: str = Query(..., min_length=1)):
+    if not _is_public_image_url(url):
+        raise HTTPException(status_code=400, detail="Unsupported image URL")
+
+    request = UrlRequest(url, headers={"User-Agent": "AI-Study-Assistant/1.0"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
+            if not content_type.startswith("image/"):
+                raise HTTPException(status_code=400, detail="URL did not return an image")
+            content = response.read(20 * 1024 * 1024 + 1)
+    except HTTPException:
+        raise
+    except HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail="Image fetch failed") from exc
+    except URLError as exc:
+        raise HTTPException(status_code=502, detail=f"Image fetch failed: {exc.reason}") from exc
+
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image is too large")
+
+    return Response(content=content, media_type=content_type)
 
 
 @app.post("/debug-langgraph")
