@@ -30,6 +30,8 @@ REQUIREMENT_IMPORTS = {
     "python-multipart": "multipart",
     "faiss-cpu": "faiss",
     "langgraph": "langgraph",
+    "SQLAlchemy": "sqlalchemy",
+    "psycopg[binary]": "psycopg",
 }
 
 CORE_MODULES = (

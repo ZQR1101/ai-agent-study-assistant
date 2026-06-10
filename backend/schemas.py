@@ -64,8 +64,25 @@ class ChatResponse(BaseModel):
     answer: str
     mode: str
     model: str
+    session_id: str | None = None
     sources: list[SourceChunk] = Field(default_factory=list)
     trace: list[TraceBlock] = Field(default_factory=list)
     plan: list[AgentPlanStep] = Field(default_factory=list)
     flashcards: list[FlashcardItem] = Field(default_factory=list)
     runtime_info: dict = Field(default_factory=dict)
+
+
+class SessionSummary(BaseModel):
+    id: str
+    title: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    message_count: int = 0
+
+
+class MessageSummary(BaseModel):
+    id: int | None = None
+    session_id: str
+    role: str
+    content: str
+    created_at: str | None = None

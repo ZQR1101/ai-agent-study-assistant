@@ -1,5 +1,6 @@
 from pathlib import Path
 import ipaddress
+import logging
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -22,6 +23,7 @@ from backend.ai_core import (
     summarize,
 )
 from backend.config import get_config
+from backend.database import get_db_session, init_db, is_db_history_enabled, get_database_url
 from backend.rag_store import (
     get_rag_index_status,
     list_index_sources,
@@ -29,6 +31,15 @@ from backend.rag_store import (
     search_relevant_chunks,
 )
 from backend.schemas import ChatRequest, ChatResponse
+from backend.session_store import (
+    create_or_get_session,
+    get_recent_messages,
+    get_session_messages,
+    list_sessions,
+    save_message,
+)
+
+logger = logging.getLogger(__name__)
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -45,6 +56,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _startup_init_db():
+    """Initialize database tables on startup if DB history is enabled."""
+    if is_db_history_enabled():
+        try:
+            init_db()
+            logger.info("Database tables initialized (ENABLE_DB_HISTORY=true)")
+        except Exception as exc:
+            logger.warning("Failed to initialize database: %s", exc)
 
 
 class TextRequest(BaseModel):
@@ -108,6 +130,8 @@ def health_check():
             "api_key_source": config.api_key_source,
         },
         "rag_index": get_rag_index_status(),
+        "db_history_enabled": is_db_history_enabled(),
+        "database_configured": get_database_url() is not None,
     }
 
 
@@ -118,7 +142,50 @@ def echo_api(request: TextRequest):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat_api(request: ChatRequest):
-    return run_chat_request(request)
+    session_id = None
+    db_history_error = None
+
+    # --- DB history: load context ---
+    if is_db_history_enabled():
+        try:
+            with get_db_session() as db:
+                session_id = create_or_get_session(
+                    db, request.session_id, title=request.message
+                )
+                db_messages = get_recent_messages(db, session_id, limit=10)
+                if db_messages and not request.history:
+                    request = request.model_copy(update={"history": db_messages, "session_id": session_id})
+                elif not request.history:
+                    request = request.model_copy(update={"session_id": session_id})
+                else:
+                    request = request.model_copy(update={"session_id": session_id})
+        except Exception as exc:
+            db_history_error = f"db_load_error: {exc}"
+            logger.warning("DB history load failed: %s", exc)
+
+    # --- Execute chat ---
+    result = run_chat_request(request)
+
+    # --- DB history: save messages ---
+    if is_db_history_enabled() and session_id:
+        try:
+            with get_db_session() as db:
+                save_message(db, session_id, "user", request.message)
+                if result.get("answer"):
+                    save_message(db, session_id, "assistant", result["answer"])
+        except Exception as exc:
+            db_history_error = f"db_save_error: {exc}"
+            logger.warning("DB history save failed: %s", exc)
+
+    # --- Attach session_id and db error to response ---
+    if session_id:
+        result["session_id"] = session_id
+    if db_history_error:
+        runtime_info = result.get("runtime_info", {})
+        runtime_info["db_history_error"] = db_history_error
+        result["runtime_info"] = runtime_info
+
+    return result
 
 
 @app.get("/image-proxy")
@@ -292,3 +359,40 @@ def debug_rag_api(request: TextRequest):
         "count": len(chunks),
         "chunks": chunks,
     }
+
+
+# --- Session history APIs ---
+
+
+@app.get("/sessions")
+def list_sessions_api(limit: int = Query(50, ge=1, le=200)):
+    """List recent chat sessions."""
+    if not is_db_history_enabled():
+        return {"sessions": [], "message": "DB history is disabled (ENABLE_DB_HISTORY=false)"}
+
+    try:
+        with get_db_session() as db:
+            sessions = list_sessions(db, limit=limit)
+        return {"sessions": sessions}
+    except Exception as exc:
+        logger.warning("Failed to list sessions: %s", exc)
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
+
+
+@app.get("/sessions/{session_id}/messages")
+def get_session_messages_api(session_id: str, limit: int = Query(50, ge=1, le=500)):
+    """Get messages for a specific session."""
+    if not is_db_history_enabled():
+        return {
+            "session_id": session_id,
+            "messages": [],
+            "message": "DB history is disabled (ENABLE_DB_HISTORY=false)",
+        }
+
+    try:
+        with get_db_session() as db:
+            messages = get_session_messages(db, session_id, limit=limit)
+        return {"session_id": session_id, "messages": messages}
+    except Exception as exc:
+        logger.warning("Failed to get session messages: %s", exc)
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")

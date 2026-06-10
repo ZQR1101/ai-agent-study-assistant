@@ -9,3 +9,5 @@ pypdf
 python-multipart
 faiss-cpu
 langgraph
+SQLAlchemy
+psycopg[binary]
