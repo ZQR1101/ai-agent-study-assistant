@@ -1,20 +1,52 @@
 from pathlib import Path
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
 import json
+import os
 import re
+
+from backend.config import get_embedding_model_settings
 
 
 embedding_model = None
+
+
+def _get_pdf_reader():
+    from pypdf import PdfReader
+
+    return PdfReader
+
+
+def _get_faiss():
+    import faiss
+
+    return faiss
+
+
+def _get_numpy():
+    import numpy as np
+
+    return np
+
+
+def _get_sentence_transformer():
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer
 
 
 def get_embedding_model():
     global embedding_model
 
     if embedding_model is None:
-        embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        model_name_or_path, local_only = get_embedding_model_settings()
+        if local_only:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+        SentenceTransformer = _get_sentence_transformer()
+        embedding_model = SentenceTransformer(
+            model_name_or_path,
+            local_files_only=local_only,
+        )
 
     return embedding_model
 
@@ -107,6 +139,7 @@ def load_documents():
                 })
 
         elif suffix == ".pdf":
+            PdfReader = _get_pdf_reader()
             reader = PdfReader(file_path)
             pdf_text = ""
 
@@ -151,6 +184,7 @@ def save_rag_index():
     INDEX_DIR.mkdir(exist_ok=True)
 
     if index is not None:
+        faiss = _get_faiss()
         faiss.write_index(index, str(INDEX_FILE))
 
     with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
@@ -164,6 +198,7 @@ def load_rag_index():
     if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
         return False
 
+    faiss = _get_faiss()
     index = faiss.read_index(str(INDEX_FILE))
 
     with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
@@ -188,6 +223,8 @@ def rebuild_rag_index():
 
     chunk_texts = [chunk["text"] for chunk in chunks]
 
+    faiss = _get_faiss()
+    np = _get_numpy()
     model = get_embedding_model()
     embeddings = model.encode(chunk_texts)
     embeddings = np.array(embeddings).astype("float32")
@@ -341,6 +378,8 @@ def search_relevant_chunks(
         return []
 
     model = get_embedding_model()
+    faiss = _get_faiss()
+    np = _get_numpy()
     question_embedding = model.encode([expanded_question])
     question_embedding = np.array(question_embedding).astype("float32")
 

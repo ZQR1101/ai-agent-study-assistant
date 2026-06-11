@@ -9,6 +9,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
 DEFAULT_MODEL = "mimo-v2.5"
 DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_EMBEDDING_MODEL_PATH = PROJECT_ROOT / "models" / DEFAULT_EMBEDDING_MODEL
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DASHSCOPE_OPENAI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_API_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
@@ -54,6 +56,8 @@ class AppConfig:
     base_url: str
     api_key: str | None
     api_key_source: str | None
+    embedding_model: str
+    embedding_model_local_only: bool
 
     @property
     def has_api_key(self) -> bool:
@@ -89,8 +93,27 @@ def get_model_api_settings(model: str | None) -> tuple[str, str | None, str | No
     return provider["base_url"], api_key, api_key_source
 
 
+def read_bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in ("true", "1", "yes", "on")
+
+
+def get_embedding_model_settings() -> tuple[str, bool]:
+    configured_model = os.getenv("EMBEDDING_MODEL_PATH") or os.getenv("EMBEDDING_MODEL")
+    if configured_model:
+        return configured_model, read_bool_env("EMBEDDING_MODEL_LOCAL_ONLY", True)
+
+    if DEFAULT_EMBEDDING_MODEL_PATH.exists():
+        return str(DEFAULT_EMBEDDING_MODEL_PATH), True
+
+    return DEFAULT_EMBEDDING_MODEL, read_bool_env("EMBEDDING_MODEL_LOCAL_ONLY", True)
+
+
 def get_config() -> AppConfig:
     api_key, api_key_source = read_api_key()
+    embedding_model, embedding_model_local_only = get_embedding_model_settings()
     return AppConfig(
         project_root=PROJECT_ROOT,
         docs_path=PROJECT_ROOT / "docs",
@@ -99,4 +122,6 @@ def get_config() -> AppConfig:
         base_url=os.getenv("MIMO_BASE_URL", DEFAULT_BASE_URL),
         api_key=api_key,
         api_key_source=api_key_source,
+        embedding_model=embedding_model,
+        embedding_model_local_only=embedding_model_local_only,
     )

@@ -13,23 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from backend.ai_core import (
-    agent_router,
-    explain,
-    generate_questions,
-    learning_workflow,
-    rag_answer_with_sources,
-    run_chat_request,
-    summarize,
-)
 from backend.config import get_config
 from backend.database import get_db_session, init_db, is_db_history_enabled, get_database_url
-from backend.rag_store import (
-    get_rag_index_status,
-    list_index_sources,
-    rebuild_rag_index,
-    search_relevant_chunks,
-)
 from backend.schemas import ChatRequest, ChatResponse
 from backend.session_store import (
     create_or_get_session,
@@ -120,6 +105,8 @@ def home():
 
 @app.get("/health")
 def health_check():
+    from backend.rag_store import get_rag_index_status
+
     config = get_config()
     return {
         "status": "ok",
@@ -128,6 +115,8 @@ def health_check():
             "base_url": config.base_url,
             "has_api_key": config.has_api_key,
             "api_key_source": config.api_key_source,
+            "embedding_model": config.embedding_model,
+            "embedding_model_local_only": config.embedding_model_local_only,
         },
         "rag_index": get_rag_index_status(),
         "db_history_enabled": is_db_history_enabled(),
@@ -142,6 +131,8 @@ def echo_api(request: TextRequest):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat_api(request: ChatRequest):
+    from backend.ai_core import run_chat_request
+
     session_id = None
     db_history_error = None
 
@@ -232,34 +223,46 @@ def debug_langgraph(request: ChatRequest):
 
 @app.post("/explain")
 def explain_api(request: TextRequest):
+    from backend.ai_core import explain
+
     result = explain(request.text)
     return {"result": result}
 
 
 @app.post("/summarize")
 def summarize_api(request: TextRequest):
+    from backend.ai_core import summarize
+
     result = summarize(request.text)
     return {"result": result}
 
 
 @app.post("/quiz")
 def quiz_api(request: TextRequest):
+    from backend.ai_core import generate_questions
+
     result = generate_questions(request.text)
     return {"result": result}
 
 
 @app.post("/rag")
 def rag_api(request: TextRequest):
+    from backend.ai_core import rag_answer_with_sources
+
     return rag_answer_with_sources(request.text)
 
 
 @app.post("/agent")
 def agent_api(request: TextRequest):
+    from backend.ai_core import agent_router
+
     return {"result": agent_router(request.text)}
 
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    from backend.rag_store import rebuild_rag_index
+
     DOCS_PATH.mkdir(exist_ok=True)
     filename = Path(file.filename or "").name
 
@@ -332,17 +335,23 @@ def read_knowledge_file_content_api(filename: str):
 
 @app.post("/learn")
 def learn_api(request: TextRequest):
+    from backend.ai_core import learning_workflow
+
     return learning_workflow(request.text)
 
 
 @app.post("/rebuild-index")
 def rebuild_index_api():
+    from backend.rag_store import rebuild_rag_index
+
     rebuild_rag_index()
     return {"message": "RAG 索引已重建"}
 
 
 @app.get("/debug-index-sources")
 def debug_index_sources_api():
+    from backend.rag_store import list_index_sources
+
     sources = list_index_sources()
     return {
         "count": len(sources),
@@ -352,6 +361,8 @@ def debug_index_sources_api():
 
 @app.post("/debug-rag")
 def debug_rag_api(request: TextRequest):
+    from backend.rag_store import search_relevant_chunks
+
     chunks = search_relevant_chunks(request.text, top_k=5)
 
     return {
