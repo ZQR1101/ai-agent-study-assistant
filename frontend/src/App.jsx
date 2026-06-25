@@ -18,6 +18,16 @@ const MODE_LABELS = {
   image: "Image",
 }
 
+const TOOL_LABELS = {
+  planner: "Planner",
+  rag: "RAG",
+  flashcard: "Flashcard",
+  explain: "Explain",
+  summarize: "Summarize",
+  quiz: "Quiz",
+  chat: "Chat",
+}
+
 const EMPTY_INSIGHTS = {
   sources: [],
   plan: [],
@@ -265,6 +275,26 @@ function formatRuntimeValue(value, fallback = "无") {
   }
 
   return String(value)
+}
+
+function formatToolLabel(name) {
+  const normalized = String(name || "tool").toLowerCase()
+  return TOOL_LABELS[normalized] || normalized.replace(/(^|[-_\s])([a-z])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`)
+}
+
+function getToolLatency(call) {
+  const value = call?.latency_ms ?? call?.latencyMs ?? call?.duration_ms
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null
+}
+
+function formatLatency(value, fallback = "N/A") {
+  const latency = Number(value)
+  if (!Number.isFinite(latency)) {
+    return fallback
+  }
+
+  return `${Math.max(0, Math.round(latency))}ms`
 }
 
 function getConversationTurns(messages) {
@@ -1174,6 +1204,7 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
   const graphPath = Array.isArray(runtimeInfo.graph_path) ? runtimeInfo.graph_path : []
   const path = graphPath.length > 0 ? graphPath : fallbackPath
   const toolCalls = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
+  const timedToolCalls = toolCalls.filter((call) => getToolLatency(call) !== null)
 
   return (
     <section className="runtime-panel runtime-info-panel compact-runtime">
@@ -1181,6 +1212,18 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
         <strong>Runtime Info</strong>
         <span className="runtime-engine">{formatRuntimeValue(runtimeInfo.runtime, "runtime")}</span>
       </div>
+      {timedToolCalls.length > 0 ? (
+        <div className="runtime-latency-summary" aria-label="Tool latency summary">
+          {timedToolCalls.map((call, index) => {
+            const label = formatToolLabel(call.tool || call.name || call.node)
+            return (
+              <span className="runtime-latency-pill" key={`${label}-${index}`}>
+                <strong>{label}:</strong> {formatLatency(getToolLatency(call))}
+              </span>
+            )
+          })}
+        </div>
+      ) : null}
       <dl className="runtime-grid execution-summary">
         <dt>runtime</dt>
         <dd>{formatRuntimeValue(runtimeInfo.runtime)}</dd>
@@ -1233,6 +1276,8 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
                     ? call.context_sources.join("、")
                     : "无"}
                 </dd>
+                <dt>latency_ms</dt>
+                <dd>{formatLatency(getToolLatency(call))}</dd>
                 <dt>output_length</dt>
                 <dd>{formatRuntimeValue(call.output_length, "0")}</dd>
                 {call.error ? (

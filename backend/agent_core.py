@@ -1,11 +1,16 @@
 import json
 import re
+from time import perf_counter
 
 from pydantic import ValidationError
 
 from backend.llm_service import chat, llm
 from backend.schemas import AgentPlan
 from backend.tools import TOOL_REGISTRY, _is_valid_agent_context
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((perf_counter() - started_at) * 1000))
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -297,16 +302,19 @@ def run_agent(
     active_llm = custom_llm or llm
     trace = ["Agent Planner：开始分析用户请求"]
     trace.append(f"Agent Planner 使用 history：{'是' if history_context else '否'}")
+    planner_started_at = perf_counter()
     plan = plan_agent_steps(
         user_input,
         custom_llm=active_llm,
         history_context=history_context,
     )
+    planner_latency_ms = _elapsed_ms(planner_started_at)
 
     trace.append(f"Agent Planner goal：{plan.get('goal')}")
     trace.append(f"Agent Planner JSON parse：{plan.get('planner_json_parse', '成功')}")
     trace.append(f"Agent Planner schema validate：{plan.get('planner_schema_validate', '成功')}")
     trace.append(f"Agent Planner fallback：{'是' if plan.get('fallback') else '否'}")
+    trace.append(f"Agent Planner latency_ms={planner_latency_ms}")
     if plan.get("fallback_reason"):
         trace.append(f"Agent Planner fallback reason：{plan['fallback_reason']}")
 
@@ -324,6 +332,18 @@ def run_agent(
     all_sources = []
     all_flashcards = []
     fallback_used = False
+    tool_calls = [
+        {
+            "node": "planner",
+            "tool": "planner",
+            "description": "Agent Planner",
+            "success": not bool(plan.get("fallback")),
+            "used_context": bool(history_context),
+            "context_sources": ["history"] if history_context else [],
+            "output_length": len(plan.get("steps", [])),
+            "latency_ms": planner_latency_ms,
+        }
+    ]
     shared_context = {
         "original_input": user_input,
         "history_context": history_context or "",
@@ -341,6 +361,7 @@ def run_agent(
 
         trace.append(f"Agent Step {index} tool={tool}")
         trace.append(f"Agent Step {index} plan：tool={tool}, reason={step.get('reason')}")
+        tool_started_at = perf_counter()
         result = _execute_agent_tool(
             tool,
             tool_input,
@@ -348,6 +369,8 @@ def run_agent(
             top_k=top_k,
             shared_context=shared_context,
         )
+        tool_latency_ms = _elapsed_ms(tool_started_at)
+        result["latency_ms"] = tool_latency_ms
         result_answer = result.get("answer", "")
         result_sources = result.get("sources", [])
         result_flashcards = result.get("flashcards", [])
@@ -357,10 +380,27 @@ def run_agent(
         fallback_used = fallback_used or result.get("fallback_used", False)
         trace.append(f"Agent Step {index} 工具说明：{result.get('tool_description', '')}")
         trace.append(f"Agent Step {index} 工具执行成功：{'是' if result.get('tool_success') else '否'}")
+        trace.append(f"Agent Step {index} latency_ms={tool_latency_ms}")
         trace.extend(result.get("trace", []))
         trace.append(f"Agent Step {index} 使用上下文：{'是' if result.get('used_context') else '否'}")
         if result.get("context_sources"):
             trace.append(f"Agent Step {index} 上下文来源：{' + '.join(result['context_sources'])}")
+
+        tool_call = {
+            "node": result.get("tool_name") or tool,
+            "tool": result.get("tool_name") or tool,
+            "description": result.get("tool_description", ""),
+            "success": bool(result.get("tool_success")),
+            "used_context": bool(result.get("used_context")),
+            "context_sources": result.get("context_sources", []),
+            "output_length": len(result_answer),
+            "latency_ms": tool_latency_ms,
+        }
+        if result.get("tool_name") and result["tool_name"] != tool:
+            tool_call["requested_tool"] = tool
+        if result.get("error"):
+            tool_call["error"] = result["error"]
+        tool_calls.append(tool_call)
 
         if tool == "rag" and _is_valid_agent_context(result.get("context")):
             shared_context["rag_context"] = result["context"]
@@ -388,6 +428,17 @@ def run_agent(
         "sources": all_sources,
         "flashcards": all_flashcards,
         "fallback_used": fallback_used,
+        "runtime_info": {
+            "runtime": "agent",
+            "graph_path": ["planner", *[call["tool"] for call in tool_calls[1:]]],
+            "node_count": len(tool_calls),
+            "tool_calls": tool_calls,
+            "finalizer_used": False,
+            "planner_mode": "agent",
+            "planner_fallback": bool(plan.get("fallback")),
+            "planner_error": plan.get("fallback_reason") or None,
+            "error": None,
+        },
     }
 
 

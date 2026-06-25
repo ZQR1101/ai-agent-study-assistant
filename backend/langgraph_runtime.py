@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, TypedDict
 
 from pydantic import ValidationError
@@ -13,6 +14,10 @@ from backend.tools import TOOL_REGISTRY
 
 class LangGraphRuntimeUnavailableError(RuntimeError):
     pass
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((perf_counter() - started_at) * 1000))
 
 
 class LangGraphAgentState(TypedDict, total=False):
@@ -480,6 +485,8 @@ def _tool_trace(node_name: str, tool_name: str, result: dict) -> list[str]:
 
     if result.get("context_sources"):
         trace.append(f"上下文来源：{' + '.join(result['context_sources'])}")
+    if "latency_ms" in result:
+        trace.append(f"{tool_name}: latency_ms={result['latency_ms']}")
     if result.get("error"):
         trace.append(f"错误：{result['error']}")
 
@@ -546,7 +553,10 @@ def run_registry_tool_for_state(
     step_input: str,
     state: LangGraphAgentState,
 ) -> LangGraphAgentState:
+    tool_started_at = perf_counter()
     result = _run_registry_tool_raw(tool_name, step_input, state)
+    latency_ms = _elapsed_ms(tool_started_at)
+    result["latency_ms"] = latency_ms
     answer = result.get("answer", "")
     incoming_sources = result.get("sources", [])
     incoming_flashcards = result.get("flashcards", [])
@@ -576,6 +586,7 @@ def run_registry_tool_for_state(
         "used_context": bool(result.get("used_context")),
         "context_sources": result.get("context_sources", []),
         "output_length": len(answer),
+        "latency_ms": latency_ms,
     }
     if result.get("error"):
         tool_call["error"] = result["error"]
@@ -601,6 +612,7 @@ def run_registry_tool_for_state(
 def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
     message = state.get("message", "")
     planner_mode = state.get("planner_mode") or "rule"
+    planner_started_at = perf_counter()
     planner_result = _rule_planner_state(message, state)
     fallback_reason = ""
 
@@ -616,6 +628,7 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
             }
 
     plan = planner_result["plan"]
+    latency_ms = _elapsed_ms(planner_started_at)
     trace = [
         *state.get("trace", []),
         "planner: start",
@@ -628,9 +641,23 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
         f"planner: need_quiz={planner_result['need_quiz']}",
         f"planner: fallback={planner_result.get('planner_fallback', False)}",
         f"planner: produced {len(plan)} step(s)",
+        f"planner: latency_ms={latency_ms}",
     ]
     if fallback_reason:
         trace.append(f"planner: fallback reason={fallback_reason}")
+
+    planner_call = {
+        "node": "planner",
+        "tool": "planner",
+        "description": f"{planner_mode} planner",
+        "success": not bool(planner_result.get("planner_fallback")),
+        "used_context": bool(state.get("history_context")),
+        "context_sources": ["history"] if state.get("history_context") else [],
+        "output_length": len(plan),
+        "latency_ms": latency_ms,
+    }
+    if planner_result.get("planner_error"):
+        planner_call["error"] = planner_result["planner_error"]
 
     return {
         **state,
@@ -638,6 +665,7 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
         "planner_mode": planner_mode,
         "plan": plan,
         "trace": trace,
+        "tool_calls": [*state.get("tool_calls", []), planner_call],
         "graph_path": _append_graph_path(state, "planner"),
     }
 

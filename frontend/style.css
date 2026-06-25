@@ -911,6 +911,26 @@ summary {
     color: var(--primary);
 }
 
+.runtime-latency-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.runtime-latency-pill {
+    background: var(--surface-low);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 18px;
+    padding: 4px 8px;
+}
+
+.runtime-latency-pill strong {
+    color: var(--primary);
+}
+
 .runtime-status.success {
     background: #dcfce7;
     color: #166534;

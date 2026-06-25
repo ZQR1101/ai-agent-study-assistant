@@ -261,6 +261,7 @@ def run_chat_request(request: ChatRequest) -> dict:
     rag_context = None
     plan = []
     flashcards = []
+    runtime_info = {}
 
     if use_rag and not agent_handles_rag:
         rag_context = get_rag_context(rag_question, request.top_k)
@@ -403,6 +404,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
         flashcards = agent_result.get("flashcards", [])
+        runtime_info = agent_result.get("runtime_info", {})
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -420,6 +422,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
         flashcards = agent_result.get("flashcards", [])
+        runtime_info = agent_result.get("runtime_info", {})
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -433,5 +436,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "trace": _group_trace_items(trace),
         "plan": plan,
         "flashcards": flashcards,
-        "runtime_info": {},
+        "runtime_info": runtime_info,
     }

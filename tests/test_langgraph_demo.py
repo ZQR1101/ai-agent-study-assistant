@@ -466,13 +466,15 @@ class LangGraphDemoTests(unittest.TestCase):
         result, _ = self._run_with_fake_registry("knowledge base explain agentic rag, generate flashcard, and quiz me")
         tool_calls = result["runtime_info"]["tool_calls"]
 
-        self.assertEqual([call["tool"] for call in tool_calls], ["rag", "explain", "flashcard", "quiz"])
+        self.assertEqual([call["tool"] for call in tool_calls], ["planner", "rag", "explain", "flashcard", "quiz"])
 
         for call in tool_calls:
             self.assertIn("success", call)
             self.assertIn("used_context", call)
             self.assertIn("output_length", call)
+            self.assertIn("latency_ms", call)
             self.assertIsInstance(call["output_length"], int)
+            self.assertIsInstance(call["latency_ms"], int)
 
     def test_llm_planner_runtime_info_records_success(self):
         result, registry = self._run_runtime_with_fake_registry(
