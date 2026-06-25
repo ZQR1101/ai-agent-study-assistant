@@ -911,13 +911,15 @@ summary {
     color: var(--primary);
 }
 
-.runtime-latency-summary {
+.runtime-latency-summary,
+.runtime-token-summary {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
 }
 
-.runtime-latency-pill {
+.runtime-latency-pill,
+.runtime-token-pill {
     background: var(--surface-low);
     border: 1px solid var(--outline-soft);
     border-radius: 8px;
@@ -927,7 +929,8 @@ summary {
     padding: 4px 8px;
 }
 
-.runtime-latency-pill strong {
+.runtime-latency-pill strong,
+.runtime-token-pill strong {
     color: var(--primary);
 }
 

@@ -4,7 +4,14 @@ from time import perf_counter
 
 from pydantic import ValidationError
 
-from backend.llm_service import chat, llm
+from backend.llm_service import (
+    attach_usage_to_runtime_info,
+    chat,
+    get_llm_usage_record_count,
+    llm,
+    summarize_llm_usage_since,
+    track_llm_usage,
+)
 from backend.schemas import AgentPlan
 from backend.tools import TOOL_REGISTRY, _is_valid_agent_context
 
@@ -94,7 +101,7 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
 
 
 def plan_agent_steps(user_input: str, custom_llm=None, history_context: str | None = None) -> dict:
-    active_llm = custom_llm or llm
+    active_llm = track_llm_usage(custom_llm or llm)
     history_block = history_context or "无"
     planner_prompt = f"""
 你是 AI 学习助手的 Planner。
@@ -299,9 +306,10 @@ def run_agent(
     top_k: int = 3,
     history_context: str | None = None,
 ) -> dict:
-    active_llm = custom_llm or llm
+    active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
     trace.append(f"Agent Planner 使用 history：{'是' if history_context else '否'}")
+    planner_usage_started_at = get_llm_usage_record_count(active_llm)
     planner_started_at = perf_counter()
     plan = plan_agent_steps(
         user_input,
@@ -344,6 +352,9 @@ def run_agent(
             "latency_ms": planner_latency_ms,
         }
     ]
+    planner_usage_delta = summarize_llm_usage_since(active_llm, planner_usage_started_at)
+    if planner_usage_delta:
+        tool_calls[0].update(planner_usage_delta)
     shared_context = {
         "original_input": user_input,
         "history_context": history_context or "",
@@ -361,6 +372,7 @@ def run_agent(
 
         trace.append(f"Agent Step {index} tool={tool}")
         trace.append(f"Agent Step {index} plan：tool={tool}, reason={step.get('reason')}")
+        tool_usage_started_at = get_llm_usage_record_count(active_llm)
         tool_started_at = perf_counter()
         result = _execute_agent_tool(
             tool,
@@ -396,6 +408,9 @@ def run_agent(
             "output_length": len(result_answer),
             "latency_ms": tool_latency_ms,
         }
+        tool_usage_delta = summarize_llm_usage_since(active_llm, tool_usage_started_at)
+        if tool_usage_delta:
+            tool_call.update(tool_usage_delta)
         if result.get("tool_name") and result["tool_name"] != tool:
             tool_call["requested_tool"] = tool
         if result.get("error"):
@@ -428,7 +443,7 @@ def run_agent(
         "sources": all_sources,
         "flashcards": all_flashcards,
         "fallback_used": fallback_used,
-        "runtime_info": {
+        "runtime_info": attach_usage_to_runtime_info({
             "runtime": "agent",
             "graph_path": ["planner", *[call["tool"] for call in tool_calls[1:]]],
             "node_count": len(tool_calls),
@@ -438,7 +453,7 @@ def run_agent(
             "planner_fallback": bool(plan.get("fallback")),
             "planner_error": plan.get("fallback_reason") or None,
             "error": None,
-        },
+        }, active_llm),
     }
 
 

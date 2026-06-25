@@ -3,6 +3,7 @@ from backend.config import is_image_model
 from backend.history_utils import format_history, normalize_history
 from backend.image_service import generate_image
 from backend.llm_service import (
+    attach_usage_to_runtime_info,
     build_llm,
     chat,
     explain,
@@ -10,6 +11,7 @@ from backend.llm_service import (
     llm,
     normalize_model,
     summarize,
+    track_llm_usage,
 )
 from backend.rag_service import (
     LEARN_FALLBACK_PREFIX,
@@ -253,7 +255,10 @@ def run_chat_request(request: ChatRequest) -> dict:
     if selected_model != request.model:
         trace.append(f"模型 {request.model} 不可用，已回退到 {selected_model}")
 
-    custom_llm = build_llm(model=selected_model, temperature=request.temperature)
+    custom_llm = track_llm_usage(
+        build_llm(model=selected_model, temperature=request.temperature),
+        selected_model,
+    )
     sources = []
     answer = ""
     executed_mode = request.mode
@@ -436,5 +441,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "trace": _group_trace_items(trace),
         "plan": plan,
         "flashcards": flashcards,
-        "runtime_info": runtime_info,
+        "runtime_info": attach_usage_to_runtime_info(runtime_info, custom_llm),
     }

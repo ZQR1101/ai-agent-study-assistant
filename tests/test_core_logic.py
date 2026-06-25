@@ -7,6 +7,7 @@ from backend.ai_core import run_chat_request, run_langgraph_chat_request
 from backend.agent_core import _extract_json_object, _fallback_agent_plan
 from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
+from backend.llm_service import summarize_usage_records, track_llm_usage
 from backend import rag_store
 from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
 from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, ChatResponse, FlashcardItem
@@ -55,6 +56,53 @@ class HistoryUtilsTests(unittest.TestCase):
 
         self.assertIn("What is RAG?", formatted)
         self.assertIn("RAG retrieves context first.", formatted)
+
+
+class LLMUsageTrackingTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, content: str, usage_metadata: dict | None = None):
+            self.content = content
+            self.usage_metadata = usage_metadata or {}
+
+    class FakeLLM:
+        def __init__(self, response):
+            self.response = response
+
+        def invoke(self, prompt: str):
+            self.prompt = prompt
+            return self.response
+
+    def test_usage_tracker_prefers_api_token_usage(self):
+        tracked_llm = track_llm_usage(
+            self.FakeLLM(self.FakeResponse(
+                "ok",
+                {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+            )),
+            "mimo-v2.5",
+        )
+
+        self.assertEqual(tracked_llm.invoke("hello").content, "ok")
+        summary = summarize_usage_records(tracked_llm.usage_records)
+
+        self.assertEqual(summary["token_usage"]["input_tokens"], 12)
+        self.assertEqual(summary["token_usage"]["output_tokens"], 4)
+        self.assertEqual(summary["token_usage"]["total_tokens"], 16)
+        self.assertEqual(summary["token_usage"]["source"], "api")
+        self.assertGreater(summary["estimated_cost"]["total"], 0)
+
+    def test_usage_tracker_estimates_when_api_usage_is_missing(self):
+        tracked_llm = track_llm_usage(
+            self.FakeLLM(self.FakeResponse("estimated response")),
+            "mimo-v2.5",
+        )
+
+        tracked_llm.invoke("estimate this prompt")
+        summary = summarize_usage_records(tracked_llm.usage_records)
+
+        self.assertEqual(summary["token_usage"]["source"], "estimated")
+        self.assertGreater(summary["token_usage"]["input_tokens"], 0)
+        self.assertGreater(summary["token_usage"]["output_tokens"], 0)
+        self.assertGreater(summary["estimated_cost"]["total"], 0)
 
 
 class RagStoreTests(unittest.TestCase):
@@ -305,7 +353,7 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         self.assertTrue(any("LangGraph workflow enabled" in item for block in result["trace"] for item in block["items"]))
         ChatResponse(**result)
         mock_workflow.assert_called_once()
-        self.assertEqual(mock_workflow.call_args.kwargs["custom_llm"], fake_llm)
+        self.assertEqual(mock_workflow.call_args.kwargs["custom_llm"]._wrapped_llm, fake_llm)
         self.assertEqual(mock_workflow.call_args.kwargs["top_k"], 5)
         self.assertEqual(mock_workflow.call_args.kwargs["planner_mode"], "rule")
 

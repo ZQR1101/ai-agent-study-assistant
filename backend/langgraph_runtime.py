@@ -7,7 +7,14 @@ from pydantic import ValidationError
 
 from backend.agent_core import _extract_json_object
 from backend.history_utils import format_history, normalize_history
-from backend.llm_service import build_llm, normalize_model
+from backend.llm_service import (
+    attach_usage_to_runtime_info,
+    build_llm,
+    get_llm_usage_record_count,
+    normalize_model,
+    summarize_llm_usage_since,
+    track_llm_usage,
+)
 from backend.schemas import AgentPlan, ChatRequest
 from backend.tools import TOOL_REGISTRY
 
@@ -553,10 +560,12 @@ def run_registry_tool_for_state(
     step_input: str,
     state: LangGraphAgentState,
 ) -> LangGraphAgentState:
+    usage_started_at = get_llm_usage_record_count(state.get("custom_llm"))
     tool_started_at = perf_counter()
     result = _run_registry_tool_raw(tool_name, step_input, state)
     latency_ms = _elapsed_ms(tool_started_at)
     result["latency_ms"] = latency_ms
+    usage_delta = summarize_llm_usage_since(state.get("custom_llm"), usage_started_at)
     answer = result.get("answer", "")
     incoming_sources = result.get("sources", [])
     incoming_flashcards = result.get("flashcards", [])
@@ -588,6 +597,8 @@ def run_registry_tool_for_state(
         "output_length": len(answer),
         "latency_ms": latency_ms,
     }
+    if usage_delta:
+        tool_call.update(usage_delta)
     if result.get("error"):
         tool_call["error"] = result["error"]
 
@@ -612,6 +623,7 @@ def run_registry_tool_for_state(
 def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
     message = state.get("message", "")
     planner_mode = state.get("planner_mode") or "rule"
+    usage_started_at = get_llm_usage_record_count(state.get("custom_llm"))
     planner_started_at = perf_counter()
     planner_result = _rule_planner_state(message, state)
     fallback_reason = ""
@@ -656,6 +668,9 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
         "output_length": len(plan),
         "latency_ms": latency_ms,
     }
+    usage_delta = summarize_llm_usage_since(state.get("custom_llm"), usage_started_at)
+    if usage_delta:
+        planner_call.update(usage_delta)
     if planner_result.get("planner_error"):
         planner_call["error"] = planner_result["planner_error"]
 
@@ -862,7 +877,7 @@ def finalizer_node(state: LangGraphAgentState) -> LangGraphAgentState:
 
 def build_runtime_info(state: LangGraphAgentState) -> dict:
     graph_path = state.get("graph_path", [])
-    return {
+    return attach_usage_to_runtime_info({
         "runtime": "langgraph",
         "graph_path": graph_path,
         "node_count": len(graph_path),
@@ -872,7 +887,7 @@ def build_runtime_info(state: LangGraphAgentState) -> dict:
         "planner_fallback": bool(state.get("planner_fallback", False)),
         "planner_error": state.get("planner_error") or None,
         "error": state.get("error") or None,
-    }
+    }, state.get("custom_llm"))
 
 
 def build_langgraph_workflow():
@@ -1023,7 +1038,10 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
     selected_model = normalize_model(request.model)
     history_messages = normalize_history(request.history)
     history_context = format_history(history_messages)
-    custom_llm = build_llm(model=selected_model, temperature=request.temperature)
+    custom_llm = track_llm_usage(
+        build_llm(model=selected_model, temperature=request.temperature),
+        selected_model,
+    )
     trace = [
         "执行方式：LangGraph",
         "LangGraph workflow enabled",

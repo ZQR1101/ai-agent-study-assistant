@@ -297,6 +297,32 @@ function formatLatency(value, fallback = "N/A") {
   return `${Math.max(0, Math.round(latency))}ms`
 }
 
+function formatTokenCount(value, fallback = "N/A") {
+  const tokens = Number(value)
+  if (!Number.isFinite(tokens)) {
+    return fallback
+  }
+
+  return Math.max(0, Math.round(tokens)).toLocaleString()
+}
+
+function formatTokenUsage(usage) {
+  if (!usage || typeof usage !== "object") {
+    return "N/A"
+  }
+
+  return `${formatTokenCount(usage.total_tokens)} total (${formatTokenCount(usage.input_tokens, "0")} in / ${formatTokenCount(usage.output_tokens, "0")} out)`
+}
+
+function formatCostEstimate(cost) {
+  const total = Number(cost?.total)
+  if (!Number.isFinite(total)) {
+    return "N/A"
+  }
+
+  return `$${total.toFixed(total >= 0.01 ? 4 : 6)} ${cost?.currency || "USD"}`
+}
+
 function getConversationTurns(messages) {
   const turns = []
   let pendingQuestion = ""
@@ -1205,6 +1231,8 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
   const path = graphPath.length > 0 ? graphPath : fallbackPath
   const toolCalls = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
   const timedToolCalls = toolCalls.filter((call) => getToolLatency(call) !== null)
+  const hasTokenUsage = Boolean(runtimeInfo.token_usage?.total_tokens)
+  const hasCostEstimate = runtimeInfo.estimated_cost?.total !== undefined && runtimeInfo.estimated_cost?.total !== null
 
   return (
     <section className="runtime-panel runtime-info-panel compact-runtime">
@@ -1222,6 +1250,20 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
               </span>
             )
           })}
+        </div>
+      ) : null}
+      {hasTokenUsage || hasCostEstimate ? (
+        <div className="runtime-token-summary" aria-label="Token and cost summary">
+          {hasTokenUsage ? (
+            <span className="runtime-token-pill">
+              <strong>Tokens:</strong> {formatTokenUsage(runtimeInfo.token_usage)}
+            </span>
+          ) : null}
+          {hasCostEstimate ? (
+            <span className="runtime-token-pill">
+              <strong>Cost:</strong> {formatCostEstimate(runtimeInfo.estimated_cost)}
+            </span>
+          ) : null}
         </div>
       ) : null}
       <dl className="runtime-grid execution-summary">
@@ -1278,6 +1320,10 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
                 </dd>
                 <dt>latency_ms</dt>
                 <dd>{formatLatency(getToolLatency(call))}</dd>
+                <dt>tokens</dt>
+                <dd>{formatTokenUsage(call.token_usage)}</dd>
+                <dt>cost</dt>
+                <dd>{formatCostEstimate(call.estimated_cost)}</dd>
                 <dt>output_length</dt>
                 <dd>{formatRuntimeValue(call.output_length, "0")}</dd>
                 {call.error ? (
