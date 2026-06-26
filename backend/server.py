@@ -59,6 +59,13 @@ def _startup_init_db():
         except Exception as exc:
             logger.warning("Failed to initialize database: %s", exc)
 
+    config = get_config()
+    if config.enable_rag_warmup:
+        from backend.rag_warmup import start_rag_warmup
+
+        result = start_rag_warmup(load_index=config.rag_warmup_load_index)
+        logger.info("RAG warmup startup trigger: started=%s", result["started"])
+
 
 class TextRequest(BaseModel):
     text: str
@@ -112,8 +119,10 @@ def home():
 @app.get("/health")
 def health_check():
     from backend.rag_store import get_rag_index_status
+    from backend.rag_warmup import get_rag_warmup_status
 
     config = get_config()
+    rag_warmup_status = get_rag_warmup_status()
     return {
         "status": "ok",
         "config": {
@@ -125,11 +134,30 @@ def health_check():
             "embedding_model_local_only": config.embedding_model_local_only,
         },
         "rag_index": get_rag_index_status(),
+        "rag_warmup": {
+            "enabled": config.enable_rag_warmup,
+            "status": rag_warmup_status["status"],
+        },
         "db_history_enabled": is_db_history_enabled(),
         "database_configured": get_database_url() is not None,
         "llm_judge_enabled": is_llm_judge_enabled(),
         "judge_persistence_enabled": is_judge_persistence_enabled(),
     }
+
+
+@app.get("/rag/status")
+def rag_status_api():
+    from backend.rag_warmup import get_rag_warmup_status
+
+    return get_rag_warmup_status()
+
+
+@app.post("/rag/warmup")
+def rag_warmup_api():
+    from backend.rag_warmup import start_rag_warmup
+
+    config = get_config()
+    return start_rag_warmup(load_index=config.rag_warmup_load_index)
 
 
 @app.post("/echo")

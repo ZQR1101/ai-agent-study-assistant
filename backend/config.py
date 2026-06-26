@@ -58,6 +58,8 @@ class AppConfig:
     api_key_source: str | None
     embedding_model: str
     embedding_model_local_only: bool
+    enable_rag_warmup: bool
+    rag_warmup_load_index: bool
 
     @property
     def has_api_key(self) -> bool:
@@ -124,4 +126,6 @@ def get_config() -> AppConfig:
         api_key_source=api_key_source,
         embedding_model=embedding_model,
         embedding_model_local_only=embedding_model_local_only,
+        enable_rag_warmup=read_bool_env("ENABLE_RAG_WARMUP", False),
+        rag_warmup_load_index=read_bool_env("RAG_WARMUP_LOAD_INDEX", True),
     )

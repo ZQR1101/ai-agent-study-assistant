@@ -2,11 +2,13 @@ from pathlib import Path
 import json
 import os
 import re
+import threading
 
 from backend.config import get_embedding_model_settings
 
 
 embedding_model = None
+_embedding_model_lock = threading.Lock()
 rag_index_error = None
 
 
@@ -38,34 +40,37 @@ def get_embedding_model():
     global embedding_model
 
     if embedding_model is None:
-        model_name_or_path, local_only = get_embedding_model_settings()
-        model_path = Path(model_name_or_path)
-        is_path_like = (
-            model_path.is_absolute()
-            or model_name_or_path.startswith((".", "/", "\\"))
-            or "/" in model_name_or_path
-            or "\\" in model_name_or_path
-        )
-        if local_only and is_path_like and not model_path.exists():
-            raise FileNotFoundError(
-                f"Embedding model path not found: {model_name_or_path}. "
-                "Set EMBEDDING_MODEL_PATH to an existing local model directory, "
-                "or set EMBEDDING_MODEL_LOCAL_ONLY=false to allow model download."
-            )
-        if local_only:
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        with _embedding_model_lock:
+            if embedding_model is None:
+                model_name_or_path, local_only = get_embedding_model_settings()
+                model_path = Path(model_name_or_path)
+                is_path_like = (
+                    model_path.is_absolute()
+                    or model_name_or_path.startswith((".", "/", "\\"))
+                    or "/" in model_name_or_path
+                    or "\\" in model_name_or_path
+                )
+                if local_only and is_path_like and not model_path.exists():
+                    raise FileNotFoundError(
+                        f"Embedding model path not found: {model_name_or_path}. "
+                        "Set EMBEDDING_MODEL_PATH to an existing local model directory, "
+                        "or set EMBEDDING_MODEL_LOCAL_ONLY=false to allow model download."
+                    )
+                if local_only:
+                    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-        SentenceTransformer = _get_sentence_transformer()
-        embedding_model = SentenceTransformer(
-            model_name_or_path,
-            local_files_only=local_only,
-        )
+                SentenceTransformer = _get_sentence_transformer()
+                embedding_model = SentenceTransformer(
+                    model_name_or_path,
+                    local_files_only=local_only,
+                )
 
     return embedding_model
 
 chunks = []
 index = None
+_rag_index_lock = threading.Lock()
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -210,19 +215,26 @@ def load_rag_index():
     global chunks
     global rag_index_error
 
-    rag_index_error = None
+    with _rag_index_lock:
+        rag_index_error = None
 
-    if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
-        return False
+        if index is not None:
+            return True
 
-    faiss = _get_faiss()
-    index = faiss.read_index(str(INDEX_FILE))
+        if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
+            return False
 
-    with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
-        chunks = json.load(f)
+        faiss = _get_faiss()
+        loaded_index = faiss.read_index(str(INDEX_FILE))
 
-    print(f"已加载 FAISS RAG 索引，共 {len(chunks)} 个 chunks。")
-    return True
+        with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+            loaded_chunks = json.load(f)
+
+        index = loaded_index
+        chunks = loaded_chunks
+
+        print(f"已加载 FAISS RAG 索引，共 {len(chunks)} 个 chunks。")
+        return True
 
 
 def rebuild_rag_index():
@@ -237,7 +249,8 @@ def rebuild_rag_index():
     chunks = build_chunks()
 
     if not chunks:
-        index = None
+        with _rag_index_lock:
+            index = None
         print("知识库为空，未构建索引。")
         return
 
@@ -253,10 +266,12 @@ def rebuild_rag_index():
 
     dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatIP(dimension)
-    index.add(embeddings)
+    new_index = faiss.IndexFlatIP(dimension)
+    new_index.add(embeddings)
 
-    save_rag_index()
+    with _rag_index_lock:
+        index = new_index
+        save_rag_index()
 
     print(f"FAISS RAG 索引构建完成，共 {len(chunks)} 个 chunks，并已保存到本地。")
 
@@ -266,8 +281,9 @@ def ensure_rag_index():
     global chunks
     global rag_index_error
 
-    if index is not None:
-        return
+    with _rag_index_lock:
+        if index is not None:
+            return
 
     loaded = load_rag_index()
 
@@ -275,9 +291,10 @@ def ensure_rag_index():
         try:
             rebuild_rag_index()
         except Exception as exc:
-            index = None
-            chunks = []
-            rag_index_error = str(exc)
+            with _rag_index_lock:
+                index = None
+                chunks = []
+                rag_index_error = str(exc)
             print(f"RAG index unavailable: {rag_index_error}")
 
 
