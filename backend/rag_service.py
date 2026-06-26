@@ -36,6 +36,7 @@ def get_rag_context(
     raw_count = search_result.get("raw_count", 0)
     valid_count = search_result.get("valid_count", len(chunks))
     discarded_invalid_count = search_result.get("discarded_invalid_count", 0)
+    error = search_result.get("error")
 
     if not chunks or max_score is None or max_score < score_threshold:
         return {
@@ -48,6 +49,7 @@ def get_rag_context(
             "raw_count": raw_count,
             "valid_count": valid_count,
             "discarded_invalid_count": discarded_invalid_count,
+            "error": error,
         }
 
     context_parts = []
@@ -76,6 +78,7 @@ def get_rag_context(
         "raw_count": raw_count,
         "valid_count": valid_count,
         "discarded_invalid_count": discarded_invalid_count,
+        "error": error,
     }
 
 

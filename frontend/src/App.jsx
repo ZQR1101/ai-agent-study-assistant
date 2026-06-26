@@ -34,6 +34,7 @@ const EMPTY_INSIGHTS = {
   flashcards: [],
   trace: [],
   runtime_info: {},
+  judge_evaluation: null,
 }
 
 function createSessionId() {
@@ -177,6 +178,7 @@ function getResponseSnapshot(data) {
     trace: Array.isArray(data.trace) ? data.trace : [],
     flashcards,
     runtime_info: hasRuntimeInfo(data.runtime_info) ? data.runtime_info : {},
+    judge_evaluation: data.judge_evaluation || null,
   }
 }
 
@@ -321,6 +323,26 @@ function formatCostEstimate(cost) {
   }
 
   return `$${total.toFixed(total >= 0.01 ? 4 : 6)} ${cost?.currency || "USD"}`
+}
+
+function formatJudgeScore(value) {
+  const score = Number(value)
+  if (!Number.isFinite(score)) {
+    return "不适用"
+  }
+
+  return score.toFixed(1)
+}
+
+function getLatestJudgeEvaluation(turns) {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const evaluation = turns[index]?.response?.judge_evaluation
+    if (evaluation) {
+      return evaluation
+    }
+  }
+
+  return null
 }
 
 function getConversationTurns(messages) {
@@ -977,7 +999,17 @@ function CardsView({ cards, onClear }) {
   )
 }
 
-function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChange }) {
+function ResultsPanel({
+  turns,
+  activeTab,
+  onTabChange,
+  settings,
+  onSettingsChange,
+  judgeTrend,
+  judgeTrendLoading,
+  judgeTrendError,
+  onJudgeFeedback,
+}) {
   return (
     <aside className="results-panel inspector-panel" aria-label="学习配置与成果">
       <header className="results-header inspector-header">
@@ -1089,6 +1121,7 @@ function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChang
           ["plan", "计划"],
           ["flashcards", "卡片"],
           ["trace", "路径"],
+          ["judge", "评分"],
         ].map(([tab, label]) => (
           <button
             type="button"
@@ -1102,7 +1135,14 @@ function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChang
       </nav>
 
       <section className="insight-section active">
-        <InsightContent tab={activeTab} turns={turns} />
+        <InsightContent
+          tab={activeTab}
+          turns={turns}
+          judgeTrend={judgeTrend}
+          judgeTrendLoading={judgeTrendLoading}
+          judgeTrendError={judgeTrendError}
+          onJudgeFeedback={onJudgeFeedback}
+        />
       </section>
 
       <div className="study-progress">
@@ -1116,7 +1156,19 @@ function ResultsPanel({ turns, activeTab, onTabChange, settings, onSettingsChang
   )
 }
 
-function InsightContent({ tab, turns }) {
+function InsightContent({ tab, turns, judgeTrend, judgeTrendLoading, judgeTrendError, onJudgeFeedback }) {
+  if (tab === "judge") {
+    return (
+      <JudgeEvaluationPanel
+        turns={turns}
+        trend={judgeTrend}
+        loading={judgeTrendLoading}
+        error={judgeTrendError}
+        onJudgeFeedback={onJudgeFeedback}
+      />
+    )
+  }
+
   if (turns.length === 0) {
     const copy = {
       sources: ["等待一次知识检索", "启用 RAG 后，这里会显示命中文档和相关片段。"],
@@ -1224,6 +1276,270 @@ function InsightContent({ tab, turns }) {
       </article>
     )
   })
+}
+
+const JUDGE_METRICS = [
+  ["accuracy", "准确性"],
+  ["completeness", "完整性"],
+  ["citation_quality", "引用质量"],
+  ["overall_score", "总分"],
+]
+
+const JUDGE_METRIC_LABELS = {
+  Accuracy: "准确性",
+  accuracy: "准确性",
+  Completeness: "完整性",
+  completeness: "完整性",
+  "Citation Quality": "引用质量",
+  citation_quality: "引用质量",
+  "Overall Score": "总分",
+  overall_score: "总分",
+  Overall: "总体",
+  overall: "总体",
+}
+
+const JUDGE_VERDICT_LABELS = {
+  PASS: "通过",
+  WEAK_PASS: "基本通过",
+  FAIL: "未通过",
+}
+
+const JUDGE_REASON_TRANSLATIONS = {
+  "Judge returned a score below 10 but did not provide a specific deduction reason.":
+    "Judge 给出了低于 10 分的分数，但没有提供具体扣分原因。",
+  "RAG enabled but no explicit source citation.":
+    "已启用 RAG，但回答没有明确引用来源。",
+  "Missing explicit citation.": "缺少明确引用。",
+  "Not enough source support.": "来源支撑不足。",
+  "Missing one part.": "缺少一个重要部分。",
+}
+
+function getVerdictLabel(verdict) {
+  return JUDGE_VERDICT_LABELS[verdict] || "不适用"
+}
+
+function getJudgeMetricLabel(metric) {
+  const normalized = String(metric || "").trim()
+  return JUDGE_METRIC_LABELS[normalized] || normalized || "总体"
+}
+
+function getDeductionReason(reason) {
+  const normalized = String(reason || "").trim()
+  return JUDGE_REASON_TRANSLATIONS[normalized] || normalized || "未提供原因。"
+}
+
+function getDeductionPoints(points) {
+  const value = Number(points)
+  if (!Number.isFinite(value)) {
+    return ""
+  }
+
+  return `-${value.toFixed(value % 1 === 0 ? 0 : 1)}`
+}
+
+function JudgeScoreRows({ evaluation }) {
+  return (
+    <div className="judge-score-grid">
+      {JUDGE_METRICS.map(([key, label]) => {
+        const rawScore = evaluation?.[key]
+        const score = rawScore === null || rawScore === undefined ? NaN : Number(rawScore)
+        const width = Number.isFinite(score) ? `${Math.max(0, Math.min(10, score)) * 10}%` : "0%"
+        return (
+          <div className="judge-score-row" key={key}>
+            <div className="judge-score-label">
+              <span>{label}</span>
+              <strong>{formatJudgeScore(rawScore)}</strong>
+            </div>
+            <div className="judge-score-track">
+              <span style={{ width }} />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function JudgeTrendChart({ evaluations, error }) {
+  const points = (Array.isArray(evaluations) ? evaluations : [])
+    .filter((item) => Number.isFinite(Number(item.overall_score)))
+    .slice(0, 20)
+    .reverse()
+
+  if (points.length === 0) {
+    return (
+      <span className={error ? "runtime-empty judge-trend-error" : "runtime-empty"}>
+        {error ? "评分历史暂不可用。" : "暂无评分记录。"}
+      </span>
+    )
+  }
+
+  const width = 280
+  const height = 92
+  const padding = 10
+  const chartWidth = width - padding * 2
+  const chartHeight = height - padding * 2
+  const coordinates = points.map((item, index) => {
+    const score = Math.max(0, Math.min(10, Number(item.overall_score)))
+    const x = points.length === 1
+      ? width / 2
+      : padding + (index / (points.length - 1)) * chartWidth
+    const y = padding + chartHeight - (score / 10) * chartHeight
+    return { x, y, score, id: item.id || `${item.created_at}-${index}` }
+  })
+  const path = coordinates.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ")
+  const latest = points[points.length - 1]
+
+  return (
+    <div className="judge-trend-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="最近 20 次评测总分趋势">
+        <line x1={padding} x2={width - padding} y1={padding} y2={padding} />
+        <line x1={padding} x2={width - padding} y1={height - padding} y2={height - padding} />
+        <path d={path} />
+        {coordinates.map((point) => (
+          <circle cx={point.x} cy={point.y} r="3.5" key={point.id}>
+            <title>{formatJudgeScore(point.score)}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="judge-trend-meta">
+        <span>{points.length} 次评测</span>
+        <strong>最新 {formatJudgeScore(latest.overall_score)}</strong>
+      </div>
+    </div>
+  )
+}
+
+function JudgeDeductions({ deductions }) {
+  const items = Array.isArray(deductions) ? deductions : []
+
+  if (items.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="judge-deductions">
+      <strong>扣分原因</strong>
+      <ul>
+        {items.map((item, index) => (
+          <li key={`${item.metric || "deduction"}-${index}`}>
+            <span>{getJudgeMetricLabel(item.metric)} {getDeductionPoints(item.points)}</span>
+            <em>{getDeductionReason(item.reason)}</em>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function JudgeFeedbackControls({ evaluation, onJudgeFeedback }) {
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(evaluation?.judge_feedback || "")
+
+  useEffect(() => {
+    setSaved(evaluation?.judge_feedback || "")
+  }, [evaluation?.id, evaluation?.judge_feedback])
+
+  if (!evaluation?.id || !onJudgeFeedback) {
+    return null
+  }
+
+  async function submit(judgeFeedback) {
+    let reason = ""
+    if (judgeFeedback === "bad") {
+      reason = window.prompt("Judge 哪里不合理？例如：分数过高") || ""
+      if (!reason.trim()) {
+        return
+      }
+    }
+
+    setSaving(true)
+    try {
+      await onJudgeFeedback(evaluation.id, judgeFeedback, reason.trim())
+      setSaved(judgeFeedback)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="judge-feedback-actions">
+      <button
+        type="button"
+        className={saved === "good" ? "active" : ""}
+        disabled={saving}
+        onClick={() => submit("good")}
+      >
+        👍 Judge 合理
+      </button>
+      <button
+        type="button"
+        className={saved === "bad" ? "active danger" : "danger"}
+        disabled={saving}
+        onClick={() => submit("bad")}
+      >
+        👎 Judge 不合理
+      </button>
+    </div>
+  )
+}
+
+function JudgeEvaluationPanel({ turns, trend, loading, error, onJudgeFeedback }) {
+  const latest = getLatestJudgeEvaluation(turns)
+  const evaluations = Array.isArray(trend) ? trend : []
+
+  return (
+    <div className="judge-panel">
+      <article className="judge-card judge-current">
+        <div className="judge-card-header">
+          <strong>LLM-as-Judge</strong>
+          {latest ? (
+            <span className={`judge-verdict ${String(latest.verdict || "").toLowerCase()}`}>
+              {getVerdictLabel(latest.verdict)}
+            </span>
+          ) : null}
+        </div>
+        {latest ? (
+          <>
+            <div className="judge-summary">
+              <span>分数：{formatJudgeScore(latest.overall_score)}/10</span>
+              <span>结论：{getVerdictLabel(latest.verdict)}</span>
+            </div>
+            <JudgeScoreRows evaluation={latest} />
+            {latest.feedback ? <p className="judge-feedback">{latest.feedback}</p> : null}
+            {!latest.id ? (
+              <p className="judge-feedback judge-trend-error">
+                本次评分尚未持久化，请检查数据库连接。
+              </p>
+            ) : null}
+            <JudgeDeductions deductions={latest.deductions} />
+            <JudgeFeedbackControls evaluation={latest} onJudgeFeedback={onJudgeFeedback} />
+          </>
+        ) : (
+          <span className="runtime-empty">当前回答暂无评分。</span>
+        )}
+      </article>
+
+      <article className="judge-card">
+        <div className="judge-card-header">
+          <strong>最近 20 次趋势</strong>
+          {loading ? <span>加载中</span> : null}
+        </div>
+        <JudgeTrendChart evaluations={evaluations} error={error} />
+        {error ? <p className="judge-feedback judge-trend-error">{error}</p> : null}
+        {evaluations.length > 0 ? (
+          <ol className="judge-trend-list">
+            {evaluations.slice(0, 5).map((item) => (
+              <li key={item.id || `${item.created_at}-${item.question}`}>
+                <span>{formatJudgeScore(item.overall_score)} · {getVerdictLabel(item.verdict)}</span>
+                <em>{item.question || "未命名"}</em>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </article>
+    </div>
+  )
 }
 
 function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
@@ -1377,6 +1693,9 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [judgeTrend, setJudgeTrend] = useState([])
+  const [judgeTrendLoading, setJudgeTrendLoading] = useState(false)
+  const [judgeTrendError, setJudgeTrendError] = useState("")
   const [settings, setSettings] = useState({
     model: "mimo-v2.5",
     plannerMode: "rule",
@@ -1402,6 +1721,10 @@ export default function App() {
       loadKnowledgeLibrary()
     }
   }, [activeView])
+
+  useEffect(() => {
+    loadJudgeTrend()
+  }, [])
 
   function persistConversation(nextMessages, sessionId = currentSessionId) {
     if (nextMessages.length === 0) {
@@ -1479,6 +1802,69 @@ export default function App() {
     } finally {
       setKnowledgeLoading(false)
     }
+  }
+
+  async function loadJudgeTrend() {
+    setJudgeTrendLoading(true)
+    setJudgeTrendError("")
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 5500)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/judge-results/recent?limit=20`, {
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        let detail = ""
+        try {
+          const errorPayload = await response.json()
+          detail = errorPayload.detail || errorPayload.message || ""
+        } catch {
+          detail = ""
+        }
+        throw new Error(detail || `Judge trend request failed: ${response.status}`)
+      }
+
+      const data = await response.json()
+      const results = Array.isArray(data.results) ? data.results : data.evaluations
+      if (data.message) {
+        setJudgeTrendError(data.message)
+      }
+      if (Array.isArray(results) && results.length > 0) {
+        setJudgeTrend(results)
+      }
+    } catch (error) {
+      console.warn("Failed to load judge trend", error)
+      setJudgeTrendError(error.name === "AbortError" ? "Judge history request timed out." : error.message)
+    } finally {
+      window.clearTimeout(timeoutId)
+      setJudgeTrendLoading(false)
+    }
+  }
+
+  async function submitJudgeFeedback(resultId, judgeFeedback, reason = "") {
+    const response = await fetch(`${API_BASE_URL}/judge-results/${resultId}/feedback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        judge_feedback: judgeFeedback,
+        reason,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Judge feedback request failed: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const updated = data.result
+    if (updated) {
+      setJudgeTrend((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    }
+    await loadJudgeTrend()
+    return updated
   }
 
   async function openKnowledgeFile(file) {
@@ -1599,7 +1985,13 @@ export default function App() {
       persistConversation(nextMessages)
       const responseCards = getResponseCards(data, message)
       addCardsToLibrary(responseCards, message)
-      setActiveTab(data.mode === "image" && responseCards.length > 0 ? "flashcards" : "sources")
+      if (data.judge_evaluation) {
+        setJudgeTrend((current) => [data.judge_evaluation, ...current].slice(0, 20))
+        setActiveTab("judge")
+        loadJudgeTrend()
+      } else {
+        setActiveTab(data.mode === "image" && responseCards.length > 0 ? "flashcards" : "sources")
+      }
     } catch (error) {
       const errorMessage = {
         id: createSessionId(),
@@ -1683,6 +2075,10 @@ export default function App() {
           activeTab={activeTab}
           onTabChange={setActiveTab}
           settings={settings}
+          judgeTrend={judgeTrend}
+          judgeTrendLoading={judgeTrendLoading}
+          judgeTrendError={judgeTrendError}
+          onJudgeFeedback={submitJudgeFeedback}
           onSettingsChange={(patch) => setSettings((current) => {
             const next = { ...current, ...patch }
             if (!next.useAgent && !next.useLangGraph) {

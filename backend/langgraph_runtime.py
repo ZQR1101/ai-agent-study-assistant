@@ -318,6 +318,29 @@ def _intent_from_plan_steps(steps: list[dict]) -> dict:
     }
 
 
+def _ensure_requested_rag_step(state: LangGraphAgentState, planner_result: dict) -> dict:
+    """Keep LLM planner output aligned with an explicit RAG toggle."""
+    if not state.get("use_rag") or planner_result.get("use_rag"):
+        return planner_result
+
+    message = state.get("message", "")
+    plan = [
+        {
+            "tool": "rag",
+            "input": message,
+            "reason": "RAG was explicitly enabled in request settings.",
+        },
+        *planner_result.get("plan", []),
+    ]
+    normalized_plan = _normalize_plan_steps(plan)
+    intent = _intent_from_plan_steps(normalized_plan)
+    return {
+        **planner_result,
+        **intent,
+        "plan": normalized_plan,
+    }
+
+
 def _rule_planner_state(message: str, state: LangGraphAgentState) -> dict:
     intent = detect_intent(message, use_rag_requested=state.get("use_rag", False))
     plan = _plan_from_intent(message, intent)
@@ -426,12 +449,12 @@ JSON 必须符合 AgentPlan schema。
         raise ValueError("planner returned unknown tool")
 
     intent = _intent_from_plan_steps(steps)
-    return {
+    return _ensure_requested_rag_step(state, {
         **intent,
         "plan": steps,
         "planner_fallback": False,
         "planner_error": "",
-    }
+    })
 
 
 def _first_plan_input(state: LangGraphAgentState, tool_name: str) -> str:
@@ -657,6 +680,8 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
     ]
     if fallback_reason:
         trace.append(f"planner: fallback reason={fallback_reason}")
+    if state.get("use_rag") and planner_mode == "llm" and any(step.get("tool") == "rag" for step in plan):
+        trace.append("planner: rag enforced by request setting")
 
     planner_call = {
         "node": "planner",

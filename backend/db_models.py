@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -51,3 +51,29 @@ class ChatMessage(Base):
 
     def __repr__(self) -> str:
         return f"<ChatMessage id={self.id} role={self.role!r} session_id={self.session_id!r}>"
+
+
+class JudgeEvaluation(Base):
+    __tablename__ = "judge_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    judge_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    accuracy: Mapped[float] = mapped_column(Float)
+    completeness: Mapped[float] = mapped_column(Float)
+    citation_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    overall_score: Mapped[float] = mapped_column(Float)
+    verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    deductions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_feedback: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    judge_feedback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<JudgeEvaluation id={self.id} score={self.overall_score!r}>"

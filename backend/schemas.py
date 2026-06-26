@@ -60,6 +60,36 @@ class FlashcardPayload(BaseModel):
     cards: list[FlashcardItem] = Field(default_factory=list)
 
 
+class JudgeDeduction(BaseModel):
+    metric: str
+    points: float | None = Field(default=None, ge=0.0)
+    reason: str
+
+
+class JudgeEvaluationResult(BaseModel):
+    id: int | None = None
+    session_id: str | None = None
+    question: str | None = None
+    answer: str | None = None
+    judge_model: str | None = None
+    accuracy: float = Field(..., ge=0.0, le=10.0)
+    completeness: float = Field(..., ge=0.0, le=10.0)
+    citation_quality: float | None = Field(default=None, ge=0.0, le=10.0)
+    overall_score: float = Field(..., ge=0.0, le=10.0)
+    verdict: Literal["PASS", "WEAK_PASS", "FAIL"] | None = None
+    deductions: list[JudgeDeduction] = Field(default_factory=list)
+    feedback: str | None = None
+    raw_output: str | None = None
+    judge_feedback: Literal["good", "bad"] | None = None
+    judge_feedback_reason: str | None = None
+    created_at: str | None = None
+
+
+class JudgeFeedbackRequest(BaseModel):
+    judge_feedback: Literal["good", "bad"]
+    reason: str | None = None
+
+
 class ChatResponse(BaseModel):
     answer: str
     mode: str
@@ -70,6 +100,7 @@ class ChatResponse(BaseModel):
     plan: list[AgentPlanStep] = Field(default_factory=list)
     flashcards: list[FlashcardItem] = Field(default_factory=list)
     runtime_info: dict = Field(default_factory=dict)
+    judge_evaluation: JudgeEvaluationResult | None = None
 
 
 class SessionSummary(BaseModel):

@@ -7,6 +7,7 @@ from backend.config import get_embedding_model_settings
 
 
 embedding_model = None
+rag_index_error = None
 
 
 def _get_pdf_reader():
@@ -38,6 +39,19 @@ def get_embedding_model():
 
     if embedding_model is None:
         model_name_or_path, local_only = get_embedding_model_settings()
+        model_path = Path(model_name_or_path)
+        is_path_like = (
+            model_path.is_absolute()
+            or model_name_or_path.startswith((".", "/", "\\"))
+            or "/" in model_name_or_path
+            or "\\" in model_name_or_path
+        )
+        if local_only and is_path_like and not model_path.exists():
+            raise FileNotFoundError(
+                f"Embedding model path not found: {model_name_or_path}. "
+                "Set EMBEDDING_MODEL_PATH to an existing local model directory, "
+                "or set EMBEDDING_MODEL_LOCAL_ONLY=false to allow model download."
+            )
         if local_only:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -194,6 +208,9 @@ def save_rag_index():
 def load_rag_index():
     global index
     global chunks
+    global rag_index_error
+
+    rag_index_error = None
 
     if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
         return False
@@ -211,6 +228,9 @@ def load_rag_index():
 def rebuild_rag_index():
     global chunks
     global index
+    global rag_index_error
+
+    rag_index_error = None
 
     print("正在构建 FAISS RAG 索引...")
 
@@ -243,6 +263,8 @@ def rebuild_rag_index():
 
 def ensure_rag_index():
     global index
+    global chunks
+    global rag_index_error
 
     if index is not None:
         return
@@ -250,12 +272,27 @@ def ensure_rag_index():
     loaded = load_rag_index()
 
     if not loaded:
-        rebuild_rag_index()
+        try:
+            rebuild_rag_index()
+        except Exception as exc:
+            index = None
+            chunks = []
+            rag_index_error = str(exc)
+            print(f"RAG index unavailable: {rag_index_error}")
 
 
 def get_rag_index_status() -> dict:
     chunks_count = None
     chunks_error = None
+    model_name_or_path, local_only = get_embedding_model_settings()
+    model_path = Path(model_name_or_path)
+    is_path_like = (
+        model_path.is_absolute()
+        or model_name_or_path.startswith((".", "/", "\\"))
+        or "/" in model_name_or_path
+        or "\\" in model_name_or_path
+    )
+    model_path_missing = bool(local_only and is_path_like and not model_path.exists())
 
     if CHUNKS_FILE.exists():
         try:
@@ -264,11 +301,21 @@ def get_rag_index_status() -> dict:
         except (OSError, json.JSONDecodeError) as error:
             chunks_error = str(error)
 
-    ready = INDEX_FILE.exists() and CHUNKS_FILE.exists() and chunks_error is None
+    ready = (
+        INDEX_FILE.exists()
+        and CHUNKS_FILE.exists()
+        and chunks_error is None
+        and not model_path_missing
+        and rag_index_error is None
+    )
     message = (
         "RAG index is ready"
         if ready
-        else "RAG index is missing or incomplete; run python scripts/check_setup.py or POST /rebuild-index"
+        else (
+            f"Embedding model path is missing: {model_name_or_path}"
+            if model_path_missing
+            else "RAG index is missing or incomplete; run python scripts/check_setup.py or POST /rebuild-index"
+        )
     )
 
     return {
@@ -279,6 +326,10 @@ def get_rag_index_status() -> dict:
         "chunks_exists": CHUNKS_FILE.exists(),
         "chunks_count": chunks_count,
         "chunks_error": chunks_error,
+        "embedding_model": model_name_or_path,
+        "embedding_model_local_only": local_only,
+        "embedding_model_path_missing": model_path_missing,
+        "error": rag_index_error,
         "message": message,
     }
 
@@ -359,11 +410,12 @@ def search_relevant_chunks(
 ):
     global index
     global chunks
+    global rag_index_error
 
     ensure_rag_index()
     expanded_question = expand_query(question)
 
-    if index is None or not chunks:
+    if rag_index_error or index is None or not chunks:
         if include_metadata:
             return {
                 "chunks": [],
@@ -374,14 +426,31 @@ def search_relevant_chunks(
                 "raw_count": 0,
                 "valid_count": 0,
                 "discarded_invalid_count": 0,
+                "error": rag_index_error,
             }
         return []
 
-    model = get_embedding_model()
-    faiss = _get_faiss()
-    np = _get_numpy()
-    question_embedding = model.encode([expanded_question])
-    question_embedding = np.array(question_embedding).astype("float32")
+    try:
+        model = get_embedding_model()
+        faiss = _get_faiss()
+        np = _get_numpy()
+        question_embedding = model.encode([expanded_question])
+        question_embedding = np.array(question_embedding).astype("float32")
+    except Exception as exc:
+        rag_index_error = str(exc)
+        if include_metadata:
+            return {
+                "chunks": [],
+                "highest_score": None,
+                "threshold": similarity_threshold,
+                "passed_threshold": False,
+                "expanded_query": expanded_question,
+                "raw_count": 0,
+                "valid_count": 0,
+                "discarded_invalid_count": 0,
+                "error": rag_index_error,
+            }
+        return []
 
     faiss.normalize_L2(question_embedding)
 

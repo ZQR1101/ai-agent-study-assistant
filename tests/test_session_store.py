@@ -8,6 +8,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.db_models import Base, ChatMessage, ChatSession
+from backend.evaluation_store import (
+    list_recent_judge_results,
+    save_judge_result,
+    update_judge_feedback,
+)
 from backend.session_store import (
     create_or_get_session,
     get_recent_messages,
@@ -121,6 +126,61 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIn("id", messages[0])
         self.assertIn("session_id", messages[0])
         self.assertIn("created_at", messages[0])
+
+    def test_save_and_list_judge_evaluations(self):
+        with self.SessionLocal() as db:
+            first = save_judge_result(
+                db,
+                session_id="s1",
+                question="Question 1",
+                answer="Answer 1",
+                evaluation={
+                    "judge_model": "judge-model",
+                    "accuracy": 8,
+                    "completeness": 7,
+                    "citation_quality": 6,
+                    "overall_score": 7,
+                    "verdict": "WEAK_PASS",
+                    "deductions": [
+                        {"metric": "Citation Quality", "points": 4, "reason": "Not enough source support."}
+                    ],
+                    "feedback": "ok",
+                    "raw_output": "{}",
+                },
+            )
+            second = save_judge_result(
+                db,
+                session_id="s1",
+                question="Question 2",
+                answer="Answer 2",
+                evaluation={
+                    "judge_model": "judge-model",
+                    "accuracy": 9,
+                    "completeness": 8,
+                    "citation_quality": None,
+                    "overall_score": 8,
+                    "verdict": "PASS",
+                },
+            )
+
+            evaluations = list_recent_judge_results(db, limit=20)
+            updated = update_judge_feedback(
+                db,
+                result_id=first["id"],
+                judge_feedback="bad",
+                reason="score too high",
+            )
+
+        self.assertEqual(len(evaluations), 2)
+        self.assertEqual(evaluations[0]["id"], second["id"])
+        self.assertEqual(evaluations[1]["id"], first["id"])
+        self.assertEqual(evaluations[0]["overall_score"], 8)
+        self.assertIsNone(evaluations[0]["citation_quality"])
+        self.assertEqual(evaluations[0]["verdict"], "PASS")
+        self.assertEqual(evaluations[1]["feedback"], "ok")
+        self.assertEqual(evaluations[1]["deductions"][0]["metric"], "Citation Quality")
+        self.assertEqual(updated["judge_feedback"], "bad")
+        self.assertEqual(updated["judge_feedback_reason"], "score too high")
 
 
 class DatabaseModuleTests(unittest.TestCase):

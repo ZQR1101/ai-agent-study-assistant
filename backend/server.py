@@ -14,8 +14,14 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from backend.config import get_config
-from backend.database import get_db_session, init_db, is_db_history_enabled, get_database_url
-from backend.schemas import ChatRequest, ChatResponse
+from backend.database import get_database_url, get_db_session, init_db, is_db_history_enabled
+from backend.evaluation_store import (
+    list_recent_judge_results,
+    save_judge_result,
+    update_judge_feedback,
+)
+from backend.judge_service import is_judge_persistence_enabled, is_llm_judge_enabled, judge_answer
+from backend.schemas import ChatRequest, ChatResponse, JudgeFeedbackRequest
 from backend.session_store import (
     create_or_get_session,
     get_recent_messages,
@@ -45,11 +51,11 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup_init_db():
-    """Initialize database tables on startup if DB history is enabled."""
-    if is_db_history_enabled():
+    """Initialize database tables on startup when a database is configured."""
+    if get_database_url() and (is_db_history_enabled() or is_judge_persistence_enabled()):
         try:
             init_db()
-            logger.info("Database tables initialized (ENABLE_DB_HISTORY=true)")
+            logger.info("Database tables initialized")
         except Exception as exc:
             logger.warning("Failed to initialize database: %s", exc)
 
@@ -121,6 +127,8 @@ def health_check():
         "rag_index": get_rag_index_status(),
         "db_history_enabled": is_db_history_enabled(),
         "database_configured": get_database_url() is not None,
+        "llm_judge_enabled": is_llm_judge_enabled(),
+        "judge_persistence_enabled": is_judge_persistence_enabled(),
     }
 
 
@@ -133,8 +141,10 @@ def echo_api(request: TextRequest):
 def chat_api(request: ChatRequest):
     from backend.ai_core import run_chat_request
 
-    session_id = None
+    session_id = request.session_id
     db_history_error = None
+    judge_error = None
+    judge_persistence_error = None
 
     # --- DB history: load context ---
     if is_db_history_enabled():
@@ -157,6 +167,27 @@ def chat_api(request: ChatRequest):
     # --- Execute chat ---
     result = run_chat_request(request)
 
+    # --- LLM-as-Judge evaluation ---
+    if is_llm_judge_enabled() and result.get("answer"):
+        try:
+            evaluation = judge_answer(
+                request.message,
+                result["answer"],
+                sources=result.get("sources", []),
+                trace=result.get("trace", []),
+                runtime_info=result.get("runtime_info", {}),
+                model=result.get("model") or request.model,
+            )
+            result["judge_evaluation"] = {
+                **evaluation,
+                "session_id": session_id,
+                "question": request.message,
+                "answer": result["answer"],
+            }
+        except Exception as exc:
+            judge_error = f"judge_error: {exc}"
+            logger.warning("LLM judge evaluation failed: %s", exc)
+
     # --- DB history: save messages ---
     if is_db_history_enabled() and session_id:
         try:
@@ -168,6 +199,21 @@ def chat_api(request: ChatRequest):
             db_history_error = f"db_save_error: {exc}"
             logger.warning("DB history save failed: %s", exc)
 
+    # --- Judge evaluation persistence ---
+    if result.get("judge_evaluation") and get_database_url() and is_judge_persistence_enabled():
+        try:
+            with get_db_session() as db:
+                result["judge_evaluation"] = save_judge_result(
+                    db,
+                    session_id=session_id,
+                    question=request.message,
+                    answer=result["answer"],
+                    evaluation=result["judge_evaluation"],
+                )
+        except Exception as exc:
+            judge_persistence_error = f"judge_db_save_error: {exc}"
+            logger.warning("Judge evaluation save failed: %s", exc)
+
     # --- Attach session_id and db error to response ---
     if session_id:
         result["session_id"] = session_id
@@ -175,8 +221,77 @@ def chat_api(request: ChatRequest):
         runtime_info = result.get("runtime_info", {})
         runtime_info["db_history_error"] = db_history_error
         result["runtime_info"] = runtime_info
+    if judge_error or judge_persistence_error:
+        runtime_info = result.get("runtime_info", {})
+        if judge_error:
+            runtime_info["judge_error"] = judge_error
+        if judge_persistence_error:
+            runtime_info["judge_persistence_error"] = judge_persistence_error
+        result["runtime_info"] = runtime_info
 
     return result
+
+
+def _recent_judge_results_payload(limit: int) -> dict:
+    """Return recent LLM-as-Judge scores, newest first."""
+    if not get_database_url():
+        return {
+            "results": [],
+            "evaluations": [],
+            "message": "Database is not configured; judge results are not persisted",
+        }
+    if not is_judge_persistence_enabled():
+        return {
+            "results": [],
+            "evaluations": [],
+            "message": "Judge persistence is disabled (ENABLE_JUDGE_PERSISTENCE=false)",
+        }
+
+    try:
+        with get_db_session() as db:
+            results = list_recent_judge_results(db, limit=limit)
+        return {"results": results, "evaluations": results}
+    except Exception as exc:
+        logger.warning("Failed to list judge results: %s", exc)
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
+
+
+@app.get("/judge-results/recent")
+def recent_judge_results_api(limit: int = Query(20, ge=1, le=100)):
+    """Return recent LLM-as-Judge results, newest first."""
+    return _recent_judge_results_payload(limit)
+
+
+@app.get("/judge-evaluations/recent")
+def recent_judge_evaluations_api(limit: int = Query(20, ge=1, le=100)):
+    """Backward-compatible alias for recent judge results."""
+    return _recent_judge_results_payload(limit)
+
+
+@app.post("/judge-results/{result_id}/feedback")
+def judge_result_feedback_api(result_id: int, request: JudgeFeedbackRequest):
+    """Persist human feedback about whether a judge result was reasonable."""
+    if not get_database_url():
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    if not is_judge_persistence_enabled():
+        raise HTTPException(status_code=503, detail="Judge persistence is disabled")
+
+    try:
+        with get_db_session() as db:
+            updated = update_judge_feedback(
+                db,
+                result_id=result_id,
+                judge_feedback=request.judge_feedback,
+                reason=request.reason,
+            )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Judge result not found")
+        return {"result": updated}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Failed to save judge feedback: %s", exc)
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
 
 
 @app.get("/image-proxy")

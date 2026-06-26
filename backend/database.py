@@ -34,7 +34,11 @@ def get_engine():
         url = get_database_url()
         if not url:
             raise RuntimeError("DATABASE_URL is not configured")
-        _engine = create_engine(url, pool_pre_ping=True)
+        engine_options = {"pool_pre_ping": True}
+        if url.startswith(("postgresql://", "postgresql+")):
+            timeout = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "1"))
+            engine_options["connect_args"] = {"connect_timeout": timeout}
+        _engine = create_engine(url, **engine_options)
     return _engine
 
 

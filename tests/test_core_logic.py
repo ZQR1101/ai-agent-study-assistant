@@ -1,4 +1,7 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from pydantic import ValidationError
@@ -7,6 +10,7 @@ from backend.ai_core import run_chat_request, run_langgraph_chat_request
 from backend.agent_core import _extract_json_object, _fallback_agent_plan
 from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
+from backend.judge_service import JudgeEvaluationError, compute_verdict, judge_answer
 from backend.llm_service import summarize_usage_records, track_llm_usage
 from backend import rag_store
 from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
@@ -105,6 +109,96 @@ class LLMUsageTrackingTests(unittest.TestCase):
         self.assertGreater(summary["estimated_cost"]["total"], 0)
 
 
+class JudgeServiceTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, content: str):
+            self.content = content
+
+    class FakeLLM:
+        def __init__(self, content: str):
+            self.content = content
+            self.prompts = []
+
+        def invoke(self, prompt: str):
+            self.prompts.append(prompt)
+            return JudgeServiceTests.FakeResponse(self.content)
+
+    def test_judge_answer_parses_scores(self):
+        fake_llm = self.FakeLLM("""
+        {
+          "accuracy": 8,
+          "completeness": 7.5,
+          "citation_quality": 6,
+          "overall_score": 7.2,
+          "feedback": "Mostly correct.",
+          "deductions": [
+            {"metric": "Citation Quality", "points": 4, "reason": "Missing explicit citation."}
+          ]
+        }
+        """)
+
+        result = judge_answer(
+            "What is RAG?",
+            "RAG retrieves context before generation.",
+            sources=[{"source": "rag.md", "snippet": "RAG retrieves relevant context."}],
+            trace=[{"title": "Trace", "items": ["used rag"]}],
+            runtime_info={"tool_calls": [{"tool": "rag", "latency_ms": 12}]},
+            model="judge-model",
+            judge_llm=fake_llm,
+        )
+
+        self.assertEqual(result["judge_model"], "judge-model")
+        self.assertEqual(result["accuracy"], 8)
+        self.assertEqual(result["completeness"], 7.5)
+        self.assertEqual(result["citation_quality"], 6)
+        self.assertEqual(result["overall_score"], 7.2)
+        self.assertEqual(result["verdict"], "WEAK_PASS")
+        self.assertEqual(result["deductions"][0]["metric"], "Citation Quality")
+        self.assertEqual(result["feedback"], "Mostly correct.")
+        self.assertIn("User question", fake_llm.prompts[0])
+        self.assertIn("Tool calls", fake_llm.prompts[0])
+
+    def test_judge_answer_clamps_scores_and_estimates_overall(self):
+        fake_llm = self.FakeLLM("""
+        Judge result:
+        {"accuracy": 12, "completeness": -2, "citation_quality": 9}
+        """)
+
+        result = judge_answer("Q", "A", judge_llm=fake_llm)
+
+        self.assertEqual(result["accuracy"], 10)
+        self.assertEqual(result["completeness"], 0)
+        self.assertEqual(result["citation_quality"], 9)
+        self.assertAlmostEqual(result["overall_score"], 6.33, places=2)
+        self.assertEqual(result["verdict"], "WEAK_PASS")
+        self.assertTrue(result["deductions"])
+
+    def test_judge_answer_allows_citation_quality_na(self):
+        fake_llm = self.FakeLLM("""
+        {
+          "accuracy": 9,
+          "completeness": 8,
+          "citation_quality": null,
+          "overall_score": 8.5,
+          "feedback": "Good answer for a task that does not need citations."
+        }
+        """)
+
+        result = judge_answer("Say hello", "Hello.", judge_llm=fake_llm)
+
+        self.assertIsNone(result["citation_quality"])
+        self.assertEqual(result["verdict"], "PASS")
+
+    def test_compute_verdict_applies_citation_gate(self):
+        self.assertEqual(compute_verdict(8.1, 7), "PASS")
+        self.assertEqual(compute_verdict(8.1, 5), "WEAK_PASS")
+        self.assertEqual(compute_verdict(5.9, 10), "FAIL")
+
+    def test_judge_answer_rejects_invalid_json(self):
+        with self.assertRaises(JudgeEvaluationError):
+            judge_answer("Q", "A", judge_llm=self.FakeLLM("not json"))
+
+
 class RagStoreTests(unittest.TestCase):
     def test_invalid_chunks_are_rejected(self):
         for text in ["|", "---", "###", "too short"]:
@@ -138,6 +232,43 @@ class RagStoreTests(unittest.TestCase):
 
         self.assertIsNone(rag_store.embedding_model)
 
+    def test_missing_local_embedding_model_returns_empty_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_model = Path(tmpdir) / "missing-model"
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "EMBEDDING_MODEL_PATH": str(missing_model),
+                        "EMBEDDING_MODEL_LOCAL_ONLY": "true",
+                    },
+                    clear=False,
+                ),
+                patch.object(rag_store, "INDEX_FILE", Path(tmpdir) / "index.faiss"),
+                patch.object(rag_store, "CHUNKS_FILE", Path(tmpdir) / "chunks.json"),
+                patch.object(
+                    rag_store,
+                    "build_chunks",
+                    return_value=[{"source": "doc.md", "text": "RAG retrieves context before generation."}],
+                ),
+            ):
+                rag_store.embedding_model = None
+                rag_store.index = None
+                rag_store.chunks = []
+                rag_store.rag_index_error = None
+
+                result = rag_store.search_relevant_chunks("what is RAG", include_metadata=True)
+
+                self.assertEqual(result["chunks"], [])
+                self.assertFalse(result["passed_threshold"])
+                self.assertIn("Embedding model path not found", result["error"])
+                self.assertIsNone(rag_store.embedding_model)
+
+            rag_store.embedding_model = None
+            rag_store.index = None
+            rag_store.chunks = []
+            rag_store.rag_index_error = None
+
 
 class SchemaTests(unittest.TestCase):
     def test_chat_request_can_be_created(self):
@@ -162,6 +293,26 @@ class SchemaTests(unittest.TestCase):
         response = ChatResponse(answer="ok", mode="chat", model="mimo-v2.5")
 
         self.assertEqual(response.runtime_info, {})
+
+    def test_chat_response_accepts_judge_evaluation(self):
+        response = ChatResponse(
+            answer="ok",
+            mode="chat",
+            model="mimo-v2.5",
+            judge_evaluation={
+                "accuracy": 8,
+                "completeness": 7,
+                "citation_quality": None,
+                "overall_score": 7,
+                "verdict": "WEAK_PASS",
+                "deductions": [
+                    {"metric": "Completeness", "points": 3, "reason": "Missing one part."}
+                ],
+            },
+        )
+
+        self.assertEqual(response.judge_evaluation.overall_score, 7)
+        self.assertIsNone(response.judge_evaluation.citation_quality)
 
     def test_chat_request_rejects_invalid_values(self):
         invalid_payloads = [

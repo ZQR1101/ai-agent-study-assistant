@@ -353,6 +353,9 @@ def _run_rag_tool(
         f"RAG sources：{source_names(rag_sources)}",
     ]
 
+    if rag_context.get("error"):
+        trace.append(f"RAG error：{rag_context.get('error')}")
+
     if rag_context.get("found"):
         answer = chat(
             step_input,

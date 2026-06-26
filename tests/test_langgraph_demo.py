@@ -276,6 +276,30 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertTrue(any("planner: mode=llm" in item for item in state["trace"]))
         self.assertEqual(len(fake_llm.prompts), 1)
 
+    def test_llm_planner_honors_requested_rag_toggle(self):
+        from backend.langgraph_runtime import planner_node
+
+        fake_llm = FakeLLM("""
+{
+  "goal": "解释 agentic rag",
+  "steps": [
+    {"tool": "explain", "input": "agentic rag", "reason": "解释概念"}
+  ],
+  "fallback": false
+}
+""")
+
+        state = planner_node({
+            "message": "帮我理解 agentic rag",
+            "planner_mode": "llm",
+            "custom_llm": fake_llm,
+            "use_rag": True,
+        })
+
+        self.assertEqual([step["tool"] for step in state["plan"]], ["rag", "explain"])
+        self.assertTrue(state["use_rag"])
+        self.assertTrue(any("planner: rag enforced by request setting" in item for item in state["trace"]))
+
     def test_llm_planner_invalid_json_falls_back_to_rule_planner(self):
         from backend.langgraph_runtime import planner_node
 

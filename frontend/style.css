@@ -674,7 +674,7 @@ summary {
     border-radius: 12px;
     display: grid;
     gap: 3px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     margin: 14px 0 18px;
     overflow: visible;
     padding: 4px;
@@ -998,6 +998,249 @@ summary {
     color: var(--stack-muted);
     font-size: 12px;
     line-height: 18px;
+}
+
+.judge-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.judge-card {
+    background: #ffffff;
+    border: 1px solid var(--stack-line);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+}
+
+.judge-card-header,
+.judge-score-label,
+.judge-trend-meta,
+.judge-trend-list li {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.judge-card-header strong {
+    color: var(--stack-text);
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.judge-card-header span,
+.judge-score-label strong,
+.judge-trend-meta strong,
+.judge-trend-list span {
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.judge-card-header .judge-verdict {
+    border-radius: 999px;
+    color: #0f5132;
+    background: #dcfce7;
+    padding: 3px 8px;
+}
+
+.judge-card-header .judge-verdict.weak_pass {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.judge-card-header .judge-verdict.fail {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.judge-summary {
+    background: #f7f7f7;
+    border: 1px solid var(--stack-line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+}
+
+.judge-summary span {
+    color: var(--stack-text);
+    font-size: 12px;
+    font-weight: 750;
+    line-height: 18px;
+}
+
+.judge-score-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.judge-score-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.judge-score-label span,
+.judge-trend-meta span,
+.judge-trend-list em,
+.judge-feedback {
+    color: var(--stack-muted);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 18px;
+}
+
+.judge-score-track {
+    background: #eeeeee;
+    border-radius: 999px;
+    height: 6px;
+    overflow: hidden;
+}
+
+.judge-score-track span {
+    background: linear-gradient(90deg, var(--primary), var(--signal));
+    display: block;
+    height: 100%;
+}
+
+.judge-feedback {
+    margin: 0;
+}
+
+.judge-trend-error {
+    color: var(--error);
+    font-weight: 700;
+}
+
+.judge-deductions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.judge-deductions > strong {
+    color: var(--stack-text);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.judge-deductions ul {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.judge-deductions li {
+    background: #fafafa;
+    border: 1px solid var(--stack-line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 8px;
+}
+
+.judge-deductions span {
+    color: var(--error);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 17px;
+}
+
+.judge-deductions em {
+    color: var(--stack-muted);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 18px;
+}
+
+.judge-feedback-actions {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: 1fr 1fr;
+}
+
+.judge-feedback-actions button {
+    background: #ffffff;
+    border: 1px solid var(--stack-line);
+    border-radius: 8px;
+    color: var(--stack-text);
+    font-size: 12px;
+    font-weight: 750;
+    min-height: 34px;
+    padding: 6px 8px;
+}
+
+.judge-feedback-actions button.active {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #166534;
+}
+
+.judge-feedback-actions button.danger.active {
+    background: #fee2e2;
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+
+.judge-trend-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.judge-trend-chart svg {
+    background: #fafafa;
+    border: 1px solid var(--stack-line);
+    border-radius: 8px;
+    height: 104px;
+    width: 100%;
+}
+
+.judge-trend-chart line {
+    stroke: #e5e5e5;
+    stroke-width: 1;
+}
+
+.judge-trend-chart path {
+    fill: none;
+    stroke: var(--primary);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2.5;
+}
+
+.judge-trend-chart circle {
+    fill: #ffffff;
+    stroke: var(--primary);
+    stroke-width: 2;
+}
+
+.judge-trend-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.judge-trend-list em {
+    flex: 1;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .runtime-error-text {
