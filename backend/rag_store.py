@@ -1,5 +1,7 @@
 from pathlib import Path
+from collections import Counter
 import json
+import math
 import os
 import re
 import threading
@@ -71,6 +73,8 @@ def get_embedding_model():
 chunks = []
 index = None
 _rag_index_lock = threading.Lock()
+_bm25_index = None
+_bm25_lock = threading.Lock()
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -232,6 +236,7 @@ def load_rag_index():
 
         index = loaded_index
         chunks = loaded_chunks
+        _reset_bm25_index()
 
         print(f"已加载 FAISS RAG 索引，共 {len(chunks)} 个 chunks。")
         return True
@@ -247,10 +252,12 @@ def rebuild_rag_index():
     print("正在构建 FAISS RAG 索引...")
 
     chunks = build_chunks()
+    _reset_bm25_index()
 
     if not chunks:
         with _rag_index_lock:
             index = None
+        _reset_bm25_index()
         print("知识库为空，未构建索引。")
         return
 
@@ -272,6 +279,7 @@ def rebuild_rag_index():
     with _rag_index_lock:
         index = new_index
         save_rag_index()
+    _reset_bm25_index()
 
     print(f"FAISS RAG 索引构建完成，共 {len(chunks)} 个 chunks，并已保存到本地。")
 
@@ -356,96 +364,249 @@ def list_index_sources() -> list[str]:
     return sorted(set(chunk["source"] for chunk in chunks))
 
 
-def _extract_query_terms(question: str) -> list[str]:
-    raw_terms = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff]+", question.lower())
-    stop_words = {"什么是", "什么", "怎么", "如何", "the", "and", "for", "with"}
-    return [
-        term
-        for term in raw_terms
-        if len(term) >= 2 and term not in stop_words
+_BM25_TOKEN_PATTERN = re.compile(
+    r"/[A-Za-z0-9_./-]+|[A-Za-z0-9_][A-Za-z0-9_./-]*|[\u4e00-\u9fff]+"
+)
+
+
+def tokenize_for_bm25(text: str) -> list[str]:
+    tokens = []
+
+    for raw_token in _BM25_TOKEN_PATTERN.findall(str(text or "")):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", raw_token):
+            tokens.append(raw_token)
+            if len(raw_token) > 1:
+                tokens.extend(raw_token[index:index + 2] for index in range(len(raw_token) - 1))
+                tokens.extend(raw_token)
+            continue
+
+        tokens.append(raw_token)
+        lowered = raw_token.lower()
+        if lowered != raw_token:
+            tokens.append(lowered)
+
+        for part in re.split(r"[/.\-]+", raw_token):
+            if not part or part == raw_token:
+                continue
+            tokens.append(part)
+            lowered_part = part.lower()
+            if lowered_part != part:
+                tokens.append(lowered_part)
+
+    return [token for token in tokens if token]
+
+
+def _chunk_id(chunk: dict, position: int) -> str:
+    if chunk.get("chunk_id"):
+        return str(chunk["chunk_id"])
+
+    source = str(chunk.get("source") or "unknown")
+    chunk_index = chunk.get("chunk_index", position)
+    return f"{source}:{chunk_index}"
+
+
+def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> dict:
+    text = str(chunk.get("text") or "")
+    return {
+        "source": chunk.get("source", ""),
+        "score": float(score),
+        "snippet": text,
+        "text": text,
+        "chunk_id": _chunk_id(chunk, position),
+        "chunk_index": chunk.get("chunk_index", position),
+        "retrieval": retrieval,
+    }
+
+
+def _chunks_fingerprint() -> tuple:
+    return tuple((chunk.get("source"), hash(chunk.get("text", ""))) for chunk in chunks)
+
+
+def _reset_bm25_index() -> None:
+    global _bm25_index
+
+    with _bm25_lock:
+        _bm25_index = None
+
+
+def _load_chunks_file_only() -> bool:
+    global chunks
+    global rag_index_error
+
+    if not CHUNKS_FILE.exists():
+        return False
+
+    try:
+        with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+            loaded_chunks = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        rag_index_error = str(exc)
+        return False
+
+    with _rag_index_lock:
+        chunks = loaded_chunks
+    _reset_bm25_index()
+    return True
+
+
+def _ensure_keyword_chunks() -> None:
+    global chunks
+    global rag_index_error
+
+    if chunks:
+        return
+
+    if _load_chunks_file_only():
+        return
+
+    try:
+        chunks = build_chunks()
+        rag_index_error = None
+    except Exception as exc:
+        chunks = []
+        rag_index_error = str(exc)
+    finally:
+        _reset_bm25_index()
+
+
+def _build_bm25_index() -> dict:
+    documents = [
+        tokenize_for_bm25(f"{chunk.get('source', '')} {chunk.get('text', '')}")
+        for chunk in chunks
     ]
+    doc_freq = Counter()
+    doc_term_counts = []
+    doc_lengths = []
+
+    for tokens in documents:
+        counts = Counter(tokens)
+        doc_term_counts.append(counts)
+        doc_lengths.append(len(tokens))
+        doc_freq.update(counts.keys())
+
+    doc_count = len(documents)
+    avg_doc_length = sum(doc_lengths) / doc_count if doc_count else 0.0
+    idf = {
+        term: math.log(1 + (doc_count - frequency + 0.5) / (frequency + 0.5))
+        for term, frequency in doc_freq.items()
+    }
+
+    return {
+        "fingerprint": _chunks_fingerprint(),
+        "idf": idf,
+        "term_counts": doc_term_counts,
+        "doc_lengths": doc_lengths,
+        "avg_doc_length": avg_doc_length,
+    }
 
 
-def _keyword_relevant_chunks(
-    question: str,
-    top_k: int = 3,
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
-):
-    terms = _extract_query_terms(question)
+def _get_bm25_index() -> dict:
+    global _bm25_index
 
-    if not terms:
+    fingerprint = _chunks_fingerprint()
+    with _bm25_lock:
+        if _bm25_index is None or _bm25_index.get("fingerprint") != fingerprint:
+            _bm25_index = _build_bm25_index()
+        return _bm25_index
+
+
+def _bm25_score(query_terms: list[str], bm25_index: dict, doc_position: int) -> float:
+    term_counts = bm25_index["term_counts"][doc_position]
+    doc_length = bm25_index["doc_lengths"][doc_position]
+    avg_doc_length = bm25_index["avg_doc_length"] or 1.0
+    idf = bm25_index["idf"]
+    k1 = 1.5
+    b = 0.75
+    score = 0.0
+
+    for term in set(query_terms):
+        frequency = term_counts.get(term, 0)
+        if frequency <= 0:
+            continue
+
+        denominator = frequency + k1 * (1 - b + b * doc_length / avg_doc_length)
+        score += idf.get(term, 0.0) * (frequency * (k1 + 1) / denominator)
+
+    return float(score)
+
+
+def search_keyword_chunks(query: str, top_k: int = 10) -> list[dict]:
+    _ensure_keyword_chunks()
+
+    if not chunks:
         return []
 
-    min_hits = 2 if len(terms) >= 2 else 1
+    query_terms = tokenize_for_bm25(query)
+    if not query_terms:
+        return []
+
+    bm25_index = _get_bm25_index()
     results = []
-
-    for chunk in chunks:
-        if not is_valid_chunk(chunk["text"]):
+    for position, chunk in enumerate(chunks):
+        text = str(chunk.get("text") or "")
+        if not is_valid_chunk(text):
             continue
 
-        source_text = chunk["source"].lower()
-        content_text = chunk["text"].lower()
-        source_hits = sum(1 for term in terms if term in source_text)
-        content_hits = sum(1 for term in terms if term in content_text)
-        total_hits = source_hits + content_hits
-
-        if total_hits < min_hits:
+        score = _bm25_score(query_terms, bm25_index, position)
+        if score <= 0:
             continue
 
-        score = similarity_threshold + min(0.15, total_hits * 0.03 + source_hits * 0.02)
-        results.append({
-            "source": chunk["source"],
-            "text": chunk["text"],
-            "score": float(score),
-            "_keyword_hits": total_hits,
-        })
+        item = _chunk_result(chunk, position, score, "bm25")
+        item["bm25_score"] = float(score)
+        results.append(item)
 
-    results.sort(
-        key=lambda item: (
-            item["_keyword_hits"],
-            item["score"],
-            len(item["text"]),
-        ),
-        reverse=True,
-    )
+    results.sort(key=lambda item: item["bm25_score"], reverse=True)
+    for rank, item in enumerate(results, start=1):
+        item["bm25_rank"] = rank
 
-    return [
-        {
-            "source": item["source"],
-            "text": item["text"],
-            "score": item["score"],
-        }
-        for item in results[:top_k]
-    ]
+    return results[:top_k]
 
 
-def search_relevant_chunks(
+def _empty_search_metadata(
+    *,
+    retrieval_mode: str,
+    expanded_query: str,
+    threshold,
+    error: str | None = None,
+    candidate_k: int | None = None,
+) -> dict:
+    return {
+        "chunks": [],
+        "highest_score": None,
+        "threshold": threshold,
+        "passed_threshold": False,
+        "expanded_query": expanded_query,
+        "raw_count": 0,
+        "valid_count": 0,
+        "discarded_invalid_count": 0,
+        "error": error,
+        "retrieval_mode": retrieval_mode,
+        "candidate_k": candidate_k,
+        "vector_candidates": 0,
+        "bm25_candidates": 0,
+        "hybrid_used": False,
+    }
+
+
+def _search_vector_chunks_with_metadata(
     question: str,
-    top_k: int = 3,
+    top_k: int = 10,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
-    include_metadata: bool = False,
-):
-    global index
-    global chunks
+) -> dict:
     global rag_index_error
 
     ensure_rag_index()
     expanded_question = expand_query(question)
+    candidate_k = min(len(chunks), max(top_k * 5, top_k)) if chunks else top_k
 
     if rag_index_error or index is None or not chunks:
-        if include_metadata:
-            return {
-                "chunks": [],
-                "highest_score": None,
-                "threshold": similarity_threshold,
-                "passed_threshold": False,
-                "expanded_query": expanded_question,
-                "raw_count": 0,
-                "valid_count": 0,
-                "discarded_invalid_count": 0,
-                "error": rag_index_error,
-            }
-        return []
+        return _empty_search_metadata(
+            retrieval_mode="vector",
+            expanded_query=expanded_question,
+            threshold=similarity_threshold,
+            error=rag_index_error,
+            candidate_k=candidate_k,
+        )
 
     try:
         model = get_embedding_model()
@@ -455,102 +616,210 @@ def search_relevant_chunks(
         question_embedding = np.array(question_embedding).astype("float32")
     except Exception as exc:
         rag_index_error = str(exc)
-        if include_metadata:
-            return {
-                "chunks": [],
-                "highest_score": None,
-                "threshold": similarity_threshold,
-                "passed_threshold": False,
-                "expanded_query": expanded_question,
-                "raw_count": 0,
-                "valid_count": 0,
-                "discarded_invalid_count": 0,
-                "error": rag_index_error,
-            }
-        return []
+        return _empty_search_metadata(
+            retrieval_mode="vector",
+            expanded_query=expanded_question,
+            threshold=similarity_threshold,
+            error=rag_index_error,
+            candidate_k=candidate_k,
+        )
 
     faiss.normalize_L2(question_embedding)
-
-    search_k = min(len(chunks), max(top_k * 5, top_k))
-    scores, indices = index.search(question_embedding, search_k)
+    scores, indices = index.search(question_embedding, candidate_k)
 
     highest_score = None
     raw_results = []
-    results = []
-
+    vector_candidates = 0
     if len(indices[0]) > 0 and indices[0][0] != -1:
         highest_score = float(scores[0][0])
 
-    for score, idx in zip(scores[0], indices[0]):
+    for rank, (score, idx) in enumerate(zip(scores[0], indices[0]), start=1):
         if idx == -1:
             continue
 
+        vector_candidates += 1
         if score < similarity_threshold:
             continue
 
         chunk = chunks[idx]
-        raw_results.append({
-            "source": chunk["source"],
-            "text": chunk["text"],
-            "score": float(score)
-        })
+        item = _chunk_result(chunk, idx, score, "vector")
+        item["vector_score"] = float(score)
+        item["vector_rank"] = rank
+        raw_results.append(item)
 
-    raw_count = len(raw_results)
-    valid_vector_results = [
-        item
-        for item in raw_results
-        if is_valid_chunk(item["text"])
-    ]
-
-    keyword_results = _keyword_relevant_chunks(
-        expanded_question,
-        top_k=top_k,
-        similarity_threshold=similarity_threshold,
-    )
-
-    combined_results = valid_vector_results + [
-        item for item in keyword_results if is_valid_chunk(item["text"])
-    ]
-
-    seen = set()
-    deduped_results = []
-    for item in combined_results:
-        key = (item["source"], item["text"])
-        if key in seen:
-            continue
-
-        seen.add(key)
-        deduped_results.append(item)
-
-    deduped_results.sort(key=lambda item: item["score"], reverse=True)
-    results = deduped_results[:top_k]
-    valid_count = len(results)
-    discarded_invalid_count = raw_count - len(valid_vector_results)
-
+    valid_results = [item for item in raw_results if is_valid_chunk(item["text"])]
+    results = valid_results[:top_k]
     if results:
         highest_score = max(float(item["score"]) for item in results)
-    elif include_metadata:
-        return {
-            "chunks": [],
-            "highest_score": highest_score,
-            "threshold": similarity_threshold,
-            "passed_threshold": False,
-            "expanded_query": expanded_question,
-            "raw_count": raw_count,
-            "valid_count": 0,
-            "discarded_invalid_count": discarded_invalid_count,
-        }
+
+    return {
+        "chunks": results,
+        "highest_score": highest_score,
+        "threshold": similarity_threshold,
+        "passed_threshold": bool(results) and highest_score is not None and highest_score >= similarity_threshold,
+        "expanded_query": expanded_question,
+        "raw_count": len(raw_results),
+        "valid_count": len(results),
+        "discarded_invalid_count": len(raw_results) - len(valid_results),
+        "error": rag_index_error,
+        "retrieval_mode": "vector",
+        "candidate_k": candidate_k,
+        "vector_candidates": vector_candidates,
+        "bm25_candidates": 0,
+        "hybrid_used": False,
+    }
+
+
+def search_vector_chunks(
+    query: str,
+    top_k: int = 10,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+) -> list[dict]:
+    return _search_vector_chunks_with_metadata(
+        query,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+    )["chunks"]
+
+
+def reciprocal_rank_fusion(
+    ranked_lists: list[list[dict]],
+    *,
+    k: int = 60,
+    top_k: int = 3,
+) -> list[dict]:
+    fused = {}
+
+    for list_index, ranked_list in enumerate(ranked_lists):
+        retrieval_name = "vector" if list_index == 0 else "bm25"
+        for rank, item in enumerate(ranked_list, start=1):
+            key = item.get("chunk_id") or (item.get("source"), item.get("text"))
+            if key not in fused:
+                fused[key] = {
+                    **item,
+                    "score": 0.0,
+                    "hybrid_score": 0.0,
+                    "retrieval": "hybrid",
+                }
+
+            fused_item = fused[key]
+            fused_item["score"] += 1 / (k + rank)
+            fused_item["hybrid_score"] = fused_item["score"]
+
+            if retrieval_name == "vector":
+                fused_item["vector_score"] = item.get("vector_score", item.get("score"))
+                fused_item["vector_rank"] = item.get("vector_rank", rank)
+            else:
+                fused_item["bm25_score"] = item.get("bm25_score", item.get("score"))
+                fused_item["bm25_rank"] = item.get("bm25_rank", rank)
+
+    results = list(fused.values())
+    results.sort(key=lambda item: item["score"], reverse=True)
+    return results[:top_k]
+
+
+def _search_hybrid_chunks_with_metadata(
+    question: str,
+    top_k: int = 3,
+    candidate_k: int | None = None,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+) -> dict:
+    expanded_question = expand_query(question)
+    search_k = candidate_k or max(top_k * 5, 10)
+    vector_results = search_vector_chunks(
+        expanded_question,
+        top_k=search_k,
+        similarity_threshold=similarity_threshold,
+    )
+    bm25_results = search_keyword_chunks(expanded_question, top_k=search_k)
+    fused_results = reciprocal_rank_fusion(
+        [vector_results, bm25_results],
+        top_k=top_k,
+    )
+    highest_score = max((float(item["score"]) for item in fused_results), default=None)
+
+    return {
+        "chunks": fused_results,
+        "highest_score": highest_score,
+        "threshold": None,
+        "passed_threshold": bool(fused_results),
+        "expanded_query": expanded_question,
+        "raw_count": len(fused_results),
+        "valid_count": len(fused_results),
+        "discarded_invalid_count": 0,
+        "error": rag_index_error,
+        "retrieval_mode": "hybrid",
+        "candidate_k": search_k,
+        "vector_candidates": len(vector_results),
+        "bm25_candidates": len(bm25_results),
+        "hybrid_used": True,
+    }
+
+
+def search_hybrid_chunks(
+    query: str,
+    top_k: int = 3,
+    candidate_k: int = 10,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+) -> list[dict]:
+    return _search_hybrid_chunks_with_metadata(
+        query,
+        top_k=top_k,
+        candidate_k=candidate_k,
+        similarity_threshold=similarity_threshold,
+    )["chunks"]
+
+
+def _search_keyword_chunks_with_metadata(question: str, top_k: int = 3) -> dict:
+    expanded_question = expand_query(question)
+    results = search_keyword_chunks(expanded_question, top_k=top_k)
+    highest_score = max((float(item["score"]) for item in results), default=None)
+
+    return {
+        "chunks": results,
+        "highest_score": highest_score,
+        "threshold": None,
+        "passed_threshold": bool(results),
+        "expanded_query": expanded_question,
+        "raw_count": len(results),
+        "valid_count": len(results),
+        "discarded_invalid_count": 0,
+        "error": rag_index_error,
+        "retrieval_mode": "bm25",
+        "candidate_k": top_k,
+        "vector_candidates": 0,
+        "bm25_candidates": len(results),
+        "hybrid_used": False,
+    }
+
+
+def search_relevant_chunks(
+    question: str,
+    top_k: int = 3,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    include_metadata: bool = False,
+    retrieval_mode: str = "vector",
+    candidate_k: int | None = None,
+):
+    mode = retrieval_mode if retrieval_mode in {"vector", "bm25", "hybrid"} else "vector"
+
+    if mode == "bm25":
+        metadata = _search_keyword_chunks_with_metadata(question, top_k=top_k)
+    elif mode == "hybrid":
+        metadata = _search_hybrid_chunks_with_metadata(
+            question,
+            top_k=top_k,
+            candidate_k=candidate_k,
+            similarity_threshold=similarity_threshold,
+        )
+    else:
+        metadata = _search_vector_chunks_with_metadata(
+            question,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+        )
 
     if include_metadata:
-        return {
-            "chunks": results,
-            "highest_score": highest_score,
-            "threshold": similarity_threshold,
-            "passed_threshold": bool(results),
-            "expanded_query": expanded_question,
-            "raw_count": raw_count,
-            "valid_count": valid_count,
-            "discarded_invalid_count": discarded_invalid_count,
-        }
+        return metadata
 
-    return results
+    return metadata["chunks"]

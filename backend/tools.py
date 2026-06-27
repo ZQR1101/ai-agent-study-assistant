@@ -102,6 +102,7 @@ def _base_tool_result(
     used_context: bool = False,
     context_sources: list[str] | None = None,
     flashcards: list | None = None,
+    retrieval_info: dict | None = None,
 ) -> dict:
     return {
         "answer": answer,
@@ -112,6 +113,7 @@ def _base_tool_result(
         "used_context": used_context,
         "context_sources": context_sources or [],
         "flashcards": flashcards or [],
+        "retrieval_info": retrieval_info or {},
     }
 
 
@@ -337,15 +339,28 @@ def _run_rag_tool(
 ) -> dict:
     active_llm = custom_llm or llm
     history_context = (shared_context or {}).get("history_context", "")
+    retrieval_mode = (shared_context or {}).get("retrieval_mode", "vector")
     rag_query = f"历史对话：\n{history_context}\n\n当前问题：{step_input}" if history_context else step_input
-    rag_context = get_rag_context(rag_query, top_k=top_k)
+    rag_context = get_rag_context(rag_query, top_k=top_k, retrieval_mode=retrieval_mode)
     rag_sources = rag_context.get("sources", [])
+    retrieval_info = {
+        "retrieval_mode": rag_context.get("retrieval_mode", retrieval_mode),
+        "candidate_k": rag_context.get("candidate_k"),
+        "vector_candidates": rag_context.get("vector_candidates", 0),
+        "bm25_candidates": rag_context.get("bm25_candidates", 0),
+        "hybrid_used": rag_context.get("hybrid_used", False),
+    }
     trace = [
         f"RAG query：{step_input}",
         f"RAG query 使用 history：{'是' if history_context else '否'}",
+        f"RAG retrieval_mode：{retrieval_info['retrieval_mode']}",
+        f"RAG candidate_k：{retrieval_info['candidate_k']}",
         f"RAG expanded_query：{rag_context.get('expanded_query')}",
         f"RAG max_score：{format_score(rag_context.get('max_score'))}",
         f"RAG threshold：{format_score(rag_context.get('threshold'))}",
+        f"RAG vector_candidates：{retrieval_info['vector_candidates']}",
+        f"RAG bm25_candidates：{retrieval_info['bm25_candidates']}",
+        f"RAG hybrid_used：{'是' if retrieval_info['hybrid_used'] else '否'}",
         f"RAG 原始候选数：{rag_context.get('raw_count')}",
         f"RAG 有效候选数：{rag_context.get('valid_count')}",
         f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}",
@@ -368,6 +383,7 @@ def _run_rag_tool(
             sources=rag_sources,
             context=rag_context["context"],
             trace=trace,
+            retrieval_info=retrieval_info,
         )
 
     trace.append("Agent RAG 未命中，未使用知识库来源")
@@ -379,6 +395,7 @@ def _run_rag_tool(
         answer=answer,
         trace=trace,
         fallback_used=True,
+        retrieval_info=retrieval_info,
     )
 
 

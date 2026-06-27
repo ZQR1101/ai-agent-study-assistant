@@ -7,6 +7,7 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
+from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +70,18 @@ def _startup_init_db():
 
 class TextRequest(BaseModel):
     text: str
+
+
+class RagRequest(BaseModel):
+    text: str
+    top_k: int = 3
+    retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
+
+
+class DebugRagRequest(BaseModel):
+    text: str
+    top_k: int = 5
+    retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
 
 
 def _is_public_image_url(url: str) -> bool:
@@ -355,6 +368,7 @@ def debug_langgraph(request: ChatRequest):
         return run_langgraph_workflow(
             request.message,
             top_k=request.top_k,
+            retrieval_mode=request.retrieval_mode,
             use_rag=request.use_rag,
             model=request.model,
             temperature=request.temperature,
@@ -389,10 +403,14 @@ def quiz_api(request: TextRequest):
 
 
 @app.post("/rag")
-def rag_api(request: TextRequest):
+def rag_api(request: RagRequest):
     from backend.ai_core import rag_answer_with_sources
 
-    return rag_answer_with_sources(request.text)
+    return rag_answer_with_sources(
+        request.text,
+        top_k=request.top_k,
+        retrieval_mode=request.retrieval_mode,
+    )
 
 
 @app.post("/agent")
@@ -503,13 +521,18 @@ def debug_index_sources_api():
 
 
 @app.post("/debug-rag")
-def debug_rag_api(request: TextRequest):
+def debug_rag_api(request: DebugRagRequest):
     from backend.rag_store import search_relevant_chunks
 
-    chunks = search_relevant_chunks(request.text, top_k=5)
+    chunks = search_relevant_chunks(
+        request.text,
+        top_k=request.top_k,
+        retrieval_mode=request.retrieval_mode,
+    )
 
     return {
         "question": request.text,
+        "retrieval_mode": request.retrieval_mode,
         "count": len(chunks),
         "chunks": chunks,
     }

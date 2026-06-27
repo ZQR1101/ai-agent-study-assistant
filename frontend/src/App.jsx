@@ -28,6 +28,12 @@ const TOOL_LABELS = {
   chat: "Chat",
 }
 
+const RETRIEVAL_LABELS = {
+  vector: "Vector",
+  bm25: "BM25",
+  hybrid: "Hybrid",
+}
+
 const EMPTY_INSIGHTS = {
   sources: [],
   plan: [],
@@ -162,6 +168,46 @@ function getConversationTitle(messages) {
   const firstUserMessage = messages.find((message) => message.role === "user")
   const title = String(firstUserMessage?.content || "新学习对话").trim()
   return title.length > 22 ? `${title.slice(0, 22)}...` : title
+}
+
+function formatConversationTimestamp(value) {
+  if (!value) {
+    return "时间未知"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知"
+  }
+
+  return date.toLocaleString()
+}
+
+function mapBackendSession(session) {
+  const title = String(session?.title || "").trim()
+
+  return {
+    id: session.id,
+    title: title || "未命名会话",
+    updatedAt: session.updated_at || session.created_at || null,
+    messageCount: Number.isFinite(Number(session.message_count)) ? Number(session.message_count) : null,
+    source: "backend",
+  }
+}
+
+function mapBackendMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return []
+  }
+
+  return messages
+    .filter((message) => message?.role === "user" || message?.role === "assistant")
+    .map((message, index) => ({
+      id: message.id ? `db-message-${message.id}` : `db-message-${index}-${message.role}`,
+      role: message.role,
+      content: message.content || "",
+      createdAt: message.created_at || null,
+    }))
 }
 
 function getResponseSnapshot(data) {
@@ -579,6 +625,10 @@ function Sidebar({
   activeView,
   conversations,
   currentSessionId,
+  backendHistoryEnabled,
+  backendHistoryStatus,
+  backendHistoryNotice,
+  historyLoading,
   settings,
   selectedFileName,
   onNewConversation,
@@ -609,9 +659,19 @@ function Sidebar({
             <h2>最近学习</h2>
           </div>
         </div>
+        <div className="history-mode-line">
+          <span>History: {backendHistoryEnabled ? "Backend DB" : "Local"}</span>
+          {backendHistoryStatus === "checking" ? <em>检查中</em> : null}
+        </div>
+        {backendHistoryNotice ? <p className="sidebar-notice">{backendHistoryNotice}</p> : null}
         <div className="conversation-history">
-          {conversations.length === 0 ? (
-            <EmptyState title="暂无学习项目" text="发送消息后，当前学习项目会自动保存在这里。" />
+          {historyLoading ? (
+            <EmptyState title="正在加载学习项目" text="正在读取后端会话历史。" />
+          ) : conversations.length === 0 ? (
+            <EmptyState
+              title="暂无学习项目"
+              text={backendHistoryEnabled ? "后端暂时没有会话，发送消息后会出现在这里。" : "发送消息后，当前学习项目会自动保存在这里。"}
+            />
           ) : (
             conversations.slice(0, 8).map((conversation) => (
               <button
@@ -621,7 +681,10 @@ function Sidebar({
                 onClick={() => onRestoreConversation(conversation.id)}
               >
                 <strong>{conversation.title}</strong>
-                <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
+                <span>
+                  {conversation.messageCount != null ? `${conversation.messageCount} 条 · ` : ""}
+                  {formatConversationTimestamp(conversation.updatedAt)}
+                </span>
               </button>
             ))
           )}
@@ -1099,6 +1162,17 @@ function ResultsPanel({
             onChange={(event) => onSettingsChange({ useRag: event.target.checked })}
           />
         </label>
+        <label>
+          Retrieval Mode
+          <select
+            value={settings.retrievalMode}
+            onChange={(event) => onSettingsChange({ retrievalMode: event.target.value })}
+          >
+            <option value="vector">Vector</option>
+            <option value="bm25">BM25</option>
+            <option value="hybrid">Hybrid</option>
+          </select>
+        </label>
         <label className="inspector-toggle">
           <span>
             <strong>LangGraph Workflow</strong>
@@ -1193,10 +1267,12 @@ function InsightContent({ tab, turns, judgeTrend, judgeTrendLoading, judgeTrendE
               sources.map((source, sourceIndex) => {
                 const sourceName = typeof source === "string" ? source : source.source || "未知来源"
                 const score = typeof source === "string" || source.score == null ? "" : `相似度 ${Number(source.score).toFixed(4)}`
+                const retrieval = typeof source === "string" || !source.retrieval ? "" : `检索：${RETRIEVAL_LABELS[source.retrieval] || source.retrieval}`
                 const snippet = typeof source === "string" ? "" : source.text || source.snippet || ""
                 return (
                   <li key={`${sourceName}-${sourceIndex}`}>
                     <strong>{sourceIndex + 1}. {sourceName}</strong>
+                    {retrieval ? <span>{retrieval}</span> : null}
                     {score ? <span>{score}</span> : null}
                     {snippet ? <span>{snippet}</span> : null}
                   </li>
@@ -1593,6 +1669,16 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
         <dd className={runtimeInfo.planner_error ? "runtime-error-text" : ""}>
           {formatRuntimeValue(runtimeInfo.planner_error)}
         </dd>
+        <dt>retrieval_mode</dt>
+        <dd>{RETRIEVAL_LABELS[runtimeInfo.retrieval_mode] || formatRuntimeValue(runtimeInfo.retrieval_mode)}</dd>
+        <dt>candidate_k</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.candidate_k)}</dd>
+        <dt>vector_candidates</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.vector_candidates)}</dd>
+        <dt>bm25_candidates</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.bm25_candidates)}</dd>
+        <dt>hybrid_used</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.hybrid_used)}</dd>
         <dt>graph_path</dt>
         <dd className="runtime-path">{path.length > 0 ? path.join(" → ") : "无"}</dd>
         <dt>node_count</dt>
@@ -1636,6 +1722,18 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
                 </dd>
                 <dt>latency_ms</dt>
                 <dd>{formatLatency(getToolLatency(call))}</dd>
+                {call.retrieval_mode ? (
+                  <>
+                    <dt>retrieval_mode</dt>
+                    <dd>{RETRIEVAL_LABELS[call.retrieval_mode] || call.retrieval_mode}</dd>
+                    <dt>candidate_k</dt>
+                    <dd>{formatRuntimeValue(call.candidate_k)}</dd>
+                    <dt>vector_candidates</dt>
+                    <dd>{formatRuntimeValue(call.vector_candidates)}</dd>
+                    <dt>bm25_candidates</dt>
+                    <dd>{formatRuntimeValue(call.bm25_candidates)}</dd>
+                  </>
+                ) : null}
                 <dt>tokens</dt>
                 <dd>{formatTokenUsage(call.token_usage)}</dd>
                 <dt>cost</dt>
@@ -1685,6 +1783,11 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState(createSessionId)
   const [messages, setMessages] = useState([])
   const [conversations, setConversations] = useState(() => readStorage(CONVERSATIONS_KEY, []))
+  const [backendHistoryEnabled, setBackendHistoryEnabled] = useState(false)
+  const [backendHistoryStatus, setBackendHistoryStatus] = useState("checking")
+  const [backendHistoryNotice, setBackendHistoryNotice] = useState("")
+  const [backendSessions, setBackendSessions] = useState([])
+  const [backendSessionsLoading, setBackendSessionsLoading] = useState(false)
   const [cardLibrary, setCardLibrary] = useState(() => readStorage(CARD_LIBRARY_KEY, []))
   const [knowledgeFiles, setKnowledgeFiles] = useState([])
   const [knowledgeLoading, setKnowledgeLoading] = useState(false)
@@ -1704,9 +1807,16 @@ export default function App() {
     useAgent: true,
     useRag: false,
     useLangGraph: false,
+    retrievalMode: "vector",
   })
+  const sessionsRequestRef = useRef(0)
+  const sessionLoadRequestRef = useRef(0)
 
   const turns = useMemo(() => getConversationTurns(messages), [messages])
+  const visibleConversations = useMemo(
+    () => (backendHistoryEnabled ? backendSessions : conversations),
+    [backendHistoryEnabled, backendSessions, conversations],
+  )
 
   useEffect(() => {
     writeStorage(CONVERSATIONS_KEY, conversations.slice(0, 20))
@@ -1725,6 +1835,97 @@ export default function App() {
   useEffect(() => {
     loadJudgeTrend()
   }, [])
+
+  useEffect(() => {
+    detectBackendHistoryMode()
+  }, [])
+
+  function switchToLocalHistory(notice = "", sessionId = null) {
+    setBackendHistoryEnabled(false)
+    setBackendHistoryStatus("local")
+    setBackendHistoryNotice(notice)
+    setBackendSessions([])
+    setBackendSessionsLoading(false)
+    setCurrentSessionId((current) => sessionId || current || createSessionId())
+  }
+
+  async function detectBackendHistoryMode() {
+    setBackendHistoryStatus("checking")
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 4500)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/health`, {
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        throw new Error(`health request failed: ${response.status}`)
+      }
+
+      const health = await response.json()
+      const enabled = Boolean(health.db_history_enabled && health.database_configured)
+
+      if (!enabled) {
+        switchToLocalHistory("")
+        return
+      }
+
+      setBackendHistoryEnabled(true)
+      setBackendHistoryStatus("backend")
+      setBackendHistoryNotice("")
+      setCurrentSessionId((current) => (messages.length === 0 ? null : current))
+      await loadBackendSessions({ fallbackOnError: true })
+    } catch (error) {
+      console.warn("Backend history health check failed", error)
+      switchToLocalHistory("后端历史不可用，已使用本地历史。")
+    } finally {
+      window.clearTimeout(timeoutId)
+    }
+  }
+
+  async function loadBackendSessions({ fallbackOnError = false } = {}) {
+    const requestId = sessionsRequestRef.current + 1
+    sessionsRequestRef.current = requestId
+    setBackendSessionsLoading(true)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/sessions?limit=50`)
+      if (!response.ok) {
+        throw new Error(`sessions request failed: ${response.status}`)
+      }
+
+      const data = await response.json()
+      if (requestId !== sessionsRequestRef.current) {
+        return []
+      }
+
+      if (data.message && fallbackOnError) {
+        switchToLocalHistory("后端历史未启用，已使用本地历史。")
+        return []
+      }
+
+      const sessions = Array.isArray(data.sessions)
+        ? data.sessions.filter((session) => session?.id).map(mapBackendSession)
+        : []
+      setBackendSessions(sessions)
+      setBackendHistoryNotice(data.message || "")
+      return sessions
+    } catch (error) {
+      console.warn("Failed to load backend sessions", error)
+      if (requestId === sessionsRequestRef.current) {
+        if (fallbackOnError) {
+          switchToLocalHistory("后端历史加载失败，已使用本地历史。")
+        } else {
+          setBackendHistoryNotice("后端历史加载失败，聊天仍可继续。")
+        }
+      }
+      return []
+    } finally {
+      if (requestId === sessionsRequestRef.current) {
+        setBackendSessionsLoading(false)
+      }
+    }
+  }
 
   function persistConversation(nextMessages, sessionId = currentSessionId) {
     if (nextMessages.length === 0) {
@@ -1745,14 +1946,61 @@ export default function App() {
   }
 
   function startNewConversation() {
+    sessionLoadRequestRef.current += 1
+
+    if (backendHistoryEnabled) {
+      setCurrentSessionId(null)
+      setMessages([])
+      setInput("")
+      setActiveTab("sources")
+      setActiveView("study")
+      return
+    }
+
     const nextSessionId = createSessionId()
     setCurrentSessionId(nextSessionId)
     setMessages([])
     setInput("")
     setActiveTab("sources")
+    setActiveView("study")
   }
 
-  function restoreConversation(conversationId) {
+  async function restoreConversation(conversationId) {
+    if (backendHistoryEnabled) {
+      const conversation = backendSessions.find((item) => item.id === conversationId)
+      if (!conversation) {
+        return
+      }
+
+      const requestId = sessionLoadRequestRef.current + 1
+      sessionLoadRequestRef.current = requestId
+      setBackendHistoryNotice("")
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(conversationId)}/messages?limit=100`)
+        if (!response.ok) {
+          throw new Error(`session messages request failed: ${response.status}`)
+        }
+
+        const data = await response.json()
+        if (requestId !== sessionLoadRequestRef.current) {
+          return
+        }
+
+        setCurrentSessionId(data.session_id || conversationId)
+        setMessages(mapBackendMessages(data.messages))
+        setInput("")
+        setActiveTab("sources")
+        setActiveView("study")
+      } catch (error) {
+        console.warn("Failed to restore backend session", error)
+        if (requestId === sessionLoadRequestRef.current) {
+          setBackendHistoryNotice("会话消息加载失败，仍停留在当前对话。")
+        }
+      }
+      return
+    }
+
     const conversation = conversations.find((item) => item.id === conversationId)
     if (!conversation) {
       return
@@ -1760,6 +2008,8 @@ export default function App() {
 
     setCurrentSessionId(conversation.id)
     setMessages(conversation.messages.map((message) => ({ ...message })))
+    setInput("")
+    setActiveTab("sources")
     setActiveView("study")
   }
 
@@ -1934,12 +2184,24 @@ export default function App() {
       role: "user",
       content: message,
     }
-    const requestMessages = [...messages, userMessage].slice(-HISTORY_LIMIT * 2)
+    const requestMessages = backendHistoryEnabled
+      ? [...messages, userMessage]
+      : [...messages, userMessage].slice(-HISTORY_LIMIT * 2)
 
+    sessionLoadRequestRef.current += 1
     setMessages(requestMessages)
-    persistConversation(requestMessages)
+    if (!backendHistoryEnabled) {
+      persistConversation(requestMessages)
+    }
     setInput("")
     setLoading(true)
+
+    const historyForRequest = backendHistoryEnabled
+      ? []
+      : messages.slice(-HISTORY_LIMIT).map((item) => ({
+          role: item.role,
+          content: item.content,
+        }))
 
     const requestBody = {
       message,
@@ -1951,11 +2213,9 @@ export default function App() {
       use_rag: normalizedSettings.useRag,
       use_langgraph: normalizedSettings.useLangGraph,
       top_k: Math.round(clampNumber(normalizedSettings.topK, 3, 1, 10)),
-      session_id: currentSessionId,
-      history: messages.slice(-HISTORY_LIMIT).map((item) => ({
-        role: item.role,
-        content: item.content,
-      })),
+      retrieval_mode: normalizedSettings.retrievalMode || "vector",
+      session_id: backendHistoryEnabled ? currentSessionId || null : currentSessionId,
+      history: historyForRequest,
     }
 
     try {
@@ -1979,10 +2239,30 @@ export default function App() {
         response: getResponseSnapshot(data),
         requestMessage: message,
       }
-      const nextMessages = [...requestMessages, assistantMessage].slice(-HISTORY_LIMIT * 2)
+      const nextMessages = backendHistoryEnabled
+        ? [...requestMessages, assistantMessage]
+        : [...requestMessages, assistantMessage].slice(-HISTORY_LIMIT * 2)
+      const responseSessionId = data.session_id || currentSessionId
+      const dbHistoryError = data.runtime_info?.db_history_error
 
       setMessages(nextMessages)
-      persistConversation(nextMessages)
+      if (backendHistoryEnabled) {
+        if (dbHistoryError) {
+          const localSessionId = currentSessionId || createSessionId()
+          switchToLocalHistory("后端数据库暂时不可用，已使用本地历史保存当前对话。", localSessionId)
+          persistConversation(nextMessages, localSessionId)
+        } else if (responseSessionId) {
+          setCurrentSessionId(responseSessionId)
+          setBackendHistoryNotice("")
+          loadBackendSessions({ fallbackOnError: false })
+        } else {
+          const localSessionId = createSessionId()
+          switchToLocalHistory("后端没有返回 session_id，已切换为本地历史。", localSessionId)
+          persistConversation(nextMessages, localSessionId)
+        }
+      } else {
+        persistConversation(nextMessages, responseSessionId || currentSessionId)
+      }
       const responseCards = getResponseCards(data, message)
       addCardsToLibrary(responseCards, message)
       if (data.judge_evaluation) {
@@ -2007,7 +2287,13 @@ export default function App() {
       }
       const nextMessages = [...requestMessages, errorMessage].slice(-HISTORY_LIMIT * 2)
       setMessages(nextMessages)
-      persistConversation(nextMessages)
+      if (backendHistoryEnabled) {
+        const localSessionId = currentSessionId || createSessionId()
+        switchToLocalHistory("后端聊天请求失败，已使用本地历史保存当前对话。", localSessionId)
+        persistConversation(nextMessages, localSessionId)
+      } else {
+        persistConversation(nextMessages)
+      }
     } finally {
       setLoading(false)
     }
@@ -2018,8 +2304,12 @@ export default function App() {
       <IconRail activeView={activeView} onViewChange={setActiveView} />
       <Sidebar
         activeView={activeView}
-        conversations={conversations}
+        conversations={visibleConversations}
         currentSessionId={currentSessionId}
+        backendHistoryEnabled={backendHistoryEnabled}
+        backendHistoryStatus={backendHistoryStatus}
+        backendHistoryNotice={backendHistoryNotice}
+        historyLoading={backendSessionsLoading}
         settings={settings}
         selectedFileName={selectedFile?.name}
         onNewConversation={startNewConversation}

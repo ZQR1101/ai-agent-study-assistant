@@ -32,6 +32,7 @@ class LangGraphAgentState(TypedDict, total=False):
     model: str
     temperature: float
     top_k: int
+    retrieval_mode: str
     history: list[dict]
     history_context: str
     custom_llm: Any
@@ -469,6 +470,7 @@ def _build_shared_context(state: LangGraphAgentState) -> dict:
     return {
         "original_input": state.get("message", ""),
         "history_context": state.get("history_context", ""),
+        "retrieval_mode": state.get("retrieval_mode", "vector"),
         "rag_context": state.get("rag_context", ""),
         "sources": state.get("sources", []),
         "step_outputs": state.get("step_outputs", []),
@@ -538,6 +540,7 @@ def _normalize_tool_result(tool_name: str, result: dict, success: bool, descript
         "context_sources": result.get("context_sources", []),
         "fallback_used": result.get("fallback_used", False),
         "error": error,
+        "retrieval_info": result.get("retrieval_info", {}),
     }
 
 
@@ -624,6 +627,8 @@ def run_registry_tool_for_state(
         tool_call.update(usage_delta)
     if result.get("error"):
         tool_call["error"] = result["error"]
+    if result.get("retrieval_info"):
+        tool_call.update(result["retrieval_info"])
 
     new_state: LangGraphAgentState = {
         **state,
@@ -902,16 +907,24 @@ def finalizer_node(state: LangGraphAgentState) -> LangGraphAgentState:
 
 def build_runtime_info(state: LangGraphAgentState) -> dict:
     graph_path = state.get("graph_path", [])
+    tool_calls = state.get("tool_calls", [])
+    retrieval_calls = [call for call in tool_calls if call.get("retrieval_mode")]
+    retrieval_info = retrieval_calls[-1] if retrieval_calls else {}
     return attach_usage_to_runtime_info({
         "runtime": "langgraph",
         "graph_path": graph_path,
         "node_count": len(graph_path),
-        "tool_calls": state.get("tool_calls", []),
+        "tool_calls": tool_calls,
         "finalizer_used": "finalizer" in graph_path,
         "planner_mode": state.get("planner_mode") or "rule",
         "planner_fallback": bool(state.get("planner_fallback", False)),
         "planner_error": state.get("planner_error") or None,
         "error": state.get("error") or None,
+        "retrieval_mode": state.get("retrieval_mode", "vector"),
+        "candidate_k": retrieval_info.get("candidate_k"),
+        "vector_candidates": retrieval_info.get("vector_candidates", 0),
+        "bm25_candidates": retrieval_info.get("bm25_candidates", 0),
+        "hybrid_used": retrieval_info.get("hybrid_used", False),
     }, state.get("custom_llm"))
 
 
@@ -1011,6 +1024,7 @@ def run_langgraph_workflow(
     model: str = "mimo-v2.5",
     temperature: float = 0.7,
     top_k: int = 3,
+    retrieval_mode: str = "vector",
     history: list[dict] | None = None,
     history_context: str = "",
     use_rag: bool = False,
@@ -1022,6 +1036,7 @@ def run_langgraph_workflow(
         "model": model,
         "temperature": temperature,
         "top_k": top_k,
+        "retrieval_mode": retrieval_mode,
         "history": history or [],
         "history_context": history_context,
         "custom_llm": custom_llm,
@@ -1078,6 +1093,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
         f"use_langgraph: {request.use_langgraph}",
         f"planner_mode: {request.planner_mode}",
         f"top_k: {request.top_k}",
+        f"retrieval_mode: {request.retrieval_mode}",
     ]
 
     try:
@@ -1087,6 +1103,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
             model=selected_model,
             temperature=request.temperature,
             top_k=request.top_k,
+            retrieval_mode=request.retrieval_mode,
             history=history_messages,
             history_context=history_context,
             use_rag=request.use_rag,
@@ -1112,6 +1129,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
                 "planner_fallback": False,
                 "planner_error": None,
                 "error": str(exc),
+                "retrieval_mode": request.retrieval_mode,
             },
         }
 

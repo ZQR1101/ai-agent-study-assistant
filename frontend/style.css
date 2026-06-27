@@ -278,6 +278,31 @@ h2 {
     gap: 8px;
 }
 
+.history-mode-line {
+    align-items: center;
+    color: var(--muted);
+    display: flex;
+    font-size: 12px;
+    justify-content: space-between;
+    line-height: 18px;
+}
+
+.history-mode-line em {
+    color: var(--muted-soft);
+    font-style: normal;
+}
+
+.sidebar-notice {
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--outline-soft);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 18px;
+    margin: 0;
+    padding: 8px 10px;
+}
+
 .conversation-item {
     background: rgba(255, 255, 255, 0.54);
     border: 1px solid var(--outline-soft);

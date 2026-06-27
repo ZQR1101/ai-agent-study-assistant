@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
 AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz", "flashcard"]
 PlannerMode = Literal["rule", "llm"]
+RetrievalMode = Literal["vector", "bm25", "hybrid"]
 
 
 class ChatRequest(BaseModel):
@@ -18,6 +19,7 @@ class ChatRequest(BaseModel):
     use_langgraph: bool = False
     planner_mode: PlannerMode = "rule"
     top_k: int = Field(3, ge=1, le=10)
+    retrieval_mode: RetrievalMode = "vector"
     session_id: str | None = None
     history: list[dict] = Field(default_factory=list)
 
@@ -27,6 +29,12 @@ class SourceChunk(BaseModel):
     score: float | None = None
     snippet: str | None = None
     text: str | None = None
+    chunk_id: str | None = None
+    retrieval: str | None = None
+    vector_score: float | None = None
+    bm25_score: float | None = None
+    vector_rank: int | None = None
+    bm25_rank: int | None = None
 
 
 class AgentPlanStep(BaseModel):

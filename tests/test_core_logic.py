@@ -278,6 +278,12 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(request.mode, "explain")
         self.assertFalse(request.use_langgraph)
         self.assertEqual(request.planner_mode, "rule")
+        self.assertEqual(request.retrieval_mode, "vector")
+
+    def test_chat_request_accepts_retrieval_mode(self):
+        request = ChatRequest(message="What is RAG?", retrieval_mode="hybrid")
+
+        self.assertEqual(request.retrieval_mode, "hybrid")
 
     def test_chat_request_accepts_langgraph_flag(self):
         request = ChatRequest(message="What is RAG?", use_langgraph=True)
@@ -322,6 +328,7 @@ class SchemaTests(unittest.TestCase):
             {"message": "hello", "top_k": 0},
             {"message": "hello", "top_k": 11},
             {"message": "hello", "planner_mode": "bad"},
+            {"message": "hello", "retrieval_mode": "bad"},
         ]
 
         for payload in invalid_payloads:

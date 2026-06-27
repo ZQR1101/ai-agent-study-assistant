@@ -304,11 +304,13 @@ def run_agent(
     custom_llm=None,
     prefer_rag: bool = False,
     top_k: int = 3,
+    retrieval_mode: str = "vector",
     history_context: str | None = None,
 ) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
     trace.append(f"Agent Planner 使用 history：{'是' if history_context else '否'}")
+    trace.append(f"Agent Planner retrieval_mode：{retrieval_mode}")
     planner_usage_started_at = get_llm_usage_record_count(active_llm)
     planner_started_at = perf_counter()
     plan = plan_agent_steps(
@@ -340,6 +342,13 @@ def run_agent(
     all_sources = []
     all_flashcards = []
     fallback_used = False
+    retrieval_summary = {
+        "retrieval_mode": retrieval_mode,
+        "candidate_k": None,
+        "vector_candidates": 0,
+        "bm25_candidates": 0,
+        "hybrid_used": retrieval_mode == "hybrid",
+    }
     tool_calls = [
         {
             "node": "planner",
@@ -358,6 +367,7 @@ def run_agent(
     shared_context = {
         "original_input": user_input,
         "history_context": history_context or "",
+        "retrieval_mode": retrieval_mode,
         "rag_context": "",
         "sources": [],
         "step_outputs": [],
@@ -415,6 +425,9 @@ def run_agent(
             tool_call["requested_tool"] = tool
         if result.get("error"):
             tool_call["error"] = result["error"]
+        if result.get("retrieval_info"):
+            tool_call.update(result["retrieval_info"])
+            retrieval_summary.update(result["retrieval_info"])
         tool_calls.append(tool_call)
 
         if tool == "rag" and _is_valid_agent_context(result.get("context")):
@@ -453,6 +466,7 @@ def run_agent(
             "planner_fallback": bool(plan.get("fallback")),
             "planner_error": plan.get("fallback_reason") or None,
             "error": None,
+            **retrieval_summary,
         }, active_llm),
     }
 

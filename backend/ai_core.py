@@ -153,6 +153,7 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
             or item.startswith("use_rag：")
             or item.startswith("use_agent：")
             or item.startswith("top_k：")
+            or item.startswith("retrieval_mode：")
             or item.startswith("session_id：")
             or item.startswith("使用 history：")
             or item.startswith("history 消息数：")
@@ -248,6 +249,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         f"use_rag：{use_rag}",
         f"use_agent：{request.use_agent}",
         f"top_k：{request.top_k}",
+        f"retrieval_mode：{request.retrieval_mode}",
         f"session_id：{request.session_id or '无'}",
         f"使用 history：{'是' if history_messages else '否'}",
         f"history 消息数：{len(history_messages)}",
@@ -269,11 +271,22 @@ def run_chat_request(request: ChatRequest) -> dict:
     runtime_info = {}
 
     if use_rag and not agent_handles_rag:
-        rag_context = get_rag_context(rag_question, request.top_k)
+        rag_context = get_rag_context(
+            rag_question,
+            request.top_k,
+            retrieval_mode=request.retrieval_mode,
+        )
         trace.append(f"RAG query 使用 history：{'是' if history_context else '否'}")
         append_rag_trace(trace, rag_context_for_trace(rag_context, request.top_k))
+        runtime_info.update({
+            "retrieval_mode": rag_context.get("retrieval_mode", request.retrieval_mode),
+            "candidate_k": rag_context.get("candidate_k"),
+            "vector_candidates": rag_context.get("vector_candidates", 0),
+            "bm25_candidates": rag_context.get("bm25_candidates", 0),
+            "hybrid_used": rag_context.get("hybrid_used", False),
+        })
     elif use_rag and agent_handles_rag:
-        trace.append("外层 RAG 检索：跳过，交给 Agent rag tool 执行")
+        trace.append(f"外层 RAG 检索：跳过，交给 Agent rag tool 执行（retrieval_mode={request.retrieval_mode}）")
 
     if request.mode == "rag":
         executed_mode = "rag"
@@ -403,6 +416,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             custom_llm=custom_llm,
             prefer_rag=use_rag,
             top_k=request.top_k,
+            retrieval_mode=request.retrieval_mode,
             history_context=history_context,
         )
         answer = agent_result["answer"]
@@ -421,6 +435,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             custom_llm=custom_llm,
             prefer_rag=use_rag,
             top_k=request.top_k,
+            retrieval_mode=request.retrieval_mode,
             history_context=history_context,
         )
         answer = agent_result["answer"]
