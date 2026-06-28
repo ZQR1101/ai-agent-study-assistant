@@ -240,6 +240,19 @@ ai-agent-study-assistant/
 
 ## 9. 快速开始
 
+### Windows 一键启动（推荐）
+
+双击项目根目录的 `start.bat`。启动器会自动检查运行环境、补齐缺失依赖、启动前后端，并在服务就绪后打开浏览器。
+
+```text
+Frontend: http://127.0.0.1:5500
+FastAPI Docs: http://127.0.0.1:8000/docs
+```
+
+关闭弹出的 Backend 和 Frontend 窗口即可停止项目。首次运行需要已安装 Python 3.10+ 和 Node.js 18+，依赖安装可能需要几分钟。
+
+### 手动启动
+
 ### 1. 安装后端依赖
 
 ```bash
