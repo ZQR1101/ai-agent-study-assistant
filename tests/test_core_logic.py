@@ -12,7 +12,7 @@ from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
 from backend.judge_service import JudgeEvaluationError, compute_verdict, judge_answer
 from backend.llm_service import summarize_usage_records, track_llm_usage
-from backend import rag_store
+from backend import rag_store, tools as tools_module
 from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
 from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, ChatResponse, FlashcardItem
 from backend.tools import TOOL_REGISTRY, ToolSpec
@@ -580,6 +580,78 @@ class ToolsTests(unittest.TestCase):
                 self.assertEqual(tool.name, name)
                 self.assertTrue(tool.description.strip())
                 self.assertTrue(callable(tool.run))
+
+    def test_rag_tool_keeps_history_out_of_retrieval_query(self):
+        history_context = "用户：百度 OCR 是什么？\n助手：百度 OCR 是文字识别服务。"
+        rag_context = {
+            "sources": [],
+            "retrieval_mode": "hybrid",
+            "candidate_k": 15,
+            "vector_candidates": 0,
+            "bm25_candidates": 0,
+            "hybrid_used": True,
+            "expanded_query": "什么是 skills",
+            "max_score": None,
+            "threshold": None,
+            "raw_count": 0,
+            "valid_count": 0,
+            "discarded_invalid_count": 0,
+            "found": False,
+            "error": None,
+        }
+
+        with (
+            patch("backend.tools.get_rag_context", return_value=rag_context) as mock_retrieval,
+            patch("backend.tools.chat", return_value="fallback answer") as mock_chat,
+        ):
+            tools_module._run_rag_tool(
+                "什么是 skills",
+                custom_llm=object(),
+                top_k=5,
+                shared_context={
+                    "history_context": history_context,
+                    "retrieval_mode": "hybrid",
+                },
+            )
+
+        mock_retrieval.assert_called_once_with(
+            "什么是 skills",
+            top_k=5,
+            retrieval_mode="hybrid",
+        )
+        self.assertEqual(mock_chat.call_args.kwargs["history_context"], history_context)
+
+    def test_rag_tool_marks_retrieved_context_as_used(self):
+        rag_context = {
+            "sources": [{"source": "agent_skills.md", "score": 0.8}],
+            "context": "Agent Skill is a reusable workflow knowledge package.",
+            "retrieval_mode": "hybrid",
+            "candidate_k": 15,
+            "vector_candidates": 1,
+            "bm25_candidates": 1,
+            "hybrid_used": True,
+            "expanded_query": "Agent Skill SKILL.md",
+            "max_score": 0.03,
+            "threshold": None,
+            "raw_count": 1,
+            "valid_count": 1,
+            "discarded_invalid_count": 0,
+            "found": True,
+            "error": None,
+        }
+
+        with (
+            patch("backend.tools.get_rag_context", return_value=rag_context),
+            patch("backend.tools.chat", return_value="answer"),
+        ):
+            result = tools_module._run_rag_tool(
+                "什么是 skill",
+                custom_llm=object(),
+                shared_context={"retrieval_mode": "hybrid"},
+            )
+
+        self.assertTrue(result["used_context"])
+        self.assertEqual(result["context_sources"], ["agent_skills.md"])
 
 
 class ConfigTests(unittest.TestCase):

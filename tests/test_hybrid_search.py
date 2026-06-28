@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from backend import rag_store
 from backend.rag_store import (
+    expand_query,
     reciprocal_rank_fusion,
     search_hybrid_chunks,
     search_keyword_chunks,
@@ -37,6 +38,24 @@ class HybridSearchTests(unittest.TestCase):
         self.assertIn("/rag/warmup", tokens)
         self.assertIn("backend/rag_store.py", tokens)
 
+    def test_tokenizer_filters_single_chinese_characters_and_instruction_noise(self):
+        tokens = tokenize_for_bm25("什么是skill，并给我一个skill学习路线")
+
+        self.assertIn("skill", tokens)
+        self.assertIn("学习", tokens)
+        self.assertIn("路线", tokens)
+        self.assertNotIn("什", tokens)
+        self.assertNotIn("什么", tokens)
+        self.assertNotIn("给我", tokens)
+
+    def test_skill_query_is_cleaned_and_expanded(self):
+        expanded = expand_query("什么是skill，并给我一个skill学习路线")
+
+        self.assertNotIn("什么是", expanded)
+        self.assertNotIn("给我一个", expanded)
+        self.assertIn("Agent Skill", expanded)
+        self.assertIn("SKILL.md", expanded)
+
     def test_bm25_hits_keyword_chunk(self):
         rag_store.chunks = [
             {
@@ -55,6 +74,34 @@ class HybridSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["source"], "db.md")
         self.assertEqual(results[0]["retrieval"], "bm25")
         self.assertGreater(results[0]["bm25_score"], 0)
+
+    def test_bm25_ranks_agent_skill_document_first_for_compound_query(self):
+        rag_store.chunks = [
+            {
+                "source": "agent_hot_04_agent_skills_portable_workflows.md",
+                "text": "Agent Skills are reusable workflow knowledge packages built around SKILL.md instructions.",
+            },
+            {
+                "source": "generic_learning_guide.md",
+                "text": "学习路线包括快速看课程、理解概念、制作项目、调试并长期迭代。",
+            },
+            {
+                "source": "prompt_engineering.md",
+                "text": "提示工程课程提供学习路线、示例输出、知识检查和项目练习。",
+            },
+        ]
+
+        result = search_relevant_chunks(
+            "什么是skill，并给我一个skill学习路线",
+            top_k=3,
+            retrieval_mode="bm25",
+            include_metadata=True,
+        )
+
+        self.assertEqual(
+            result["chunks"][0]["source"],
+            "agent_hot_04_agent_skills_portable_workflows.md",
+        )
 
     def test_rrf_promotes_chunk_present_in_both_lists(self):
         vector_results = [
@@ -148,6 +195,33 @@ class HybridSearchTests(unittest.TestCase):
         self.assertEqual(result["chunks"][0]["retrieval"], "hybrid")
         self.assertEqual(result["chunks"][0]["vector_rank"], 1)
         self.assertEqual(result["chunks"][0]["bm25_rank"], 1)
+
+    def test_hybrid_prefers_bm25_exact_match_when_lists_do_not_overlap(self):
+        vector_result = {
+            "chunk_id": "vector:0",
+            "source": "generic_learning_guide.md",
+            "text": "generic learning path content",
+            "score": 0.56,
+            "retrieval": "vector",
+            "vector_score": 0.56,
+            "vector_rank": 1,
+        }
+        bm25_result = {
+            "chunk_id": "bm25:0",
+            "source": "agent_skills.md",
+            "text": "Agent Skill and SKILL.md workflow knowledge",
+            "score": 8.2,
+            "retrieval": "bm25",
+            "bm25_score": 8.2,
+            "bm25_rank": 1,
+        }
+        with (
+            patch("backend.rag_store.search_vector_chunks", return_value=[vector_result]),
+            patch("backend.rag_store.search_keyword_chunks", return_value=[bm25_result]),
+        ):
+            results = search_hybrid_chunks("Agent Skill", top_k=2)
+
+        self.assertEqual(results[0]["source"], "agent_skills.md")
 
     def test_empty_knowledge_base_does_not_error(self):
         with (

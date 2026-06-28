@@ -340,7 +340,7 @@ def _run_rag_tool(
     active_llm = custom_llm or llm
     history_context = (shared_context or {}).get("history_context", "")
     retrieval_mode = (shared_context or {}).get("retrieval_mode", "vector")
-    rag_query = f"历史对话：\n{history_context}\n\n当前问题：{step_input}" if history_context else step_input
+    rag_query = step_input
     rag_context = get_rag_context(rag_query, top_k=top_k, retrieval_mode=retrieval_mode)
     rag_sources = rag_context.get("sources", [])
     retrieval_info = {
@@ -352,7 +352,8 @@ def _run_rag_tool(
     }
     trace = [
         f"RAG query：{step_input}",
-        f"RAG query 使用 history：{'是' if history_context else '否'}",
+        "RAG query 使用 history：否",
+        f"RAG answer 使用 history：{'是' if history_context else '否'}",
         f"RAG retrieval_mode：{retrieval_info['retrieval_mode']}",
         f"RAG candidate_k：{retrieval_info['candidate_k']}",
         f"RAG expanded_query：{rag_context.get('expanded_query')}",
@@ -383,6 +384,8 @@ def _run_rag_tool(
             sources=rag_sources,
             context=rag_context["context"],
             trace=trace,
+            used_context=True,
+            context_sources=source_names(rag_sources),
             retrieval_info=retrieval_info,
         )
 

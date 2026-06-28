@@ -85,6 +85,8 @@ CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
 SIMILARITY_THRESHOLD = 0.55
 MIN_CHUNK_LENGTH = 30
+HYBRID_VECTOR_WEIGHT = 1.0
+HYBRID_BM25_WEIGHT = 1.15
 
 
 def is_valid_chunk(text: str, min_length: int = MIN_CHUNK_LENGTH) -> bool:
@@ -111,8 +113,35 @@ def is_valid_chunk(text: str, min_length: int = MIN_CHUNK_LENGTH) -> bool:
     return True
 
 
+_RETRIEVAL_QUERY_NOISE_PATTERNS = (
+    re.compile(r"(?:请问|请|麻烦)?(?:告诉我|给我讲讲|介绍一下|解释一下|说明一下)"),
+    re.compile(r"(?:并且|并|同时|然后)?(?:请)?(?:给我|帮我)(?:一个|一份)?"),
+    re.compile(r"(?:什么是|是什么)"),
+)
+
+
+def normalize_retrieval_query(query: str) -> str:
+    original = " ".join(str(query or "").split()).strip()
+    normalized = original
+
+    for pattern in _RETRIEVAL_QUERY_NOISE_PATTERNS:
+        normalized = pattern.sub(" ", normalized)
+
+    normalized = re.sub(r"[，,。；;！？!?]+", " ", normalized)
+    normalized = re.sub(r"(?<=[A-Za-z0-9_.])(?=[\u4e00-\u9fff])", " ", normalized)
+    normalized = re.sub(r"(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9_./-])", " ", normalized)
+    parts = normalized.split()
+    normalized = " ".join(
+        part
+        for index, part in enumerate(parts)
+        if index == 0 or part.casefold() != parts[index - 1].casefold()
+    ).strip()
+    return normalized or original
+
+
 def expand_query(query: str) -> str:
-    lowered = query.lower()
+    normalized_query = normalize_retrieval_query(query)
+    lowered = normalized_query.lower()
     expansions = []
 
     if "agentic rag" in lowered or "agent rag" in lowered:
@@ -130,18 +159,34 @@ def expand_query(query: str) -> str:
     if "prompt engineering" in lowered or "提示工程" in lowered:
         expansions.extend(["prompt engineering", "提示工程", "提示词工程", "prompting best practices"])
 
-    if re.search(r"\brag\b", lowered) or "检索增强生成" in query:
+    if re.search(r"(?<![a-z0-9_])rag(?![a-z0-9_])", lowered) or "检索增强生成" in normalized_query:
         expansions.extend(["RAG", "检索增强生成", "知识库问答", "retrieval augmented generation"])
+
+    if (
+        re.search(r"(?<![a-z0-9_])skills?(?![a-z0-9_])", lowered)
+        or "技能包" in normalized_query
+        or "工作流知识包" in normalized_query
+    ):
+        expansions.extend([
+            "Agent Skill",
+            "Agent Skills",
+            "SKILL.md",
+            "可复用工作流",
+            "工作流知识包",
+        ])
+
+    if re.search(r"(?<![a-z0-9_])ocr(?![a-z0-9_])", lowered) or "文字识别" in normalized_query:
+        expansions.extend(["OCR", "文字识别", "光学字符识别"])
 
     unique_expansions = []
     for item in expansions:
-        if item not in query and item not in unique_expansions:
+        if item not in normalized_query and item not in unique_expansions:
             unique_expansions.append(item)
 
     if not unique_expansions:
-        return query
+        return normalized_query
 
-    return f"{query} {' '.join(unique_expansions)}"
+    return f"{normalized_query} {' '.join(unique_expansions)}"
 
 
 def load_documents():
@@ -367,6 +412,40 @@ def list_index_sources() -> list[str]:
 _BM25_TOKEN_PATTERN = re.compile(
     r"/[A-Za-z0-9_./-]+|[A-Za-z0-9_][A-Za-z0-9_./-]*|[\u4e00-\u9fff]+"
 )
+_BM25_CHINESE_STOP_WORDS = {
+    "一个",
+    "么是",
+    "什么",
+    "什么是",
+    "介绍",
+    "可以",
+    "告诉",
+    "告诉我",
+    "如何",
+    "并且",
+    "并给",
+    "怎么",
+    "我一",
+    "是否",
+    "给我",
+    "能否",
+    "请帮",
+    "请问",
+}
+_BM25_ASCII_ALIASES = {
+    "skills": ("skill",),
+}
+
+
+def _append_ascii_bm25_token(tokens: list[str], token: str) -> None:
+    if not token:
+        return
+
+    tokens.append(token)
+    lowered = token.lower()
+    if lowered != token:
+        tokens.append(lowered)
+    tokens.extend(_BM25_ASCII_ALIASES.get(lowered, ()))
 
 
 def tokenize_for_bm25(text: str) -> list[str]:
@@ -374,24 +453,27 @@ def tokenize_for_bm25(text: str) -> list[str]:
 
     for raw_token in _BM25_TOKEN_PATTERN.findall(str(text or "")):
         if re.fullmatch(r"[\u4e00-\u9fff]+", raw_token):
-            tokens.append(raw_token)
+            chinese_tokens = []
+            if 1 < len(raw_token) <= 8:
+                chinese_tokens.append(raw_token)
             if len(raw_token) > 1:
-                tokens.extend(raw_token[index:index + 2] for index in range(len(raw_token) - 1))
-                tokens.extend(raw_token)
+                chinese_tokens.extend(
+                    raw_token[index:index + 2]
+                    for index in range(len(raw_token) - 1)
+                )
+            tokens.extend(
+                token
+                for token in chinese_tokens
+                if token not in _BM25_CHINESE_STOP_WORDS
+            )
             continue
 
-        tokens.append(raw_token)
-        lowered = raw_token.lower()
-        if lowered != raw_token:
-            tokens.append(lowered)
+        _append_ascii_bm25_token(tokens, raw_token)
 
-        for part in re.split(r"[/.\-]+", raw_token):
+        for part in re.split(r"[/._\-]+", raw_token):
             if not part or part == raw_token:
                 continue
-            tokens.append(part)
-            lowered_part = part.lower()
-            if lowered_part != part:
-                tokens.append(lowered_part)
+            _append_ascii_bm25_token(tokens, part)
 
     return [token for token in tokens if token]
 
@@ -471,7 +553,12 @@ def _ensure_keyword_chunks() -> None:
 
 def _build_bm25_index() -> dict:
     documents = [
-        tokenize_for_bm25(f"{chunk.get('source', '')} {chunk.get('text', '')}")
+        tokenize_for_bm25(
+            f"{chunk.get('source', '')} "
+            f"{str(chunk.get('source', '')).replace('_', ' ')} "
+            f"{str(chunk.get('source', '')).replace('_', ' ')} "
+            f"{chunk.get('text', '')}"
+        )
         for chunk in chunks
     ]
     doc_freq = Counter()
@@ -687,11 +774,14 @@ def reciprocal_rank_fusion(
     *,
     k: int = 60,
     top_k: int = 3,
+    weights: list[float] | None = None,
 ) -> list[dict]:
     fused = {}
+    list_weights = weights or [1.0] * len(ranked_lists)
 
     for list_index, ranked_list in enumerate(ranked_lists):
         retrieval_name = "vector" if list_index == 0 else "bm25"
+        weight = list_weights[list_index] if list_index < len(list_weights) else 1.0
         for rank, item in enumerate(ranked_list, start=1):
             key = item.get("chunk_id") or (item.get("source"), item.get("text"))
             if key not in fused:
@@ -703,7 +793,7 @@ def reciprocal_rank_fusion(
                 }
 
             fused_item = fused[key]
-            fused_item["score"] += 1 / (k + rank)
+            fused_item["score"] += weight / (k + rank)
             fused_item["hybrid_score"] = fused_item["score"]
 
             if retrieval_name == "vector":
@@ -735,6 +825,7 @@ def _search_hybrid_chunks_with_metadata(
     fused_results = reciprocal_rank_fusion(
         [vector_results, bm25_results],
         top_k=top_k,
+        weights=[HYBRID_VECTOR_WEIGHT, HYBRID_BM25_WEIGHT],
     )
     highest_score = max((float(item["score"]) for item in fused_results), default=None)
 
