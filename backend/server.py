@@ -76,12 +76,14 @@ class RagRequest(BaseModel):
     text: str
     top_k: int = 3
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
+    reranker_enabled: bool = False
 
 
 class DebugRagRequest(BaseModel):
     text: str
     top_k: int = 5
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
+    reranker_enabled: bool = False
 
 
 def _is_public_image_url(url: str) -> bool:
@@ -369,6 +371,7 @@ def debug_langgraph(request: ChatRequest):
             request.message,
             top_k=request.top_k,
             retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
             use_rag=request.use_rag,
             model=request.model,
             temperature=request.temperature,
@@ -410,6 +413,7 @@ def rag_api(request: RagRequest):
         request.text,
         top_k=request.top_k,
         retrieval_mode=request.retrieval_mode,
+        reranker_enabled=request.reranker_enabled,
     )
 
 
@@ -524,15 +528,23 @@ def debug_index_sources_api():
 def debug_rag_api(request: DebugRagRequest):
     from backend.rag_store import search_relevant_chunks
 
-    chunks = search_relevant_chunks(
+    result = search_relevant_chunks(
         request.text,
         top_k=request.top_k,
         retrieval_mode=request.retrieval_mode,
+        reranker_enabled=request.reranker_enabled,
+        include_metadata=True,
     )
+    chunks = result["chunks"]
 
     return {
         "question": request.text,
-        "retrieval_mode": request.retrieval_mode,
+        "retrieval_mode": result.get("retrieval_mode", request.retrieval_mode),
+        "reranker_enabled": result.get("reranker_enabled", request.reranker_enabled),
+        "reranker_used": result.get("reranker_used", False),
+        "reranker_model": result.get("reranker_model"),
+        "reranker_top_n": result.get("reranker_top_n"),
+        "reranker_error": result.get("reranker_error"),
         "count": len(chunks),
         "chunks": chunks,
     }

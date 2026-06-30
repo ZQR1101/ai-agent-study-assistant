@@ -60,6 +60,9 @@ class AppConfig:
     embedding_model_local_only: bool
     enable_rag_warmup: bool
     rag_warmup_load_index: bool
+    enable_reranker: bool
+    reranker_model: str
+    reranker_top_n: int
 
     @property
     def has_api_key(self) -> bool:
@@ -102,6 +105,13 @@ def read_bool_env(name: str, default: bool = False) -> bool:
     return value.lower() in ("true", "1", "yes", "on")
 
 
+def read_positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 def get_embedding_model_settings() -> tuple[str, bool]:
     configured_model = os.getenv("EMBEDDING_MODEL_PATH") or os.getenv("EMBEDDING_MODEL")
     if configured_model:
@@ -128,4 +138,7 @@ def get_config() -> AppConfig:
         embedding_model_local_only=embedding_model_local_only,
         enable_rag_warmup=read_bool_env("ENABLE_RAG_WARMUP", False),
         rag_warmup_load_index=read_bool_env("RAG_WARMUP_LOAD_INDEX", True),
+        enable_reranker=read_bool_env("ENABLE_RERANKER", False),
+        reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
+        reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
     )

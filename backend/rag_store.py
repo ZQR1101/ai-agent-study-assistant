@@ -6,7 +6,8 @@ import os
 import re
 import threading
 
-from backend.config import get_embedding_model_settings
+from backend.config import get_config, get_embedding_model_settings
+from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
 
 embedding_model = None
@@ -675,6 +676,17 @@ def _empty_search_metadata(
     }
 
 
+def _reranker_metadata(enabled: bool, top_n: int) -> dict:
+    config = get_config()
+    return {
+        "reranker_enabled": bool(enabled),
+        "reranker_used": False,
+        "reranker_model": config.reranker_model or None,
+        "reranker_top_n": top_n,
+        "reranker_error": None,
+    }
+
+
 def _search_vector_chunks_with_metadata(
     question: str,
     top_k: int = 10,
@@ -891,23 +903,46 @@ def search_relevant_chunks(
     include_metadata: bool = False,
     retrieval_mode: str = "vector",
     candidate_k: int | None = None,
+    reranker_enabled: bool | None = False,
+    reranker_top_n: int | None = None,
 ):
     mode = retrieval_mode if retrieval_mode in {"vector", "bm25", "hybrid"} else "vector"
+    config = get_config()
+    requested_reranker = bool(reranker_enabled)
+    top_n = max(top_k, reranker_top_n or config.reranker_top_n)
+    use_reranker = is_reranker_enabled(requested_reranker)
+    retrieval_top_k = top_n if use_reranker else top_k
 
     if mode == "bm25":
-        metadata = _search_keyword_chunks_with_metadata(question, top_k=top_k)
+        metadata = _search_keyword_chunks_with_metadata(question, top_k=retrieval_top_k)
     elif mode == "hybrid":
         metadata = _search_hybrid_chunks_with_metadata(
             question,
-            top_k=top_k,
-            candidate_k=candidate_k,
+            top_k=retrieval_top_k,
+            candidate_k=max(candidate_k or 0, retrieval_top_k) if use_reranker else candidate_k,
             similarity_threshold=similarity_threshold,
         )
     else:
         metadata = _search_vector_chunks_with_metadata(
             question,
-            top_k=top_k,
+            top_k=retrieval_top_k,
             similarity_threshold=similarity_threshold,
+        )
+
+    metadata.update(_reranker_metadata(requested_reranker, top_n))
+    if requested_reranker:
+        reranked = rerank_chunks_with_metadata(
+            question,
+            metadata["chunks"],
+            top_k,
+            enabled=True,
+        )
+        metadata["chunks"] = reranked.pop("chunks")
+        metadata.update(reranked)
+        metadata["valid_count"] = len(metadata["chunks"])
+        metadata["highest_score"] = max(
+            (float(item["score"]) for item in metadata["chunks"]),
+            default=None,
         )
 
     if include_metadata:

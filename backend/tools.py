@@ -341,7 +341,15 @@ def _run_rag_tool(
     history_context = (shared_context or {}).get("history_context", "")
     retrieval_mode = (shared_context or {}).get("retrieval_mode", "vector")
     rag_query = step_input
-    rag_context = get_rag_context(rag_query, top_k=top_k, retrieval_mode=retrieval_mode)
+    rag_kwargs = {}
+    if shared_context is not None and "reranker_enabled" in shared_context:
+        rag_kwargs["reranker_enabled"] = bool(shared_context["reranker_enabled"])
+    rag_context = get_rag_context(
+        rag_query,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
+        **rag_kwargs,
+    )
     rag_sources = rag_context.get("sources", [])
     retrieval_info = {
         "retrieval_mode": rag_context.get("retrieval_mode", retrieval_mode),
@@ -349,6 +357,11 @@ def _run_rag_tool(
         "vector_candidates": rag_context.get("vector_candidates", 0),
         "bm25_candidates": rag_context.get("bm25_candidates", 0),
         "hybrid_used": rag_context.get("hybrid_used", False),
+        "reranker_enabled": rag_context.get("reranker_enabled", False),
+        "reranker_used": rag_context.get("reranker_used", False),
+        "reranker_model": rag_context.get("reranker_model"),
+        "reranker_top_n": rag_context.get("reranker_top_n"),
+        "reranker_error": rag_context.get("reranker_error"),
     }
     trace = [
         f"RAG query：{step_input}",
@@ -362,6 +375,8 @@ def _run_rag_tool(
         f"RAG vector_candidates：{retrieval_info['vector_candidates']}",
         f"RAG bm25_candidates：{retrieval_info['bm25_candidates']}",
         f"RAG hybrid_used：{'是' if retrieval_info['hybrid_used'] else '否'}",
+        f"RAG reranker_enabled：{'是' if retrieval_info['reranker_enabled'] else '否'}",
+        f"RAG reranker_used：{'是' if retrieval_info['reranker_used'] else '否'}",
         f"RAG 原始候选数：{rag_context.get('raw_count')}",
         f"RAG 有效候选数：{rag_context.get('valid_count')}",
         f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}",

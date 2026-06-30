@@ -166,6 +166,31 @@ def check_env() -> bool:
     return True
 
 
+def check_reranker_config() -> bool:
+    from backend.config import get_config
+
+    config = get_config()
+    if not config.enable_reranker:
+        print_result("OK", "Reranker disabled (ENABLE_RERANKER=false)")
+        return True
+    if not config.reranker_model:
+        print_result("WARN", "Reranker enabled but RERANKER_MODEL is empty; retrieval will fall back")
+        return True
+
+    model_name = config.reranker_model
+    model_path = Path(model_name)
+    is_local_path = model_path.is_absolute() or model_name.startswith((".", "/", "\\"))
+    if is_local_path and not model_path.exists():
+        print_result("WARN", f"Reranker model path not found: {model_name}; retrieval will fall back")
+        return True
+
+    print_result(
+        "OK",
+        f"Reranker configured; model={model_name}, top_n={config.reranker_top_n}",
+    )
+    return True
+
+
 def check_docs_dir() -> bool:
     if not DOCS_DIR.exists():
         print_result("ERROR", "docs directory not found")
@@ -210,6 +235,7 @@ def main() -> int:
         check_dependencies(),
         check_core_modules(),
         check_env(),
+        check_reranker_config(),
         check_docs_dir(),
         check_rag_index(),
     ]

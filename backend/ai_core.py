@@ -250,6 +250,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         f"use_agent：{request.use_agent}",
         f"top_k：{request.top_k}",
         f"retrieval_mode：{request.retrieval_mode}",
+        f"reranker_enabled：{request.reranker_enabled}",
         f"session_id：{request.session_id or '无'}",
         f"使用 history：{'是' if history_messages else '否'}",
         f"history 消息数：{len(history_messages)}",
@@ -275,6 +276,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             rag_question,
             request.top_k,
             retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
         )
         trace.append(f"RAG query 使用 history：{'是' if history_context else '否'}")
         append_rag_trace(trace, rag_context_for_trace(rag_context, request.top_k))
@@ -284,6 +286,11 @@ def run_chat_request(request: ChatRequest) -> dict:
             "vector_candidates": rag_context.get("vector_candidates", 0),
             "bm25_candidates": rag_context.get("bm25_candidates", 0),
             "hybrid_used": rag_context.get("hybrid_used", False),
+            "reranker_enabled": rag_context.get("reranker_enabled", False),
+            "reranker_used": rag_context.get("reranker_used", False),
+            "reranker_model": rag_context.get("reranker_model"),
+            "reranker_top_n": rag_context.get("reranker_top_n"),
+            "reranker_error": rag_context.get("reranker_error"),
         })
     elif use_rag and agent_handles_rag:
         trace.append(f"外层 RAG 检索：跳过，交给 Agent rag tool 执行（retrieval_mode={request.retrieval_mode}）")
@@ -417,6 +424,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             prefer_rag=use_rag,
             top_k=request.top_k,
             retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
             history_context=history_context,
         )
         answer = agent_result["answer"]
@@ -436,6 +444,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             prefer_rag=use_rag,
             top_k=request.top_k,
             retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
             history_context=history_context,
         )
         answer = agent_result["answer"]

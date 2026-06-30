@@ -25,6 +25,8 @@ def get_rag_context(
     score_threshold: float = SIMILARITY_THRESHOLD,
     retrieval_mode: str = "vector",
     candidate_k: int | None = None,
+    reranker_enabled: bool = False,
+    reranker_top_n: int | None = None,
 ) -> dict:
     search_result = search_relevant_chunks(
         question,
@@ -33,6 +35,8 @@ def get_rag_context(
         include_metadata=True,
         retrieval_mode=retrieval_mode,
         candidate_k=candidate_k,
+        reranker_enabled=reranker_enabled,
+        reranker_top_n=reranker_top_n,
     )
     chunks = search_result["chunks"]
     max_score = search_result["highest_score"]
@@ -43,6 +47,13 @@ def get_rag_context(
     error = search_result.get("error")
     passed_threshold = search_result.get("passed_threshold", bool(chunks))
     result_threshold = search_result.get("threshold", score_threshold)
+    reranker_info = {
+        "reranker_enabled": search_result.get("reranker_enabled", False),
+        "reranker_used": search_result.get("reranker_used", False),
+        "reranker_model": search_result.get("reranker_model"),
+        "reranker_top_n": search_result.get("reranker_top_n"),
+        "reranker_error": search_result.get("reranker_error"),
+    }
 
     if not chunks or not passed_threshold:
         return {
@@ -61,6 +72,7 @@ def get_rag_context(
             "vector_candidates": search_result.get("vector_candidates", 0),
             "bm25_candidates": search_result.get("bm25_candidates", 0),
             "hybrid_used": search_result.get("hybrid_used", False),
+            **reranker_info,
         }
 
     context_parts = []
@@ -82,7 +94,15 @@ def get_rag_context(
             "chunk_id": chunk.get("chunk_id"),
             "retrieval": retrieval,
         }
-        for key in ("vector_score", "bm25_score", "vector_rank", "bm25_rank"):
+        for key in (
+            "vector_score",
+            "bm25_score",
+            "vector_rank",
+            "bm25_rank",
+            "rerank_score",
+            "rerank_rank",
+            "reranker_used",
+        ):
             if chunk.get(key) is not None:
                 source_payload[key] = chunk[key]
         source_chunks.append(source_payload)
@@ -103,6 +123,7 @@ def get_rag_context(
         "vector_candidates": search_result.get("vector_candidates", 0),
         "bm25_candidates": search_result.get("bm25_candidates", 0),
         "hybrid_used": search_result.get("hybrid_used", False),
+        **reranker_info,
     }
 
 
@@ -112,12 +133,16 @@ def rag_answer_with_sources(
     top_k: int = 3,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     retrieval_mode: str = "vector",
+    reranker_enabled: bool = False,
+    reranker_top_n: int | None = None,
 ) -> dict:
     rag_context = get_rag_context(
         question,
         top_k=top_k,
         score_threshold=similarity_threshold,
         retrieval_mode=retrieval_mode,
+        reranker_enabled=reranker_enabled,
+        reranker_top_n=reranker_top_n,
     )
 
     if not rag_context["found"]:
@@ -128,6 +153,9 @@ def rag_answer_with_sources(
             "threshold": rag_context["threshold"],
             "passed_threshold": False,
             "retrieval_mode": rag_context.get("retrieval_mode", retrieval_mode),
+            "reranker_enabled": rag_context.get("reranker_enabled", False),
+            "reranker_used": rag_context.get("reranker_used", False),
+            "reranker_error": rag_context.get("reranker_error"),
         }
 
     answer = chat(question, context=rag_context["context"], custom_llm=custom_llm)
@@ -139,6 +167,9 @@ def rag_answer_with_sources(
         "threshold": rag_context["threshold"],
         "passed_threshold": True,
         "retrieval_mode": rag_context.get("retrieval_mode", retrieval_mode),
+        "reranker_enabled": rag_context.get("reranker_enabled", False),
+        "reranker_used": rag_context.get("reranker_used", False),
+        "reranker_error": rag_context.get("reranker_error"),
     }
 
 
@@ -148,6 +179,8 @@ def rag_answer(
     top_k: int = 3,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     retrieval_mode: str = "vector",
+    reranker_enabled: bool = False,
+    reranker_top_n: int | None = None,
 ) -> str:
     result = rag_answer_with_sources(
         question,
@@ -155,6 +188,8 @@ def rag_answer(
         top_k=top_k,
         similarity_threshold=similarity_threshold,
         retrieval_mode=retrieval_mode,
+        reranker_enabled=reranker_enabled,
+        reranker_top_n=reranker_top_n,
     )
     source_text = "\n".join([
         f"- {source.get('source')} ({format_score(source.get('score'))})"
@@ -188,6 +223,12 @@ def append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
     trace.append(f"RAG vector_candidates：{rag_context.get('vector_candidates', 0)}")
     trace.append(f"RAG bm25_candidates：{rag_context.get('bm25_candidates', 0)}")
     trace.append(f"RAG hybrid_used：{'是' if rag_context.get('hybrid_used') else '否'}")
+    trace.append(f"RAG reranker_enabled：{'是' if rag_context.get('reranker_enabled') else '否'}")
+    trace.append(f"RAG reranker_used：{'是' if rag_context.get('reranker_used') else '否'}")
+    trace.append(f"RAG reranker_model：{rag_context.get('reranker_model')}")
+    trace.append(f"RAG reranker_top_n：{rag_context.get('reranker_top_n')}")
+    if rag_context.get("reranker_error"):
+        trace.append(f"RAG reranker_error：{rag_context.get('reranker_error')}")
     trace.append(f"RAG 原始候选数：{rag_context.get('raw_count')}")
     trace.append(f"RAG 有效候选数：{rag_context.get('valid_count')}")
     trace.append(f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}")

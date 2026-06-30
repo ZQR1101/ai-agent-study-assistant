@@ -1,12 +1,15 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.evaluate_rag_retrieval import (
     build_mode_summary,
     evaluate_cases,
     load_cases,
+    parse_args,
     render_markdown,
     score_retrieval,
     write_json_report,
@@ -177,6 +180,48 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertTrue(result["answer"]["success"])
         self.assertTrue(result["judge"]["success"])
         self.assertEqual(result["judge"]["evaluation"]["overall_score"], 9.0)
+
+    def test_with_reranker_adds_hybrid_reranker_mode(self):
+        with patch.object(
+            sys,
+            "argv",
+            ["evaluate_rag_retrieval.py", "--with-reranker"],
+        ):
+            args = parse_args()
+
+        self.assertEqual(args.modes, ["vector", "bm25", "hybrid", "hybrid_reranker"])
+
+    def test_hybrid_reranker_uses_hybrid_search_with_reranker_flag(self):
+        calls = []
+
+        def search_fn(_question, **kwargs):
+            calls.append(kwargs)
+            return {
+                "chunks": [
+                    {
+                        **sample_chunks()[0],
+                        "rerank_score": 0.95,
+                        "rerank_rank": 1,
+                        "reranker_used": True,
+                    }
+                ],
+                "error": None,
+                "reranker_enabled": True,
+                "reranker_used": True,
+            }
+
+        report = evaluate_cases(
+            [sample_case()],
+            ["hybrid_reranker"],
+            5,
+            search_fn=search_fn,
+        )
+        result = report["cases"][0]["results"]["hybrid_reranker"]
+
+        self.assertEqual(calls[0]["retrieval_mode"], "hybrid")
+        self.assertTrue(calls[0]["reranker_enabled"])
+        self.assertTrue(result["reranker_used"])
+        self.assertEqual(result["chunks"][0]["rerank_rank"], 1)
 
 
 if __name__ == "__main__":

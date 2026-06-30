@@ -16,7 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 DEFAULT_CASES_PATH = Path("eval_cases/rag_retrieval_cases.json")
 DEFAULT_JSON_OUTPUT = Path("outputs/rag_retrieval_eval.json")
 DEFAULT_MARKDOWN_OUTPUT = Path("outputs/rag_retrieval_eval.md")
-SUPPORTED_MODES = ("vector", "bm25", "hybrid")
+BASE_MODES = ("vector", "bm25", "hybrid")
+RERANKER_MODE = "hybrid_reranker"
+SUPPORTED_MODES = (*BASE_MODES, RERANKER_MODE)
 SNIPPET_LENGTH = 320
 
 
@@ -47,14 +49,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cases", default=str(DEFAULT_CASES_PATH))
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--modes", type=parse_modes, default=list(SUPPORTED_MODES))
+    parser.add_argument("--modes", type=parse_modes, default=list(BASE_MODES))
     parser.add_argument("--output", default=str(DEFAULT_JSON_OUTPUT))
     parser.add_argument("--markdown", default=str(DEFAULT_MARKDOWN_OUTPUT))
     parser.add_argument("--with-answer", action="store_true")
     parser.add_argument("--with-judge", action="store_true")
+    parser.add_argument("--with-reranker", action="store_true")
     args = parser.parse_args()
     if args.top_k < 1:
         parser.error("--top-k must be at least 1")
+    if args.with_reranker and RERANKER_MODE not in args.modes:
+        args.modes.append(RERANKER_MODE)
     return args
 
 
@@ -130,7 +135,16 @@ def serialize_chunk(chunk: dict, rank: int) -> dict:
         "retrieval": str(chunk.get("retrieval") or "unknown"),
         "snippet": _truncate(text),
     }
-    for key in ("vector_score", "bm25_score", "vector_rank", "bm25_rank", "chunk_id"):
+    for key in (
+        "vector_score",
+        "bm25_score",
+        "vector_rank",
+        "bm25_rank",
+        "rerank_score",
+        "rerank_rank",
+        "reranker_used",
+        "chunk_id",
+    ):
         value = chunk.get(key)
         if value is not None:
             payload[key] = _float_or_none(value) if key.endswith("score") else value
@@ -172,6 +186,8 @@ def score_retrieval(case: dict, mode: str, top_k: int, chunks: list[dict]) -> di
         "keyword_hit_count": keyword_hits,
         "source_hit_count": source_hits,
         "retrieval_score": keyword_hits + source_hits,
+        "reranker_enabled": mode == RERANKER_MODE,
+        "reranker_used": any(bool(chunk.get("reranker_used")) for chunk in serialized),
     }
 
 
@@ -191,6 +207,8 @@ def failed_result(mode: str, top_k: int, error: Exception | str) -> dict:
         "keyword_hit_count": 0,
         "source_hit_count": 0,
         "retrieval_score": 0,
+        "reranker_enabled": mode == RERANKER_MODE,
+        "reranker_used": False,
     }
 
 
@@ -206,10 +224,12 @@ def run_retrieval(
             from backend.rag_store import search_relevant_chunks
 
             search_fn = search_relevant_chunks
+        retrieval_mode = "hybrid" if mode == RERANKER_MODE else mode
         raw_result = search_fn(
             case["question"],
             top_k=top_k,
-            retrieval_mode=mode,
+            retrieval_mode=retrieval_mode,
+            reranker_enabled=mode == RERANKER_MODE,
             include_metadata=True,
         )
         metadata = raw_result if isinstance(raw_result, dict) else {"chunks": raw_result}
@@ -230,6 +250,11 @@ def run_retrieval(
             "hybrid_used",
             "threshold",
             "highest_score",
+            "reranker_enabled",
+            "reranker_used",
+            "reranker_model",
+            "reranker_top_n",
+            "reranker_error",
         ):
             if key in metadata:
                 result[key] = metadata.get(key)
@@ -244,7 +269,13 @@ def _run_answer(question: str, mode: str, top_k: int, answer_fn: Callable[..., d
             from backend.rag_service import rag_answer_with_sources
 
             answer_fn = rag_answer_with_sources
-        result = answer_fn(question, top_k=top_k, retrieval_mode=mode)
+        retrieval_mode = "hybrid" if mode == RERANKER_MODE else mode
+        result = answer_fn(
+            question,
+            top_k=top_k,
+            retrieval_mode=retrieval_mode,
+            reranker_enabled=mode == RERANKER_MODE,
+        )
         return {
             "success": True,
             "error": None,
@@ -293,6 +324,7 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             "average_retrieval_score": round(total_score / case_count, 3) if case_count else 0.0,
             "successful_cases": sum(bool(result.get("success")) for result in results),
             "failed_cases": sum(not bool(result.get("success")) for result in results),
+            "reranker_used_cases": sum(bool(result.get("reranker_used")) for result in results),
         }
     return summary
 
@@ -340,6 +372,7 @@ def evaluate_cases(
             "top_k": top_k,
             "with_answer": effective_answer,
             "with_judge": with_judge,
+            "with_reranker": RERANKER_MODE in modes,
         },
         "mode_summary": build_mode_summary(evaluated_cases, modes),
         "cases": evaluated_cases,
@@ -362,15 +395,17 @@ def render_markdown(report: dict) -> str:
         f"- Modes: {', '.join(summary['modes'])}",
         f"- With answer: {summary['with_answer']}",
         f"- With judge: {summary['with_judge']}",
+        f"- With reranker: {summary.get('with_reranker', False)}",
         "",
-        "| Mode | Keyword Hits | Source Hits | Avg Score | Success | Failed |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Mode | Keyword Hits | Source Hits | Avg Score | Success | Failed | Reranker Used |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for mode in summary["modes"]:
         item = report["mode_summary"][mode]
         lines.append(
             f"| {mode} | {item['total_keyword_hits']} | {item['total_source_hits']} | "
-            f"{item['average_retrieval_score']:.3f} | {item['successful_cases']} | {item['failed_cases']} |"
+            f"{item['average_retrieval_score']:.3f} | {item['successful_cases']} | {item['failed_cases']} | "
+            f"{item.get('reranker_used_cases', 0)} |"
         )
 
     lines.extend(["", "## Case Details", ""])
@@ -394,22 +429,27 @@ def render_markdown(report: dict) -> str:
                 f"- Keyword hits: {result['keyword_hit_count']} ({', '.join(result['matched_expected_keywords']) or 'none'})",
                 f"- Source hits: {result['source_hit_count']} ({', '.join(result['matched_expected_sources']) or 'none'})",
                 f"- Retrieval score: {result['retrieval_score']}",
+                f"- Reranker enabled: {result.get('reranker_enabled', False)}",
+                f"- Reranker used: {result.get('reranker_used', False)}",
             ])
+            if result.get("reranker_error"):
+                lines.append(f"- Reranker error: `{_md_escape(result['reranker_error'])}`")
             if result.get("error"):
                 lines.append(f"- Error: `{_md_escape(result['error'])}`")
             if result.get("warning"):
                 lines.append(f"- Warning: `{_md_escape(result['warning'])}`")
             lines.extend([
                 "",
-                "| Rank | Source | Score | Retrieval | Vector Score | BM25 Score |",
-                "|---:|---|---:|---|---:|---:|",
+                "| Rank | Source | Score | Retrieval | Vector Score | BM25 Score | Rerank Score | Rerank Rank |",
+                "|---:|---|---:|---|---:|---:|---:|---:|",
             ])
             if result["chunks"]:
                 for chunk in result["chunks"]:
                     lines.append(
                         f"| {chunk['rank']} | {_md_escape(chunk['source'])} | {_md_escape(chunk['score'])} | "
                         f"{_md_escape(chunk['retrieval'])} | {_md_escape(chunk.get('vector_score'))} | "
-                        f"{_md_escape(chunk.get('bm25_score'))} |"
+                        f"{_md_escape(chunk.get('bm25_score'))} | {_md_escape(chunk.get('rerank_score'))} | "
+                        f"{_md_escape(chunk.get('rerank_rank'))} |"
                     )
                 lines.append("")
                 for chunk in result["chunks"]:
@@ -418,7 +458,7 @@ def render_markdown(report: dict) -> str:
                         "",
                     ])
             else:
-                lines.extend(["| - | No chunks | - | - | - | - |", ""])
+                lines.extend(["| - | No chunks | - | - | - | - | - | - |", ""])
             answer = result.get("answer")
             if answer:
                 lines.extend([

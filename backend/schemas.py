@@ -20,6 +20,7 @@ class ChatRequest(BaseModel):
     planner_mode: PlannerMode = "rule"
     top_k: int = Field(3, ge=1, le=10)
     retrieval_mode: RetrievalMode = "vector"
+    reranker_enabled: bool = False
     session_id: str | None = None
     history: list[dict] = Field(default_factory=list)
 
@@ -35,6 +36,9 @@ class SourceChunk(BaseModel):
     bm25_score: float | None = None
     vector_rank: int | None = None
     bm25_rank: int | None = None
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
+    reranker_used: bool | None = None
 
 
 class AgentPlanStep(BaseModel):

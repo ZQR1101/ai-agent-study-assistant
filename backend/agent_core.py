@@ -305,12 +305,14 @@ def run_agent(
     prefer_rag: bool = False,
     top_k: int = 3,
     retrieval_mode: str = "vector",
+    reranker_enabled: bool = False,
     history_context: str | None = None,
 ) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
     trace.append(f"Agent Planner 使用 history：{'是' if history_context else '否'}")
     trace.append(f"Agent Planner retrieval_mode：{retrieval_mode}")
+    trace.append(f"Agent Planner reranker_enabled：{reranker_enabled}")
     planner_usage_started_at = get_llm_usage_record_count(active_llm)
     planner_started_at = perf_counter()
     plan = plan_agent_steps(
@@ -348,6 +350,11 @@ def run_agent(
         "vector_candidates": 0,
         "bm25_candidates": 0,
         "hybrid_used": retrieval_mode == "hybrid",
+        "reranker_enabled": reranker_enabled,
+        "reranker_used": False,
+        "reranker_model": None,
+        "reranker_top_n": None,
+        "reranker_error": None,
     }
     tool_calls = [
         {
@@ -368,6 +375,7 @@ def run_agent(
         "original_input": user_input,
         "history_context": history_context or "",
         "retrieval_mode": retrieval_mode,
+        "reranker_enabled": reranker_enabled,
         "rag_context": "",
         "sources": [],
         "step_outputs": [],

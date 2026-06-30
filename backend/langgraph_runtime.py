@@ -33,6 +33,7 @@ class LangGraphAgentState(TypedDict, total=False):
     temperature: float
     top_k: int
     retrieval_mode: str
+    reranker_enabled: bool
     history: list[dict]
     history_context: str
     custom_llm: Any
@@ -471,6 +472,7 @@ def _build_shared_context(state: LangGraphAgentState) -> dict:
         "original_input": state.get("message", ""),
         "history_context": state.get("history_context", ""),
         "retrieval_mode": state.get("retrieval_mode", "vector"),
+        "reranker_enabled": state.get("reranker_enabled", False),
         "rag_context": state.get("rag_context", ""),
         "sources": state.get("sources", []),
         "step_outputs": state.get("step_outputs", []),
@@ -925,6 +927,13 @@ def build_runtime_info(state: LangGraphAgentState) -> dict:
         "vector_candidates": retrieval_info.get("vector_candidates", 0),
         "bm25_candidates": retrieval_info.get("bm25_candidates", 0),
         "hybrid_used": retrieval_info.get("hybrid_used", False),
+        "reranker_enabled": retrieval_info.get(
+            "reranker_enabled", state.get("reranker_enabled", False)
+        ),
+        "reranker_used": retrieval_info.get("reranker_used", False),
+        "reranker_model": retrieval_info.get("reranker_model"),
+        "reranker_top_n": retrieval_info.get("reranker_top_n"),
+        "reranker_error": retrieval_info.get("reranker_error"),
     }, state.get("custom_llm"))
 
 
@@ -1025,6 +1034,7 @@ def run_langgraph_workflow(
     temperature: float = 0.7,
     top_k: int = 3,
     retrieval_mode: str = "vector",
+    reranker_enabled: bool = False,
     history: list[dict] | None = None,
     history_context: str = "",
     use_rag: bool = False,
@@ -1037,6 +1047,7 @@ def run_langgraph_workflow(
         "temperature": temperature,
         "top_k": top_k,
         "retrieval_mode": retrieval_mode,
+        "reranker_enabled": reranker_enabled,
         "history": history or [],
         "history_context": history_context,
         "custom_llm": custom_llm,
@@ -1094,6 +1105,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
         f"planner_mode: {request.planner_mode}",
         f"top_k: {request.top_k}",
         f"retrieval_mode: {request.retrieval_mode}",
+        f"reranker_enabled: {request.reranker_enabled}",
     ]
 
     try:
@@ -1104,6 +1116,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
             temperature=request.temperature,
             top_k=request.top_k,
             retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
             history=history_messages,
             history_context=history_context,
             use_rag=request.use_rag,
@@ -1130,6 +1143,11 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
                 "planner_error": None,
                 "error": str(exc),
                 "retrieval_mode": request.retrieval_mode,
+                "reranker_enabled": request.reranker_enabled,
+                "reranker_used": False,
+                "reranker_model": None,
+                "reranker_top_n": None,
+                "reranker_error": None,
             },
         }
 
