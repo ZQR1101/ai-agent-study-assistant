@@ -1,0 +1,72 @@
+[
+  {
+    "id": "agent_skill_001",
+    "question": "Agent Skill 和普通 Prompt 有什么区别？",
+    "expected_keywords": ["Agent Skill", "SKILL.md", "可复用", "工作流"],
+    "expected_sources": ["agent_hot_04_agent_skills_portable_workflows.md"],
+    "notes": "测试中英文专有词、SKILL.md 和可复用工作流知识包。"
+  },
+  {
+    "id": "baidu_ocr_001",
+    "question": "百度 OCR 在文档型 Agent 中有什么作用？",
+    "expected_keywords": ["百度", "OCR", "文字识别", "文档"],
+    "expected_sources": ["agent_hot_14_baidu_ocr_for_document_agents.md"],
+    "notes": "测试中文品牌名、英文缩写和文档处理场景。"
+  },
+  {
+    "id": "mcp_architecture_001",
+    "question": "MCP 的 host、client、server 分别负责什么？",
+    "expected_keywords": ["MCP", "host", "client", "server"],
+    "expected_sources": ["agent_hot_02_mcp_architecture_primitives.md"],
+    "notes": "测试 MCP 架构核心原语的精确检索。"
+  },
+  {
+    "id": "a2a_001",
+    "question": "A2A 和 MCP 的区别是什么？",
+    "expected_keywords": ["A2A", "MCP", "Agent2Agent", "互操作"],
+    "expected_sources": ["agent_hot_13_a2a_interoperability.md"],
+    "notes": "测试两个协议缩写和对比型问题。"
+  },
+  {
+    "id": "agent_memory_001",
+    "question": "Agent 的短期记忆和长期记忆有什么区别？",
+    "expected_keywords": ["短期记忆", "长期记忆", "语义记忆", "情节记忆"],
+    "expected_sources": ["agent_hot_05_memory_short_long_langgraph.md"],
+    "notes": "测试 Agent memory 的中文概念检索。"
+  },
+  {
+    "id": "context_compaction_001",
+    "question": "上下文压缩如何避免 Agent 长对话超出上下文窗口？",
+    "expected_keywords": ["上下文压缩", "长对话", "摘要", "上下文窗口"],
+    "expected_sources": ["agent_hot_08_context_compaction.md"],
+    "notes": "测试上下文工程和长对话压缩主题。"
+  },
+  {
+    "id": "agentic_rag_001",
+    "question": "Agentic RAG 与普通 RAG 有什么区别？",
+    "expected_keywords": ["Agentic RAG", "检索", "Agent", "RAG"],
+    "expected_sources": ["agents_05_agentic-rag.md", "agent_hot_12_file_search_rag_for_agents.md"],
+    "notes": "测试 Agentic RAG、普通 RAG 和文件检索文档。"
+  },
+  {
+    "id": "prompt_engineering_001",
+    "question": "Prompt Engineering 有哪些基础技巧？",
+    "expected_keywords": ["Prompt Engineering", "提示工程", "prompt", "技巧"],
+    "expected_sources": ["genai_04_prompt_engineering.md"],
+    "notes": "测试中英文 Prompt Engineering 主题。"
+  },
+  {
+    "id": "llm_planner_001",
+    "question": "LangGraph 的 Rule Planner 和 LLM Planner 如何比较？",
+    "expected_keywords": ["LangGraph", "Rule Planner", "LLM Planner", "规划"],
+    "expected_sources": ["LLM_PLANNER_EVAL_CASES.md", "PLANNER_EVALUATION.md"],
+    "notes": "测试运行时规划器和评估报告文档。"
+  },
+  {
+    "id": "tool_security_001",
+    "question": "Agent 工具调用应如何防范 Prompt Injection 和权限过宽？",
+    "expected_keywords": ["Prompt Injection", "权限", "最小权限", "工具"],
+    "expected_sources": ["agent_hot_16_tool_security_permissions.md"],
+    "notes": "测试工具安全、提示注入与权限边界。"
+  }
+]
