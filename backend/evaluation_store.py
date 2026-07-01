@@ -17,6 +17,7 @@ def _evaluation_to_dict(record: JudgeEvaluation) -> dict:
 
     return {
         "id": record.id,
+        "run_id": record.run_id,
         "session_id": record.session_id,
         "question": record.question,
         "answer": record.answer,
@@ -42,9 +43,11 @@ def save_judge_result(
     question: str,
     answer: str,
     evaluation: dict,
+    run_id: str | None = None,
 ) -> dict:
     """Save one judge evaluation and return its serialized representation."""
     record = JudgeEvaluation(
+        run_id=run_id,
         session_id=session_id,
         question=question,
         answer=answer,

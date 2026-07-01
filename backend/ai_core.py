@@ -252,6 +252,7 @@ def run_chat_request(request: ChatRequest) -> dict:
         f"retrieval_mode：{request.retrieval_mode}",
         f"reranker_enabled：{request.reranker_enabled}",
         f"session_id：{request.session_id or '无'}",
+        f"run_id：{request.run_id or '无'}",
         f"使用 history：{'是' if history_messages else '否'}",
         f"history 消息数：{len(history_messages)}",
     ]
@@ -426,6 +427,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
             history_context=history_context,
+            run_id=request.run_id,
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
@@ -446,6 +448,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
             history_context=history_context,
+            run_id=request.run_id,
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])

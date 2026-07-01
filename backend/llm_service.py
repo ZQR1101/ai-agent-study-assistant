@@ -9,6 +9,11 @@ from backend.history_utils import context_prompt, history_prompt
 _default_llm = None
 DEFAULT_INPUT_PRICE_USD_PER_1M = 0.20
 DEFAULT_OUTPUT_PRICE_USD_PER_1M = 0.80
+EXPLAIN_TASK = (
+    "请用简单易懂的中文解释用户输入。"
+    "如果用户明确要求内容结构、篇幅或详细程度，优先遵循用户要求；"
+    "否则控制在 300 字以内，只包含定义、3 个核心要点和 1 个简短例子，避免重复展开。"
+)
 
 
 def normalize_model(model: str | None) -> str:
@@ -294,11 +299,11 @@ def explain(text: str, context=None, custom_llm=None, history_context: str | Non
     active_llm = custom_llm or llm
 
     if context:
-        prompt = context_prompt("请用简单易懂的中文解释用户输入", text, context, history_context)
+        prompt = context_prompt(EXPLAIN_TASK, text, context, history_context)
     elif history_context:
-        prompt = history_prompt("请用简单易懂的中文解释当前用户输入", text, history_context)
+        prompt = history_prompt(EXPLAIN_TASK, text, history_context)
     else:
-        prompt = f"请用简单易懂的中文解释：\n{text}"
+        prompt = f"{EXPLAIN_TASK}\n\n用户输入：\n{text}"
 
     response = active_llm.invoke(prompt)
     return response.content

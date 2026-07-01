@@ -28,6 +28,7 @@ def _elapsed_ms(started_at: float) -> int:
 
 
 class LangGraphAgentState(TypedDict, total=False):
+    run_id: str
     message: str
     model: str
     temperature: float
@@ -278,9 +279,14 @@ _LANGGRAPH_TOOL_ORDER = ["rag", "summarize", "explain", "chat", "flashcard", "qu
 
 
 def _tool_descriptions_for_prompt() -> str:
+    specs = (
+        TOOL_REGISTRY.agent_specs()
+        if hasattr(TOOL_REGISTRY, "agent_specs")
+        else TOOL_REGISTRY.values()
+    )
     return "\n".join(
         f"- {tool.name}：{tool.description}"
-        for tool in TOOL_REGISTRY.values()
+        for tool in specs
     )
 
 
@@ -289,12 +295,42 @@ def _normalize_plan_steps(steps: list[dict]) -> list[dict]:
 
     for step in steps:
         tool = str(step.get("tool", ""))
-        if tool not in TOOL_REGISTRY or tool in by_tool:
+        step_input = str(step.get("input") or "")
+        if hasattr(TOOL_REGISTRY, "execute") and tool == "rag_search":
+            tool = "rag"
+        if hasattr(TOOL_REGISTRY, "execute") and tool == "study":
+            intent = detect_intent(step_input)
+            study_tools = [
+                name
+                for name, needed in (
+                    ("summarize", intent.get("need_summarize")),
+                    ("explain", intent.get("need_explain")),
+                    ("flashcard", intent.get("need_flashcard")),
+                    ("quiz", intent.get("need_quiz")),
+                )
+                if needed
+            ] or ["explain"]
+            for study_tool in study_tools:
+                by_tool.setdefault(study_tool, {
+                    "tool": study_tool,
+                    "input": step_input,
+                    "reason": step.get("reason"),
+                })
+            continue
+        registry_name = (
+            "rag_search"
+            if tool == "rag"
+            else "study" if tool in {"explain", "summarize", "quiz", "flashcard"} else tool
+        )
+        registry_has_tool = TOOL_REGISTRY.get(
+            registry_name if hasattr(TOOL_REGISTRY, "execute") else tool
+        ) is not None
+        if not registry_has_tool or tool in by_tool:
             continue
 
         by_tool[tool] = {
             "tool": tool,
-            "input": str(step.get("input") or ""),
+            "input": step_input,
             "reason": step.get("reason"),
         }
 
@@ -447,7 +483,21 @@ JSON 必须符合 AgentPlan schema。
     if not steps:
         raise ValueError("planner returned empty steps")
 
-    if any(step.get("tool") not in TOOL_REGISTRY for step in steps):
+    if any(
+        TOOL_REGISTRY.get(
+            (
+                "rag_search"
+                if step.get("tool") == "rag"
+                else "study"
+                if step.get("tool") in {"explain", "summarize", "quiz", "flashcard"}
+                else step.get("tool")
+            )
+            if hasattr(TOOL_REGISTRY, "execute")
+            else step.get("tool")
+        )
+        is None
+        for step in steps
+    ):
         raise ValueError("planner returned unknown tool")
 
     intent = _intent_from_plan_steps(steps)
@@ -469,6 +519,7 @@ def _first_plan_input(state: LangGraphAgentState, tool_name: str) -> str:
 
 def _build_shared_context(state: LangGraphAgentState) -> dict:
     return {
+        "run_id": state.get("run_id"),
         "original_input": state.get("message", ""),
         "history_context": state.get("history_context", ""),
         "retrieval_mode": state.get("retrieval_mode", "vector"),
@@ -547,7 +598,14 @@ def _normalize_tool_result(tool_name: str, result: dict, success: bool, descript
 
 
 def _run_registry_tool_raw(tool_name: str, step_input: str, state: LangGraphAgentState) -> dict:
-    tool_spec = TOOL_REGISTRY.get(tool_name)
+    merged_study_tools = {"explain", "summarize", "quiz", "flashcard"}
+    registry_tool_name = tool_name
+    if hasattr(TOOL_REGISTRY, "execute"):
+        if tool_name == "rag":
+            registry_tool_name = "rag_search"
+        elif tool_name in merged_study_tools:
+            registry_tool_name = "study"
+    tool_spec = TOOL_REGISTRY.get(registry_tool_name)
 
     if tool_spec is None:
         return _normalize_tool_result(
@@ -559,12 +617,21 @@ def _run_registry_tool_raw(tool_name: str, step_input: str, state: LangGraphAgen
         )
 
     try:
-        raw_result = tool_spec.run(
-            step_input=step_input,
-            original_input=state.get("message", ""),
-            custom_llm=state.get("custom_llm"),
-            top_k=state.get("top_k", 3),
-            shared_context=_build_shared_context(state),
+        arguments = {
+            "step_input": step_input,
+            "original_input": state.get("message", ""),
+            "custom_llm": state.get("custom_llm"),
+            "top_k": state.get("top_k", 3),
+            "shared_context": _build_shared_context(state),
+        }
+        if tool_name == "rag" and hasattr(TOOL_REGISTRY, "execute"):
+            arguments["generate_answer"] = False
+        if tool_name in merged_study_tools and hasattr(TOOL_REGISTRY, "execute"):
+            arguments["operation"] = tool_name
+        raw_result = (
+            TOOL_REGISTRY.execute(registry_tool_name, actor="langgraph", **arguments)
+            if hasattr(TOOL_REGISTRY, "execute")
+            else tool_spec.run(**arguments)
         )
     except Exception as exc:
         return _normalize_tool_result(
@@ -705,6 +772,21 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
         planner_call.update(usage_delta)
     if planner_result.get("planner_error"):
         planner_call["error"] = planner_result["planner_error"]
+
+    if state.get("run_id"):
+        from backend.run_repository import get_run_repository
+
+        get_run_repository().update_run(
+            state["run_id"],
+            plan=plan,
+            metadata={
+                "planner": {
+                    "mode": planner_mode,
+                    "fallback": bool(planner_result.get("planner_fallback")),
+                    "error": planner_result.get("planner_error") or None,
+                }
+            },
+        )
 
     return {
         **state,
@@ -1030,7 +1112,7 @@ def run_langgraph_workflow(
     message: str,
     *,
     custom_llm=None,
-    model: str = "mimo-v2.5",
+    model: str = "deepseek-v4-pro",
     temperature: float = 0.7,
     top_k: int = 3,
     retrieval_mode: str = "vector",
@@ -1039,9 +1121,11 @@ def run_langgraph_workflow(
     history_context: str = "",
     use_rag: bool = False,
     planner_mode: str = "rule",
+    run_id: str | None = None,
 ) -> dict:
     graph = build_langgraph_workflow()
     result = graph.invoke({
+        "run_id": run_id,
         "message": message,
         "model": model,
         "temperature": temperature,
@@ -1121,6 +1205,7 @@ def run_langgraph_chat_request(request: ChatRequest) -> dict:
             history_context=history_context,
             use_rag=request.use_rag,
             planner_mode=request.planner_mode,
+            run_id=request.run_id,
         )
     except LangGraphRuntimeUnavailableError as exc:
         trace.append(f"LangGraph unavailable: {exc}")

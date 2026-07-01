@@ -58,6 +58,7 @@ class JudgeEvaluation(Base):
     __tablename__ = "judge_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)

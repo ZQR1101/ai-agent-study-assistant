@@ -1,7 +1,5 @@
 import json
 import re
-from dataclasses import dataclass
-from typing import Callable
 
 from pydantic import ValidationError
 
@@ -15,13 +13,19 @@ from backend.rag_service import (
     with_fallback_prefix,
 )
 from backend.schemas import FlashcardPayload
-
-
-@dataclass
-class ToolSpec:
-    name: str
-    description: str
-    run: Callable[..., dict]
+from backend.tool_actions import (
+    delete_knowledge_file,
+    delete_run,
+    delete_saved_item,
+    rebuild_rag_index_tool,
+    reset_rag_index,
+    reset_saved_items,
+    run_code_sandbox,
+    save_flashcards,
+    save_note,
+    save_quiz,
+)
+from backend.tool_registry import ToolCategory, ToolRegistry, ToolSpec
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -336,6 +340,7 @@ def _run_rag_tool(
     custom_llm=None,
     top_k: int = 3,
     shared_context: dict | None = None,
+    generate_answer: bool = True,
 ) -> dict:
     active_llm = custom_llm or llm
     history_context = (shared_context or {}).get("history_context", "")
@@ -388,6 +393,17 @@ def _run_rag_tool(
         trace.append(f"RAG error：{rag_context.get('error')}")
 
     if rag_context.get("found"):
+        if not generate_answer:
+            return _base_tool_result(
+                answer="",
+                sources=rag_sources,
+                context=rag_context["context"],
+                trace=[*trace, "RAG answer generation：skipped"],
+                used_context=True,
+                context_sources=source_names(rag_sources),
+                retrieval_info=retrieval_info,
+            )
+
         answer = chat(
             step_input,
             context=rag_context["context"],
@@ -417,7 +433,7 @@ def _run_rag_tool(
     )
 
 
-TOOL_REGISTRY = {
+_LEGACY_TOOL_REGISTRY = {
     "chat": ToolSpec(
         name="chat",
         description="普通聊天或通用问答",
@@ -449,3 +465,156 @@ TOOL_REGISTRY = {
         run=_run_flashcard_tool,
     ),
 }
+
+
+# Public registry v2. Legacy implementations above remain private runners so
+# existing workflows can migrate without changing generation behavior.
+
+
+def _detect_study_operations(step_input: str) -> list[str]:
+    text = str(step_input or "").lower()
+    markers = {
+        "summarize": ("summarize", "summary", "总结", "摘要", "概括"),
+        "explain": ("explain", "what is", "why", "解释", "讲解", "什么是"),
+        "flashcard": ("flashcard", "card", "卡片", "记忆卡", "抽认卡"),
+        "quiz": ("quiz", "question", "test", "测验", "练习题", "出题"),
+    }
+    operations = [
+        operation
+        for operation, keywords in markers.items()
+        if any(keyword in text for keyword in keywords)
+    ]
+    return operations or ["explain"]
+
+
+def _run_study_tool(
+    step_input: str,
+    original_input: str = "",
+    custom_llm=None,
+    top_k: int = 3,
+    shared_context: dict | None = None,
+    operation: str | list[str] | None = None,
+) -> dict:
+    """Run one or more learning-content operations through one public tool."""
+    requested = [operation] if isinstance(operation, str) else list(operation or [])
+    requested = [
+        item
+        for item in requested
+        if item in {"explain", "summarize", "quiz", "flashcard"}
+    ]
+    operations = requested or _detect_study_operations(step_input)
+    runners = {
+        "explain": _run_explain_tool,
+        "summarize": _run_summarize_tool,
+        "quiz": _run_quiz_tool,
+        "flashcard": _run_flashcard_tool,
+    }
+    answers = []
+    trace = [f"study operations: {', '.join(operations)}"]
+    flashcards = []
+    used_context = False
+    context_sources = []
+    for item in operations:
+        result = runners[item](
+            step_input=step_input,
+            original_input=original_input,
+            custom_llm=custom_llm,
+            top_k=top_k,
+            shared_context=shared_context,
+        )
+        if result.get("answer"):
+            answers.append(result["answer"])
+        trace.extend(result.get("trace", []))
+        flashcards.extend(result.get("flashcards", []))
+        used_context = used_context or bool(result.get("used_context"))
+        for source in result.get("context_sources", []):
+            if source not in context_sources:
+                context_sources.append(source)
+    return _base_tool_result(
+        answer="\n\n".join(answers),
+        trace=trace,
+        used_context=used_context,
+        context_sources=context_sources,
+        flashcards=flashcards,
+    )
+
+
+TOOL_REGISTRY = ToolRegistry(
+    [
+        ToolSpec("chat", "General conversation and question answering.", _run_chat_tool),
+        ToolSpec(
+            "rag_search",
+            "Search the local knowledge base and answer from retrieved evidence.",
+            _run_rag_tool,
+        ),
+        ToolSpec(
+            "study",
+            "Explain, summarize, create quizzes, or create flashcards in one tool.",
+            _run_study_tool,
+        ),
+        ToolSpec("save_note", "Save a study note.", save_note, ToolCategory.WRITE),
+        ToolSpec(
+            "save_flashcards",
+            "Save generated flashcards.",
+            save_flashcards,
+            ToolCategory.WRITE,
+        ),
+        ToolSpec("save_quiz", "Save a quiz or question set.", save_quiz, ToolCategory.WRITE),
+        ToolSpec(
+            "delete_saved_item",
+            "Delete one saved note, flashcard set, or quiz.",
+            delete_saved_item,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "delete_run",
+            "Delete one persisted execution Run.",
+            delete_run,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "delete_knowledge_file",
+            "Delete a file from the local knowledge base.",
+            delete_knowledge_file,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "reset_saved_items",
+            "Delete all saved study data, optionally in one collection.",
+            reset_saved_items,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "reset_rag_index",
+            "Remove the persisted and in-memory RAG index.",
+            reset_rag_index,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "rebuild_rag_index",
+            "Rebuild and replace the RAG index from knowledge files.",
+            rebuild_rag_index_tool,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+        ToolSpec(
+            "run_code_sandbox",
+            "Run restricted Python code in an isolated temporary process.",
+            run_code_sandbox,
+            ToolCategory.DANGEROUS,
+            True,
+            False,
+        ),
+    ],
+)

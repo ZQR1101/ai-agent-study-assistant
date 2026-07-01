@@ -53,14 +53,38 @@ def _validate_agent_plan(data: dict) -> dict:
 
 
 def _tool_descriptions_for_prompt() -> str:
+    specs = (
+        TOOL_REGISTRY.agent_specs()
+        if hasattr(TOOL_REGISTRY, "agent_specs")
+        else TOOL_REGISTRY.values()
+    )
     return "\n".join(
         f"- {tool.name}：{tool.description}"
-        for tool in TOOL_REGISTRY.values()
+        for tool in specs
     )
 
 
 def _tool_names_for_prompt() -> str:
+    if hasattr(TOOL_REGISTRY, "agent_specs"):
+        return "|".join(tool.name for tool in TOOL_REGISTRY.agent_specs())
     return "|".join(TOOL_REGISTRY.keys())
+
+
+_LEGACY_STUDY_TOOLS = {"explain", "summarize", "quiz", "flashcard"}
+
+
+def _registry_tool_name(name: str) -> str:
+    if not hasattr(TOOL_REGISTRY, "execute"):
+        return name
+    if name == "rag":
+        return "rag_search"
+    if name in _LEGACY_STUDY_TOOLS:
+        return "study"
+    return name
+
+
+def _registry_has_tool(name: str) -> bool:
+    return TOOL_REGISTRY.get(_registry_tool_name(name)) is not None
 
 
 def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
@@ -79,7 +103,7 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
     else:
         tool = "chat"
 
-    if tool not in TOOL_REGISTRY:
+    if not _registry_has_tool(tool):
         tool = "chat"
 
     fallback_plan = {
@@ -250,7 +274,7 @@ JSON 必须符合 AgentPlan schema。
         fallback_plan["planner_json_parse"] = "成功"
         return fallback_plan
 
-    if any(step.get("tool") not in TOOL_REGISTRY for step in plan["steps"]):
+    if any(not _registry_has_tool(step.get("tool", "")) for step in plan["steps"]):
         fallback_plan = _fallback_agent_plan(user_input, reason="planner returned unknown tool")
         fallback_plan["planner_json_parse"] = "成功"
         return fallback_plan
@@ -269,16 +293,22 @@ def _execute_agent_tool(
     top_k: int = 3,
     shared_context: dict | None = None,
 ) -> dict:
-    tool_spec = TOOL_REGISTRY.get(tool)
+    registry_tool = _registry_tool_name(tool)
+    tool_spec = TOOL_REGISTRY.get(registry_tool)
 
     if tool_spec is None:
         fallback_tool = TOOL_REGISTRY["chat"]
-        result = fallback_tool.run(
-            step_input=tool_input,
-            original_input=(shared_context or {}).get("original_input", ""),
-            custom_llm=custom_llm,
-            top_k=top_k,
-            shared_context=shared_context,
+        arguments = {
+            "step_input": tool_input,
+            "original_input": (shared_context or {}).get("original_input", ""),
+            "custom_llm": custom_llm,
+            "top_k": top_k,
+            "shared_context": shared_context,
+        }
+        result = (
+            TOOL_REGISTRY.execute("chat", actor="agent", **arguments)
+            if hasattr(TOOL_REGISTRY, "execute")
+            else fallback_tool.run(**arguments)
         )
         result["trace"].append(f"Agent unknown tool：{tool}，已回退到 chat")
         result["tool_name"] = "chat"
@@ -286,12 +316,19 @@ def _execute_agent_tool(
         result["tool_success"] = True
         return result
 
-    result = tool_spec.run(
-        step_input=tool_input,
-        original_input=(shared_context or {}).get("original_input", ""),
-        custom_llm=custom_llm,
-        top_k=top_k,
-        shared_context=shared_context,
+    arguments = {
+        "step_input": tool_input,
+        "original_input": (shared_context or {}).get("original_input", ""),
+        "custom_llm": custom_llm,
+        "top_k": top_k,
+        "shared_context": shared_context,
+    }
+    if tool in _LEGACY_STUDY_TOOLS and hasattr(TOOL_REGISTRY, "execute"):
+        arguments["operation"] = tool
+    result = (
+        TOOL_REGISTRY.execute(registry_tool, actor="agent", **arguments)
+        if hasattr(TOOL_REGISTRY, "execute")
+        else tool_spec.run(**arguments)
     )
     result["tool_name"] = tool_spec.name
     result["tool_description"] = tool_spec.description
@@ -307,6 +344,7 @@ def run_agent(
     retrieval_mode: str = "vector",
     reranker_enabled: bool = False,
     history_context: str | None = None,
+    run_id: str | None = None,
 ) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
@@ -338,6 +376,22 @@ def run_agent(
         })
         plan["steps"] = plan["steps"][:4]
         trace.append("Agent Planner：use_rag=true，已插入 rag step")
+
+    if run_id:
+        from backend.run_repository import get_run_repository
+
+        get_run_repository().update_run(
+            run_id,
+            plan=plan.get("steps", []),
+            metadata={
+                "planner": {
+                    "goal": plan.get("goal"),
+                    "fallback": bool(plan.get("fallback")),
+                    "error": plan.get("fallback_reason"),
+                    "mode": "agent",
+                }
+            },
+        )
 
     previous_result = ""
     step_outputs = []
@@ -372,6 +426,7 @@ def run_agent(
     if planner_usage_delta:
         tool_calls[0].update(planner_usage_delta)
     shared_context = {
+        "run_id": run_id,
         "original_input": user_input,
         "history_context": history_context or "",
         "retrieval_mode": retrieval_mode,

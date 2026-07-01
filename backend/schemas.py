@@ -4,7 +4,20 @@ from pydantic import BaseModel, Field
 
 
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
-AgentToolName = Literal["chat", "rag", "explain", "summarize", "quiz", "flashcard"]
+AgentToolName = Literal[
+    "chat",
+    "rag_search",
+    "study",
+    "save_note",
+    "save_flashcards",
+    "save_quiz",
+    # Accepted while stored plans migrate to the merged v2 names.
+    "rag",
+    "explain",
+    "summarize",
+    "quiz",
+    "flashcard",
+]
 PlannerMode = Literal["rule", "llm"]
 RetrievalMode = Literal["vector", "bm25", "hybrid"]
 
@@ -12,7 +25,7 @@ RetrievalMode = Literal["vector", "bm25", "hybrid"]
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     mode: ChatMode = "auto"
-    model: str = "mimo-v2.5"
+    model: str = "deepseek-v4-pro"
     temperature: float = Field(0.7, ge=0.0, le=2.0)
     use_agent: bool = False
     use_rag: bool = False
@@ -22,6 +35,7 @@ class ChatRequest(BaseModel):
     retrieval_mode: RetrievalMode = "vector"
     reranker_enabled: bool = False
     session_id: str | None = None
+    run_id: str | None = None
     history: list[dict] = Field(default_factory=list)
 
 
@@ -81,6 +95,7 @@ class JudgeDeduction(BaseModel):
 class JudgeEvaluationResult(BaseModel):
     id: int | None = None
     session_id: str | None = None
+    run_id: str | None = None
     question: str | None = None
     answer: str | None = None
     judge_model: str | None = None
@@ -107,12 +122,15 @@ class ChatResponse(BaseModel):
     mode: str
     model: str
     session_id: str | None = None
+    run_id: str | None = None
     sources: list[SourceChunk] = Field(default_factory=list)
     trace: list[TraceBlock] = Field(default_factory=list)
     plan: list[AgentPlanStep] = Field(default_factory=list)
     flashcards: list[FlashcardItem] = Field(default_factory=list)
     runtime_info: dict = Field(default_factory=dict)
     judge_evaluation: JudgeEvaluationResult | None = None
+    run_summary: dict = Field(default_factory=dict)
+    run_details: dict = Field(default_factory=dict)
 
 
 class SessionSummary(BaseModel):
@@ -128,4 +146,5 @@ class MessageSummary(BaseModel):
     session_id: str
     role: str
     content: str
+    response: dict | None = None
     created_at: str | None = None
