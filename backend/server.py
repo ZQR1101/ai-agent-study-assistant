@@ -310,6 +310,34 @@ def _run_payload(run: Run) -> dict:
     return run.model_dump(mode="json") if hasattr(run, "model_dump") else run.dict()
 
 
+def _finish_status_from_summary(run_id: str, summary_status: str | None) -> str:
+    if summary_status in {"succeeded", "completed"}:
+        return "completed"
+    if summary_status in {"failed", "partial"}:
+        return str(summary_status)
+    logger.warning(
+        "Unknown run summary status %r for run %s; marking it partial",
+        summary_status,
+        run_id,
+    )
+    return "partial"
+
+
+def _best_effort_mark_run_failed(run_repository, run_id: str, error: BaseException) -> bool:
+    try:
+        run_repository.finish_run(run_id, status="failed", error=str(error))
+        return True
+    except Exception as fallback_error:
+        logger.error(
+            "Unable to mark run %s failed after %s: %s",
+            run_id,
+            error,
+            fallback_error,
+            exc_info=True,
+        )
+        return False
+
+
 @app.get("/runs", tags=["Runs"])
 def list_runs_api(
     limit: int = Query(50, ge=1, le=500),
@@ -403,7 +431,7 @@ def chat_api(request: ChatRequest):
     try:
         result = run_chat_request(request)
     except Exception as exc:
-        run_repository.finish_run(run_id, status="failed", error=str(exc))
+        _best_effort_mark_run_failed(run_repository, run_id, exc)
         raise
     result["run_id"] = run_id
 
@@ -492,30 +520,38 @@ def chat_api(request: ChatRequest):
             result["runtime_info"] = runtime_info
             logger.warning("DB history save failed: %s", exc)
 
-    run_repository.update_run(
-        run_id,
-        session_id=session_id,
-        plan=result.get("plan", []),
-        tools=result.get("runtime_info", {}).get("tool_calls", []),
-        artifacts={
-            "answer": result.get("answer", ""),
-            "sources": result.get("sources", []),
-            "flashcards": result.get("flashcards", []),
-            "trace": result.get("trace", []),
-        },
-        metadata={"run_summary": result.get("run_summary", {})},
-    )
-    finish_status = {
-        "failed": "failed",
-        "partial": "partial",
-    }.get(run_summary.get("status"), "completed")
-    response_payload = ChatResponse.model_validate(result).model_dump(mode="json")
-    run_repository.finish_run(
-        run_id,
-        status=finish_status,
-        output=response_payload,
-        error=result.get("runtime_info", {}).get("error"),
-    )
+    try:
+        run_repository.update_run(
+            run_id,
+            session_id=session_id,
+            plan=result.get("plan", []),
+            tools=result.get("runtime_info", {}).get("tool_calls", []),
+            artifacts={
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "flashcards": result.get("flashcards", []),
+                "trace": result.get("trace", []),
+            },
+            metadata={"run_summary": result.get("run_summary", {})},
+        )
+        finish_status = _finish_status_from_summary(
+            run_id,
+            run_summary.get("status"),
+        )
+        response_payload = ChatResponse.model_validate(result).model_dump(mode="json")
+        run_repository.finish_run(
+            run_id,
+            status=finish_status,
+            output=response_payload,
+            error=result.get("runtime_info", {}).get("error"),
+        )
+    except Exception as exc:
+        logger.warning("Failed to finalize run %s: %s", run_id, exc)
+        runtime_info = dict(result.get("runtime_info", {}))
+        runtime_info["run_persistence_error"] = str(exc)
+        result["runtime_info"] = runtime_info
+        _best_effort_mark_run_failed(run_repository, run_id, exc)
+        return result
 
     return result
 

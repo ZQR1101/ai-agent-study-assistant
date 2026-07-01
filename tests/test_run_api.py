@@ -31,6 +31,23 @@ def _chat_result() -> dict:
     }
 
 
+class _FailFirstUpdateRepository(RunRepository):
+    def __init__(self, root: Path):
+        super().__init__(root)
+        self._fail_next_update = True
+
+    def update_run(self, run_id: str, **changes):
+        if self._fail_next_update:
+            self._fail_next_update = False
+            raise OSError("metadata write failed")
+        return super().update_run(run_id, **changes)
+
+
+class _FailFinishRepository(RunRepository):
+    def finish_run(self, run_id: str, **changes):
+        raise OSError("finish write failed")
+
+
 class RunApiLifecycleTests(unittest.TestCase):
     def setUp(self):
         from backend.server import app
@@ -211,6 +228,82 @@ class RunApiLifecycleTests(unittest.TestCase):
         self.assertEqual(runs[0].status, "failed")
         self.assertEqual(runs[0].error, "planner exploded")
         self.assertIsNotNone(runs[0].finished_at)
+
+    def test_update_failure_is_caught_and_fallback_marks_run_failed(self):
+        repository = _FailFirstUpdateRepository(
+            Path(self.temporary_directory.name) / "fail-first-update-runs"
+        )
+        with (
+            patch("backend.ai_core.run_chat_request", return_value=_chat_result()),
+            patch("backend.server.get_run_repository", return_value=repository),
+            patch("backend.server.is_db_history_enabled", return_value=False),
+            patch("backend.server.is_llm_judge_enabled", return_value=False),
+        ):
+            response = self.client.post("/chat", json={"message": "persist safely"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["runtime_info"]["run_persistence_error"],
+            "metadata write failed",
+        )
+        stored = repository.get_run(response.json()["run_id"])
+        self.assertEqual(stored.status, "failed")
+        self.assertEqual(stored.error, "metadata write failed")
+
+    def test_finish_failure_does_not_escape_when_fallback_also_fails(self):
+        repository = _FailFinishRepository(
+            Path(self.temporary_directory.name) / "fail-finish-runs"
+        )
+        with (
+            patch("backend.ai_core.run_chat_request", return_value=_chat_result()),
+            patch("backend.server.get_run_repository", return_value=repository),
+            patch("backend.server.is_db_history_enabled", return_value=False),
+            patch("backend.server.is_llm_judge_enabled", return_value=False),
+            self.assertLogs("backend.server", level="ERROR") as captured_logs,
+        ):
+            response = self.client.post("/chat", json={"message": "persist safely"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["runtime_info"]["run_persistence_error"],
+            "finish write failed",
+        )
+        self.assertTrue(any("Unable to mark run" in line for line in captured_logs.output))
+
+    def test_persistence_failure_does_not_mask_original_chat_exception(self):
+        repository = _FailFinishRepository(
+            Path(self.temporary_directory.name) / "original-error-runs"
+        )
+        with (
+            patch(
+                "backend.ai_core.run_chat_request",
+                side_effect=RuntimeError("planner exploded"),
+            ),
+            patch("backend.server.get_run_repository", return_value=repository),
+            patch("backend.server.is_db_history_enabled", return_value=False),
+            self.assertLogs("backend.server", level="ERROR"),
+            self.assertRaisesRegex(RuntimeError, "planner exploded"),
+        ):
+            self.client.post("/chat", json={"message": "fail without masking"})
+
+    def test_unknown_run_summary_status_is_stored_as_partial(self):
+        with (
+            patch("backend.ai_core.run_chat_request", return_value=_chat_result()),
+            patch("backend.server.get_run_repository", return_value=self.repository),
+            patch("backend.server.is_db_history_enabled", return_value=False),
+            patch("backend.server.is_llm_judge_enabled", return_value=False),
+            patch(
+                "backend.server.build_run_metadata",
+                return_value=({"status": "unexpected"}, {}),
+            ),
+            self.assertLogs("backend.server", level="WARNING") as captured_logs,
+        ):
+            response = self.client.post("/chat", json={"message": "unknown status"})
+
+        self.assertEqual(response.status_code, 200)
+        stored = self.repository.get_run(response.json()["run_id"])
+        self.assertEqual(stored.status, "partial")
+        self.assertTrue(any("Unknown run summary status" in line for line in captured_logs.output))
 
 
 if __name__ == "__main__":
