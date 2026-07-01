@@ -6,6 +6,8 @@ import json
 import os
 from typing import Any
 
+from backend.config import normalize_model
+
 
 class JudgeEvaluationError(RuntimeError):
     """Raised when the judge model cannot produce a usable score."""
@@ -248,12 +250,13 @@ def judge_answer(
     if not str(answer or "").strip():
         raise JudgeEvaluationError("Cannot evaluate an empty answer")
 
-    selected_model = os.getenv("JUDGE_MODEL") or model or "mimo-v2.5"
     if judge_llm is None:
+        selected_model = normalize_model(os.getenv("JUDGE_MODEL") or model)
         from backend.llm_service import build_llm
 
         active_llm = build_llm(model=selected_model, temperature=0.0)
     else:
+        selected_model = os.getenv("JUDGE_MODEL") or model or "judge"
         active_llm = judge_llm
     tool_calls = []
     if isinstance(runtime_info, dict) and isinstance(runtime_info.get("tool_calls"), list):
