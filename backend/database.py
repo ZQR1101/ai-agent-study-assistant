@@ -83,13 +83,19 @@ def init_db() -> None:
 def ensure_schema_compatibility(engine) -> None:
     """Add columns introduced after the initial schema without dropping data."""
     inspector = inspect(engine)
-    if "chat_messages" not in inspector.get_table_names():
-        return
+    table_names = set(inspector.get_table_names())
 
-    message_columns = {column["name"] for column in inspector.get_columns("chat_messages")}
-    if "response_json" not in message_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE chat_messages ADD COLUMN response_json JSON"))
+    if "chat_messages" in table_names:
+        message_columns = {column["name"] for column in inspector.get_columns("chat_messages")}
+        if "response_json" not in message_columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE chat_messages ADD COLUMN response_json JSON"))
+
+    if "judge_results" in table_names:
+        judge_columns = {column["name"] for column in inspector.get_columns("judge_results")}
+        if "run_id" not in judge_columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE judge_results ADD COLUMN run_id VARCHAR(64)"))
 
 
 def reset_engine() -> None:
