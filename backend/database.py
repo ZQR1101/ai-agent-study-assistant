@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 _engine = None
@@ -72,10 +72,24 @@ def get_db_session() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist. Only call when DB is enabled."""
+    """Create tables and apply small additive compatibility migrations."""
     from backend.db_models import Base
 
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    ensure_schema_compatibility(engine)
+
+
+def ensure_schema_compatibility(engine) -> None:
+    """Add columns introduced after the initial schema without dropping data."""
+    inspector = inspect(engine)
+    if "chat_messages" not in inspector.get_table_names():
+        return
+
+    message_columns = {column["name"] for column in inspector.get_columns("chat_messages")}
+    if "response_json" not in message_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE chat_messages ADD COLUMN response_json JSON"))
 
 
 def reset_engine() -> None:

@@ -1,18 +1,20 @@
 from pathlib import Path
+import codecs
 import ipaddress
 import logging
+import secrets
 import socket
+from time import perf_counter
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 from urllib.parse import urlparse
-from urllib.request import Request as UrlRequest
-from urllib.request import urlopen
-from typing import Literal
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
+from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.config import get_config
 from backend.database import get_database_url, get_db_session, init_db, is_db_history_enabled
@@ -23,6 +25,8 @@ from backend.evaluation_store import (
 )
 from backend.judge_service import is_judge_persistence_enabled, is_llm_judge_enabled, judge_answer
 from backend.schemas import ChatRequest, ChatResponse, JudgeFeedbackRequest
+from backend.run_metadata import build_run_metadata
+from backend.run_repository import Run, get_run_repository
 from backend.session_store import (
     create_or_get_session,
     get_recent_messages,
@@ -30,6 +34,8 @@ from backend.session_store import (
     list_sessions,
     save_message,
 )
+from backend.tool_registry import InvalidConfirmation, ToolConfirmationRequired
+from backend.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +43,34 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent.parent
 DOCS_PATH = PROJECT_ROOT / "docs"
 SUPPORTED_DOC_EXTENSIONS = {".md", ".txt", ".pdf"}
+IMAGE_PROXY_MAX_REDIRECTS = 3
+UPLOAD_CHUNK_SIZE = 64 * 1024
+ALLOWED_UPLOAD_CONTENT_TYPES = {
+    ".pdf": {"application/pdf"},
+    ".md": {"text/markdown", "text/plain"},
+    ".txt": {"text/plain"},
+}
 
-app = FastAPI(title="AI 学习助手 API")
+app = FastAPI(
+    title="AI 学习助手 API",
+    openapi_tags=[
+        {"name": "Chat", "description": "统一聊天与 Agent 入口。"},
+        {"name": "Tools", "description": "Tool Registry 查询、调用和审计。"},
+        {"name": "Runs", "description": "统一执行记录，供历史、回放、比较和导出使用。"},
+        {"name": "Knowledge Base", "description": "知识文件与 RAG 状态管理。"},
+        {"name": "Sessions", "description": "会话历史。"},
+        {"name": "Evaluation", "description": "LLM-as-Judge 结果与反馈。"},
+        {"name": "System", "description": "服务状态。"},
+    ],
+)
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(get_config().cors_allowed_origins),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Tool-Approval-Key"],
 )
 
 
@@ -86,9 +110,20 @@ class DebugRagRequest(BaseModel):
     reranker_enabled: bool = False
 
 
+class ToolInvokeRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmation_token: str | None = None
+    actor: str = "api"
+
+
 def _is_public_image_url(url: str) -> bool:
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return False
 
     try:
@@ -106,6 +141,44 @@ def _is_public_image_url(url: str) -> bool:
             return False
 
     return True
+
+
+class _NoImageRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _build_image_opener():
+    return build_opener(_NoImageRedirectHandler())
+
+
+def _open_public_image(url: str):
+    opener = _build_image_opener()
+    current_url = url
+
+    for redirect_count in range(IMAGE_PROXY_MAX_REDIRECTS + 1):
+        if not _is_public_image_url(current_url):
+            raise HTTPException(status_code=400, detail="Unsupported image URL")
+
+        request = UrlRequest(
+            current_url,
+            headers={"User-Agent": "AI-Study-Assistant/1.0"},
+        )
+        try:
+            return opener.open(request, timeout=20)
+        except HTTPError as exc:
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location") if exc.headers else None
+            exc.close()
+            if not location or redirect_count >= IMAGE_PROXY_MAX_REDIRECTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Image redirect is invalid or exceeds the redirect limit",
+                ) from exc
+            current_url = urljoin(current_url, location)
+
+    raise HTTPException(status_code=400, detail="Image redirect limit exceeded")
 
 
 def _safe_doc_path(filename: str) -> Path:
@@ -126,12 +199,12 @@ def _safe_doc_path(filename: str) -> Path:
     return file_path
 
 
-@app.get("/")
+@app.get("/", tags=["System"])
 def home():
     return {"message": "AI 学习助手后端启动成功"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["System"])
 def health_check():
     from backend.rag_store import get_rag_index_status
     from backend.rag_warmup import get_rag_warmup_status
@@ -160,14 +233,118 @@ def health_check():
     }
 
 
-@app.get("/rag/status")
+@app.get("/tools", tags=["Tools"])
+def list_tools_api():
+    return {
+        "tools": [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "category": spec.category.value,
+                "requires_confirmation": spec.requires_confirmation,
+                "agent_visible": spec.agent_visible,
+            }
+            for spec in TOOL_REGISTRY.values()
+        ]
+    }
+
+
+def _require_tool_approval(tool_name: str, approval_key: str | None) -> None:
+    spec = TOOL_REGISTRY.get(tool_name)
+    if spec is None or not spec.requires_confirmation:
+        return
+
+    configured_key = get_config().tool_approval_key
+    if not configured_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Dangerous tool approval is not configured",
+        )
+    if not approval_key or not secrets.compare_digest(approval_key, configured_key):
+        raise HTTPException(status_code=403, detail="Dangerous tool approval denied")
+
+
+@app.post(
+    "/tools/{tool_name}/invoke",
+    tags=["Tools"],
+    responses={
+        409: {"description": "Dangerous tool requires confirmation"},
+        400: {"description": "Confirmation token is invalid or expired"},
+        403: {"description": "Dangerous tool approval denied"},
+        404: {"description": "Tool not found"},
+        503: {"description": "Dangerous tool approval is not configured"},
+    },
+)
+def invoke_tool_api(
+    tool_name: str,
+    request: ToolInvokeRequest,
+    approval_key: str | None = Header(default=None, alias="X-Tool-Approval-Key"),
+):
+    arguments = dict(request.arguments)
+    for reserved in ("actor", "confirmed", "confirmation_token"):
+        arguments.pop(reserved, None)
+    _require_tool_approval(tool_name, approval_key)
+    try:
+        return TOOL_REGISTRY.execute(
+            tool_name,
+            confirmation_token=request.confirmation_token,
+            actor=request.actor,
+            **arguments,
+        )
+    except ToolConfirmationRequired as exc:
+        raise HTTPException(status_code=409, detail=exc.as_dict()) from exc
+    except InvalidConfirmation as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/tools/audit/recent", tags=["Tools"])
+def recent_tool_audit_api(limit: int = Query(100, ge=1, le=1000)):
+    return {"events": TOOL_REGISTRY.audit_log.recent(limit)}
+
+
+def _run_payload(run: Run) -> dict:
+    return run.model_dump(mode="json") if hasattr(run, "model_dump") else run.dict()
+
+
+@app.get("/runs", tags=["Runs"])
+def list_runs_api(
+    limit: int = Query(50, ge=1, le=500),
+    status: str | None = None,
+    session_id: str | None = None,
+    include_deleted: bool = False,
+):
+    runs = get_run_repository().list_runs(
+        limit=limit,
+        status=status,
+        session_id=session_id,
+        include_deleted=include_deleted,
+    )
+    return {"runs": [_run_payload(run) for run in runs], "count": len(runs)}
+
+
+@app.get("/runs/{run_id}", tags=["Runs"])
+def get_run_api(run_id: str):
+    try:
+        run = get_run_repository().get_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return _run_payload(run)
+
+
+@app.get("/rag/status", tags=["Knowledge Base"])
 def rag_status_api():
     from backend.rag_warmup import get_rag_warmup_status
 
     return get_rag_warmup_status()
 
 
-@app.post("/rag/warmup")
+@app.post("/rag/warmup", tags=["Knowledge Base"])
 def rag_warmup_api():
     from backend.rag_warmup import start_rag_warmup
 
@@ -175,19 +352,21 @@ def rag_warmup_api():
     return start_rag_warmup(load_index=config.rag_warmup_load_index)
 
 
-@app.post("/echo")
+@app.post("/echo", include_in_schema=False)
 def echo_api(request: TextRequest):
     return {"echo": request.text}
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
 def chat_api(request: ChatRequest):
     from backend.ai_core import run_chat_request
 
+    request_started_at = perf_counter()
     session_id = request.session_id
     db_history_error = None
     judge_error = None
     judge_persistence_error = None
+    run_repository = get_run_repository()
 
     # --- DB history: load context ---
     if is_db_history_enabled():
@@ -207,8 +386,26 @@ def chat_api(request: ChatRequest):
             db_history_error = f"db_load_error: {exc}"
             logger.warning("DB history load failed: %s", exc)
 
+    request_payload = (
+        request.model_dump(mode="json", exclude={"run_id"})
+        if hasattr(request, "model_dump")
+        else request.dict(exclude={"run_id"})
+    )
+    run = run_repository.create_run(
+        request=request_payload,
+        session_id=session_id,
+        metadata={"entrypoint": "/chat"},
+    )
+    run_id = run.id
+    request = request.model_copy(update={"run_id": run_id, "session_id": session_id})
+
     # --- Execute chat ---
-    result = run_chat_request(request)
+    try:
+        result = run_chat_request(request)
+    except Exception as exc:
+        run_repository.finish_run(run_id, status="failed", error=str(exc))
+        raise
+    result["run_id"] = run_id
 
     # --- LLM-as-Judge evaluation ---
     if is_llm_judge_enabled() and result.get("answer"):
@@ -224,6 +421,7 @@ def chat_api(request: ChatRequest):
             result["judge_evaluation"] = {
                 **evaluation,
                 "session_id": session_id,
+                "run_id": run_id,
                 "question": request.message,
                 "answer": result["answer"],
             }
@@ -231,28 +429,22 @@ def chat_api(request: ChatRequest):
             judge_error = f"judge_error: {exc}"
             logger.warning("LLM judge evaluation failed: %s", exc)
 
-    # --- DB history: save messages ---
-    if is_db_history_enabled() and session_id:
-        try:
-            with get_db_session() as db:
-                save_message(db, session_id, "user", request.message)
-                if result.get("answer"):
-                    save_message(db, session_id, "assistant", result["answer"])
-        except Exception as exc:
-            db_history_error = f"db_save_error: {exc}"
-            logger.warning("DB history save failed: %s", exc)
-
     # --- Judge evaluation persistence ---
     if result.get("judge_evaluation") and get_database_url() and is_judge_persistence_enabled():
         try:
             with get_db_session() as db:
-                result["judge_evaluation"] = save_judge_result(
+                persisted_evaluation = save_judge_result(
                     db,
                     session_id=session_id,
                     question=request.message,
                     answer=result["answer"],
                     evaluation=result["judge_evaluation"],
+                    run_id=run_id,
                 )
+                result["judge_evaluation"] = {
+                    **persisted_evaluation,
+                    "run_id": run_id,
+                }
         except Exception as exc:
             judge_persistence_error = f"judge_db_save_error: {exc}"
             logger.warning("Judge evaluation save failed: %s", exc)
@@ -271,6 +463,59 @@ def chat_api(request: ChatRequest):
         if judge_persistence_error:
             runtime_info["judge_persistence_error"] = judge_persistence_error
         result["runtime_info"] = runtime_info
+
+    run_summary, run_details = build_run_metadata(
+        result,
+        duration_ms=max(0, round((perf_counter() - request_started_at) * 1000)),
+    )
+    result["run_summary"] = run_summary
+    result["run_details"] = run_details
+
+    # --- DB history: save messages and the complete assistant response ---
+    if is_db_history_enabled() and session_id:
+        try:
+            response_snapshot = ChatResponse.model_validate(result).model_dump(mode="json")
+            with get_db_session() as db:
+                save_message(db, session_id, "user", request.message)
+                if result.get("answer"):
+                    save_message(
+                        db,
+                        session_id,
+                        "assistant",
+                        result["answer"],
+                        response=response_snapshot,
+                    )
+        except Exception as exc:
+            db_history_error = f"db_save_error: {exc}"
+            runtime_info = dict(result.get("runtime_info", {}))
+            runtime_info["db_history_error"] = db_history_error
+            result["runtime_info"] = runtime_info
+            logger.warning("DB history save failed: %s", exc)
+
+    run_repository.update_run(
+        run_id,
+        session_id=session_id,
+        plan=result.get("plan", []),
+        tools=result.get("runtime_info", {}).get("tool_calls", []),
+        artifacts={
+            "answer": result.get("answer", ""),
+            "sources": result.get("sources", []),
+            "flashcards": result.get("flashcards", []),
+            "trace": result.get("trace", []),
+        },
+        metadata={"run_summary": result.get("run_summary", {})},
+    )
+    finish_status = {
+        "failed": "failed",
+        "partial": "partial",
+    }.get(run_summary.get("status"), "completed")
+    response_payload = ChatResponse.model_validate(result).model_dump(mode="json")
+    run_repository.finish_run(
+        run_id,
+        status=finish_status,
+        output=response_payload,
+        error=result.get("runtime_info", {}).get("error"),
+    )
 
     return result
 
@@ -299,19 +544,19 @@ def _recent_judge_results_payload(limit: int) -> dict:
         raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
 
 
-@app.get("/judge-results/recent")
+@app.get("/judge-results/recent", tags=["Evaluation"])
 def recent_judge_results_api(limit: int = Query(20, ge=1, le=100)):
     """Return recent LLM-as-Judge results, newest first."""
     return _recent_judge_results_payload(limit)
 
 
-@app.get("/judge-evaluations/recent")
+@app.get("/judge-evaluations/recent", include_in_schema=False, deprecated=True)
 def recent_judge_evaluations_api(limit: int = Query(20, ge=1, le=100)):
     """Backward-compatible alias for recent judge results."""
     return _recent_judge_results_payload(limit)
 
 
-@app.post("/judge-results/{result_id}/feedback")
+@app.post("/judge-results/{result_id}/feedback", tags=["Evaluation"])
 def judge_result_feedback_api(result_id: int, request: JudgeFeedbackRequest):
     """Persist human feedback about whether a judge result was reasonable."""
     if not get_database_url():
@@ -337,14 +582,10 @@ def judge_result_feedback_api(result_id: int, request: JudgeFeedbackRequest):
         raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
 
 
-@app.get("/image-proxy")
+@app.get("/image-proxy", include_in_schema=False)
 def image_proxy(url: str = Query(..., min_length=1)):
-    if not _is_public_image_url(url):
-        raise HTTPException(status_code=400, detail="Unsupported image URL")
-
-    request = UrlRequest(url, headers={"User-Agent": "AI-Study-Assistant/1.0"})
     try:
-        with urlopen(request, timeout=20) as response:
+        with _open_public_image(url) as response:
             content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
             if not content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="URL did not return an image")
@@ -362,7 +603,7 @@ def image_proxy(url: str = Query(..., min_length=1)):
     return Response(content=content, media_type=content_type)
 
 
-@app.post("/debug-langgraph")
+@app.post("/debug-langgraph", include_in_schema=False)
 def debug_langgraph(request: ChatRequest):
     try:
         from backend.langgraph_runtime import LangGraphRuntimeUnavailableError, run_langgraph_workflow
@@ -381,71 +622,140 @@ def debug_langgraph(request: ChatRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.post("/explain")
+@app.post("/explain", include_in_schema=False, deprecated=True)
 def explain_api(request: TextRequest):
-    from backend.ai_core import explain
+    result = TOOL_REGISTRY.execute(
+        "study", step_input=request.text, operation="explain", actor="api"
+    )
+    return {"result": result["answer"]}
 
-    result = explain(request.text)
-    return {"result": result}
 
-
-@app.post("/summarize")
+@app.post("/summarize", include_in_schema=False, deprecated=True)
 def summarize_api(request: TextRequest):
-    from backend.ai_core import summarize
+    result = TOOL_REGISTRY.execute(
+        "study", step_input=request.text, operation="summarize", actor="api"
+    )
+    return {"result": result["answer"]}
 
-    result = summarize(request.text)
-    return {"result": result}
 
-
-@app.post("/quiz")
+@app.post("/quiz", include_in_schema=False, deprecated=True)
 def quiz_api(request: TextRequest):
-    from backend.ai_core import generate_questions
+    result = TOOL_REGISTRY.execute(
+        "study", step_input=request.text, operation="quiz", actor="api"
+    )
+    return {"result": result["answer"]}
 
-    result = generate_questions(request.text)
-    return {"result": result}
 
-
-@app.post("/rag")
+@app.post("/rag", include_in_schema=False, deprecated=True)
 def rag_api(request: RagRequest):
-    from backend.ai_core import rag_answer_with_sources
-
-    return rag_answer_with_sources(
-        request.text,
+    return TOOL_REGISTRY.execute(
+        "rag_search",
+        step_input=request.text,
         top_k=request.top_k,
-        retrieval_mode=request.retrieval_mode,
-        reranker_enabled=request.reranker_enabled,
+        shared_context={
+            "retrieval_mode": request.retrieval_mode,
+            "reranker_enabled": request.reranker_enabled,
+        },
+        actor="api",
     )
 
 
-@app.post("/agent")
+@app.post("/agent", include_in_schema=False, deprecated=True)
 def agent_api(request: TextRequest):
     from backend.ai_core import agent_router
 
     return {"result": agent_router(request.text)}
 
 
-@app.post("/upload")
+@app.post("/upload", tags=["Knowledge Base"])
 async def upload_file(file: UploadFile = File(...)):
-    from backend.rag_store import rebuild_rag_index
+    original_filename = file.filename or ""
+    filename = Path(original_filename).name
+    if not filename or filename != original_filename:
+        raise HTTPException(status_code=400, detail="Invalid file name")
 
-    DOCS_PATH.mkdir(exist_ok=True)
-    filename = Path(file.filename or "").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_DOC_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported file extension")
 
-    if not filename:
-        raise HTTPException(status_code=400, detail="文件名不能为空")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in ALLOWED_UPLOAD_CONTENT_TYPES[suffix]:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Content-Type {content_type or '<missing>'} is not allowed for {suffix}",
+        )
 
+    DOCS_PATH.mkdir(parents=True, exist_ok=True)
     save_path = DOCS_PATH / filename
+    max_size = get_config().max_upload_size_bytes
+    total_size = 0
+    header = b""
+    created = False
+    text_decoder = (
+        codecs.getincrementaldecoder("utf-8")()
+        if suffix in {".md", ".txt"}
+        else None
+    )
 
-    with open(save_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    try:
+        with save_path.open("xb") as handle:
+            created = True
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > max_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds the {max_size} byte upload limit",
+                    )
+                if len(header) < 5:
+                    header = (header + chunk)[:5]
+                if text_decoder is not None:
+                    try:
+                        text_decoder.decode(chunk, final=False)
+                    except UnicodeDecodeError as exc:
+                        raise HTTPException(
+                            status_code=415,
+                            detail="Text uploads must be valid UTF-8",
+                        ) from exc
+                handle.write(chunk)
 
-    rebuild_rag_index()
+            if text_decoder is not None:
+                try:
+                    text_decoder.decode(b"", final=True)
+                except UnicodeDecodeError as exc:
+                    raise HTTPException(
+                        status_code=415,
+                        detail="Text uploads must be valid UTF-8",
+                    ) from exc
+            if suffix == ".pdf" and not header.startswith(b"%PDF-"):
+                raise HTTPException(
+                    status_code=415,
+                    detail="Uploaded PDF does not have a valid PDF signature",
+                )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="A file with this name already exists") from exc
+    except HTTPException:
+        if created:
+            save_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        if created:
+            save_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to store uploaded file") from exc
+    finally:
+        await file.close()
 
-    return {"message": f"{filename} 上传成功，知识库索引已更新"}
+    return {
+        "message": f"{filename} uploaded successfully; rebuild the RAG index to use it",
+        "rebuild_required": True,
+        "size": total_size,
+    }
 
 
-@app.get("/knowledge-files")
+@app.get("/knowledge-files", tags=["Knowledge Base"])
 def knowledge_files_api():
     DOCS_PATH.mkdir(exist_ok=True)
     files = []
@@ -466,7 +776,7 @@ def knowledge_files_api():
     return {"count": len(files), "files": files}
 
 
-@app.get("/knowledge-files/{filename}")
+@app.get("/knowledge-files/{filename}", tags=["Knowledge Base"])
 def open_knowledge_file_api(filename: str):
     file_path = _safe_doc_path(filename)
     encoded_name = quote(file_path.name)
@@ -484,7 +794,7 @@ def open_knowledge_file_api(filename: str):
     )
 
 
-@app.get("/knowledge-files/{filename}/content")
+@app.get("/knowledge-files/{filename}/content", tags=["Knowledge Base"])
 def read_knowledge_file_content_api(filename: str):
     file_path = _safe_doc_path(filename)
 
@@ -498,22 +808,34 @@ def read_knowledge_file_content_api(filename: str):
     }
 
 
-@app.post("/learn")
+@app.post("/learn", include_in_schema=False, deprecated=True)
 def learn_api(request: TextRequest):
     from backend.ai_core import learning_workflow
 
     return learning_workflow(request.text)
 
 
-@app.post("/rebuild-index")
-def rebuild_index_api():
-    from backend.rag_store import rebuild_rag_index
-
-    rebuild_rag_index()
+@app.post("/rebuild-index", include_in_schema=False, deprecated=True)
+def rebuild_index_api(
+    request: ToolInvokeRequest | None = None,
+    approval_key: str | None = Header(default=None, alias="X-Tool-Approval-Key"),
+):
+    request = request or ToolInvokeRequest()
+    _require_tool_approval("rebuild_rag_index", approval_key)
+    try:
+        TOOL_REGISTRY.execute(
+            "rebuild_rag_index",
+            confirmation_token=request.confirmation_token,
+            actor=request.actor,
+        )
+    except ToolConfirmationRequired as exc:
+        raise HTTPException(status_code=409, detail=exc.as_dict()) from exc
+    except InvalidConfirmation as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"message": "RAG 索引已重建"}
 
 
-@app.get("/debug-index-sources")
+@app.get("/debug-index-sources", include_in_schema=False)
 def debug_index_sources_api():
     from backend.rag_store import list_index_sources
 
@@ -524,7 +846,7 @@ def debug_index_sources_api():
     }
 
 
-@app.post("/debug-rag")
+@app.post("/debug-rag", include_in_schema=False)
 def debug_rag_api(request: DebugRagRequest):
     from backend.rag_store import search_relevant_chunks
 
@@ -553,7 +875,7 @@ def debug_rag_api(request: DebugRagRequest):
 # --- Session history APIs ---
 
 
-@app.get("/sessions")
+@app.get("/sessions", tags=["Sessions"])
 def list_sessions_api(limit: int = Query(50, ge=1, le=200)):
     """List recent chat sessions."""
     if not is_db_history_enabled():
@@ -568,7 +890,7 @@ def list_sessions_api(limit: int = Query(50, ge=1, le=200)):
         raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
 
 
-@app.get("/sessions/{session_id}/messages")
+@app.get("/sessions/{session_id}/messages", tags=["Sessions"])
 def get_session_messages_api(session_id: str, limit: int = Query(50, ge=1, le=500)):
     """Get messages for a specific session."""
     if not is_db_history_enabled():

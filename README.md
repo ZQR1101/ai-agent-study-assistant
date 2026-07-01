@@ -14,7 +14,10 @@ AI Study Assistant 是一个面向学习场景的 AI 应用开发项目，基于
 - 默认稳定路径为 Legacy Planner + Executor Agent，LangGraph Runtime 可通过 `use_langgraph=true` 可选启用。
 - LangGraph 支持 `planner_mode=rule | llm`，其中 `rule` 是默认模式，`llm` 是可选结构化 Planner。
 - LLM Planner 使用 JSON-only prompt、`AgentPlan` schema、Pydantic validation 和 fallback，失败时回退 rule planner。
-- Tool Registry 统一管理 `rag / explain / summarize / quiz / flashcard / chat`。
+- Tool Registry 按 `read / write / dangerous` 分级，统一执行确认与 Audit Log。
+- 前端“Dev Tool Debugger”支持分类浏览、JSON 参数调用、危险操作二次确认和 Audit Log 查看。
+- `/chat` 返回 `run_id / run_summary / run_details`；每条 AI 回复下方挂载对应 Run，展开时从 RunRepository 读取 Overview、Plan、Tools、Audit 和 Artifacts。Judge 作为独立 Evaluation 展示。
+- 每轮 Plan 与 Flashcards 直接显示在回答结果中；右侧检查器仅保留来源、路径和评分。
 - RAG 支持 `sources / score / snippet / threshold / fallback`，避免弱相关知识库命中污染回答。
 - LangGraph Runtime 返回 `graph_path / tool_calls / runtime_info`，便于对比和调试。
 - LangGraph finalizer 用于减少 answer 重复堆叠，并将结构化 flashcards 与正文分离。
@@ -104,6 +107,11 @@ FastAPI Backend
 /chat Router
 ├── Legacy Agent Runtime
 └── LangGraph Runtime
+    ↓
+RunRepository
+├── Plan / Tools / Judge
+├── Audit / Artifacts
+└── Output / Status
     ↓
 Tool Registry
 ├── RAG Tool
@@ -213,6 +221,8 @@ ai-agent-study-assistant/
 │   ├── langgraph_runtime.py   # LangGraph Runtime、planner、nodes、runtime_info
 │   ├── langgraph_demo.py      # LangGraph demo 兼容入口
 │   ├── tools.py               # Tool Registry
+│   ├── run_repository.py      # Run 聚合与持久化边界
+│   ├── run_metadata.py        # 运行摘要与详情
 │   ├── rag_store.py           # 文档加载、chunk、FAISS 索引
 │   ├── rag_service.py         # RAG 检索、sources、fallback
 │   ├── llm_service.py         # LLM 构建与基础能力
@@ -311,12 +321,9 @@ Frontend: http://127.0.0.1:5500
 `.env.example` 中包含可用配置项：
 
 ```env
-MY_MIMO_API_KEY=your_api_key_here
-MIMO_API_KEY=
-OPENAI_API_KEY=
-MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-MIMO_MODEL=mimo-v2.5
-DEEPSEEK_API_KEY=
+DEEPSEEK_API_KEY=your_api_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
 DASHSCOPE_API_KEY=
 ALIBABA_API_KEY=
 QWEN_API_KEY=
@@ -325,13 +332,13 @@ QWEN_API_KEY=
 API key 读取优先级：
 
 ```text
-MY_MIMO_API_KEY > MIMO_API_KEY > OPENAI_API_KEY
+DEEPSEEK_API_KEY
 ```
 
 说明：
 
 - 本地真实 key 放在 `.env`，不要提交。
-- `MIMO_BASE_URL` 可选，默认使用项目配置中的 OpenAI-compatible endpoint。
+- `DEEPSEEK_BASE_URL` 可选，默认使用 DeepSeek API endpoint。
 - CI 不配置真实 API key，也不会运行真实 LLM 调用。
 
 ## 11. 后端启动
@@ -344,14 +351,17 @@ uvicorn backend.server:app --reload
 
 - `GET /health`
 - `POST /chat`
-- `POST /debug-langgraph`
+- `GET /tools`
+- `POST /tools/{tool_name}/invoke`
+- `GET /tools/audit/recent`
+- `GET /runs`
+- `GET /runs/{run_id}`
 - `POST /upload`
 - `GET /knowledge-files`
 - `GET /knowledge-files/{filename}`
 - `GET /knowledge-files/{filename}/content`
-- `POST /rebuild-index`
-- `GET /debug-index-sources`
-- `POST /debug-rag`
+
+旧的 `/explain`、`/summarize`、`/quiz`、`/rag`、`/agent`、`/learn` 和 `/rebuild-index` 路由继续兼容，但不再显示在 Swagger；新调用统一使用 `/chat` 或 Tool Registry。
 
 ## 12. 前端启动
 
@@ -389,7 +399,7 @@ npm run build
 {
   "message": "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
   "mode": "auto",
-  "model": "mimo-v2.5",
+  "model": "deepseek-v4-pro",
   "temperature": 0.3,
   "use_agent": true,
   "use_rag": true,
@@ -402,6 +412,7 @@ npm run build
 
 ### `/chat` 响应字段
 
+- `run_id`：本次执行对应的 Run ID。
 - `answer`：最终回答。
 - `mode`：实际执行模式，例如 `agent`、`langgraph`、`chat`、`rag`。
 - `model`：实际使用模型。
@@ -410,6 +421,18 @@ npm run build
 - `plan`：Agent 或 LangGraph planner 生成的工具步骤。
 - `flashcards`：结构化卡片数据。
 - `runtime_info`：LangGraph Runtime 的结构化运行元数据。
+- `run_summary / run_details`：运行摘要及可展开的 Plan、Tools 详情。
+
+### RunRepository
+
+一次 `/chat` 请求对应一个 Run。`RunRepository` 是运行数据的唯一聚合边界，提供：
+
+- `create_run()` / `update_run()` / `finish_run()`
+- `get_run()` / `list_runs()` / `delete_run()`
+
+Planner 写入 `plan`，Tool Registry 写入 `tools` 与 `audit`，最终回答、来源和卡片写入 `artifacts/output`。Judge 结果独立保存在 Evaluation 存储中，只通过 `run_id` 与执行关联，不进入 Run 聚合。Run 以独立 JSON 文档持久化到 `data/runs/`，目录可通过 `RUNS_DIR` 调整。
+
+读取接口为 `GET /runs` 与 `GET /runs/{run_id}`；删除 Run 通过 dangerous 工具 `delete_run` 完成，仍须一次性确认令牌。删除采用 soft delete：Run 保留为 `deleted` tombstone，并记录 `deleted_at` 与删除审计；`GET /runs` 默认隐藏软删除记录，可用 `include_deleted=true` 查询。Replay、History、Compare、Export 后续只需读取 Run，不需要侵入 Planner、Judge 或工具执行链。
 
 ## 14. 前端 Dashboard 说明
 
@@ -489,12 +512,19 @@ Final Response
 
 Tool Registry 位于 `backend/tools.py`，当前工具包括：
 
-- `chat`
-- `rag`
-- `explain`
-- `summarize`
-- `quiz`
-- `flashcard`
+- read：`chat`、`rag_search`、`study`
+- write：`save_note`、`save_flashcards`、`save_quiz`
+- dangerous：`delete_saved_item`、`delete_knowledge_file`、`reset_saved_items`、`reset_rag_index`、`rebuild_rag_index`、`run_code_sandbox`、`delete_run`
+
+`study` 合并了原来的 `explain / summarize / quiz / flashcard`，通过 `operation` 参数选择一种或多种学习内容。旧工作流名称只在 Agent/LangGraph 适配层迁移，不再注册为工具。
+
+所有调用必须经过 `ToolRegistry.execute()`，并写入 `logs/tool_audit.jsonl`。dangerous 工具要求服务端配置 `TOOL_APPROVAL_KEY`，HTTP 请求必须通过 `X-Tool-Approval-Key` 传入该密钥。审批通过后的首次调用返回一次性确认令牌；令牌与工具名、完整调用参数和 actor 绑定，5 分钟内有效且只能使用一次。HTTP 接口：
+
+- `GET /tools`：查看工具分类与确认要求。
+- `POST /tools/{tool_name}/invoke`：调用工具；dangerous 工具缺少审批密钥时返回 `403`，服务端未配置密钥时返回 `503`，审批通过但未确认时返回 `409` 和 `confirmation_token`。
+- `GET /tools/audit/recent`：查看最近的审计事件。
+
+前端左侧导航的“Dev Tool Debugger”仍可直接调用 read/write 工具。dangerous 工具默认不能由浏览器页面执行，应由持有审批密钥的受信任管理客户端完成两阶段确认。
 
 Executor 通过 shared context 在步骤间传递：
 
@@ -780,3 +810,4 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - 增加部署文档。
 - 增加 Demo 截图和 GIF。
 - 未来评估是否将 LangGraph Runtime 设为默认。
+- 基于 Run 聚合增加 Replay、History、Compare、Export。

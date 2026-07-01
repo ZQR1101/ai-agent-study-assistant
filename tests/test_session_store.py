@@ -4,10 +4,11 @@ import os
 import unittest
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from backend.db_models import Base, ChatMessage, ChatSession
+from backend.database import ensure_schema_compatibility
 from backend.evaluation_store import (
     list_recent_judge_results,
     save_judge_result,
@@ -115,10 +116,16 @@ class SessionStoreTests(unittest.TestCase):
             self.assertIn("message_count", s)
 
     def test_get_session_messages_returns_full_details(self):
+        response_snapshot = {
+            "answer": "Hi there",
+            "mode": "agent",
+            "sources": [{"source": "guide.md"}],
+            "trace": [{"title": "Execution", "items": ["used rag"]}],
+        }
         with self.SessionLocal() as db:
             create_or_get_session(db, session_id="s1", title="Test")
             save_message(db, "s1", "user", "Hello")
-            save_message(db, "s1", "assistant", "Hi there")
+            save_message(db, "s1", "assistant", "Hi there", response=response_snapshot)
 
             messages = get_session_messages(db, "s1", limit=50)
 
@@ -126,6 +133,8 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIn("id", messages[0])
         self.assertIn("session_id", messages[0])
         self.assertIn("created_at", messages[0])
+        self.assertIsNone(messages[0]["response"])
+        self.assertEqual(messages[1]["response"], response_snapshot)
 
     def test_save_and_list_judge_evaluations(self):
         with self.SessionLocal() as db:
@@ -134,6 +143,7 @@ class SessionStoreTests(unittest.TestCase):
                 session_id="s1",
                 question="Question 1",
                 answer="Answer 1",
+                run_id="run-1",
                 evaluation={
                     "judge_model": "judge-model",
                     "accuracy": 8,
@@ -178,12 +188,41 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIsNone(evaluations[0]["citation_quality"])
         self.assertEqual(evaluations[0]["verdict"], "PASS")
         self.assertEqual(evaluations[1]["feedback"], "ok")
+        self.assertEqual(evaluations[1]["run_id"], "run-1")
         self.assertEqual(evaluations[1]["deductions"][0]["metric"], "Citation Quality")
         self.assertEqual(updated["judge_feedback"], "bad")
         self.assertEqual(updated["judge_feedback_reason"], "score too high")
 
 
 class DatabaseModuleTests(unittest.TestCase):
+    def test_schema_compatibility_adds_response_json_to_legacy_table(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE TABLE chat_messages ("
+                "id INTEGER PRIMARY KEY, session_id VARCHAR(36), role VARCHAR(20), content TEXT"
+                ")"
+            ))
+
+        ensure_schema_compatibility(engine)
+
+        columns = {column["name"] for column in inspect(engine).get_columns("chat_messages")}
+        self.assertIn("response_json", columns)
+
+    def test_schema_compatibility_adds_run_id_to_legacy_judge_table(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE TABLE judge_results ("
+                "id INTEGER PRIMARY KEY, session_id VARCHAR(64), question TEXT, answer TEXT"
+                ")"
+            ))
+
+        ensure_schema_compatibility(engine)
+
+        columns = {column["name"] for column in inspect(engine).get_columns("judge_results")}
+        self.assertIn("run_id", columns)
+
     @patch.dict(os.environ, {"ENABLE_DB_HISTORY": "false"}, clear=False)
     def test_db_history_disabled_by_default(self):
         from backend.database import is_db_history_enabled

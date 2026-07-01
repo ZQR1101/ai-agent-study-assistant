@@ -7,20 +7,19 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
-DEFAULT_MODEL = "mimo-v2.5"
-DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_BASE_URL = DEEPSEEK_BASE_URL
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBEDDING_MODEL_PATH = PROJECT_ROOT / "models" / DEFAULT_EMBEDDING_MODEL
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+CORS_DEFAULT_ORIGINS = (
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+)
 DASHSCOPE_OPENAI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_API_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 MODEL_PROVIDERS = {
     DEFAULT_MODEL: {
-        "kind": "chat",
-        "base_url": DEFAULT_BASE_URL,
-        "api_key_env_names": ("MY_MIMO_API_KEY", "MIMO_API_KEY", "OPENAI_API_KEY"),
-    },
-    "deepseek-v4-pro": {
         "kind": "chat",
         "base_url": DEEPSEEK_BASE_URL,
         "api_key_env_names": ("DEEPSEEK_API_KEY",),
@@ -63,6 +62,9 @@ class AppConfig:
     enable_reranker: bool
     reranker_model: str
     reranker_top_n: int
+    cors_allowed_origins: tuple[str, ...]
+    tool_approval_key: str | None
+    max_upload_size_bytes: int
 
     @property
     def has_api_key(self) -> bool:
@@ -95,7 +97,10 @@ def get_model_api_settings(model: str | None) -> tuple[str, str | None, str | No
     selected_model = normalize_model(model)
     provider = get_model_provider(selected_model)
     api_key, api_key_source = read_api_key(provider["api_key_env_names"])
-    return provider["base_url"], api_key, api_key_source
+    base_url = provider["base_url"]
+    if selected_model.startswith("deepseek-"):
+        base_url = os.getenv("DEEPSEEK_BASE_URL", base_url)
+    return base_url, api_key, api_key_source
 
 
 def read_bool_env(name: str, default: bool = False) -> bool:
@@ -110,6 +115,23 @@ def read_positive_int_env(name: str, default: int) -> int:
         return max(1, int(os.getenv(name, str(default))))
     except (TypeError, ValueError):
         return default
+
+
+def read_cors_allowed_origins() -> tuple[str, ...]:
+    raw_value = os.getenv("CORS_ALLOWED_ORIGINS")
+    if raw_value is None:
+        return CORS_DEFAULT_ORIGINS
+
+    origins = tuple(
+        origin.strip().rstrip("/")
+        for origin in raw_value.split(",")
+        if origin.strip()
+    )
+    if not origins:
+        return CORS_DEFAULT_ORIGINS
+    if "*" in origins:
+        raise ValueError("CORS_ALLOWED_ORIGINS must not contain '*'")
+    return origins
 
 
 def get_embedding_model_settings() -> tuple[str, bool]:
@@ -130,8 +152,8 @@ def get_config() -> AppConfig:
         project_root=PROJECT_ROOT,
         docs_path=PROJECT_ROOT / "docs",
         rag_index_dir=PROJECT_ROOT / "rag_index",
-        model=normalize_model(os.getenv("MIMO_MODEL", DEFAULT_MODEL)),
-        base_url=os.getenv("MIMO_BASE_URL", DEFAULT_BASE_URL),
+        model=normalize_model(os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL)),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL),
         api_key=api_key,
         api_key_source=api_key_source,
         embedding_model=embedding_model,
@@ -141,4 +163,9 @@ def get_config() -> AppConfig:
         enable_reranker=read_bool_env("ENABLE_RERANKER", False),
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
+        cors_allowed_origins=read_cors_allowed_origins(),
+        tool_approval_key=os.getenv("TOOL_APPROVAL_KEY") or None,
+        max_upload_size_bytes=read_positive_int_env(
+            "MAX_UPLOAD_SIZE_BYTES", 10 * 1024 * 1024
+        ),
     )

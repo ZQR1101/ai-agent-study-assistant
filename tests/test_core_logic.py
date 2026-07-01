@@ -11,7 +11,7 @@ from backend.agent_core import _extract_json_object, _fallback_agent_plan
 from backend.config import DEFAULT_MODEL, get_config, normalize_model
 from backend.history_utils import HISTORY_LIMIT, format_history, normalize_history
 from backend.judge_service import JudgeEvaluationError, compute_verdict, judge_answer
-from backend.llm_service import summarize_usage_records, track_llm_usage
+from backend.llm_service import explain, summarize_usage_records, track_llm_usage
 from backend import rag_store, tools as tools_module
 from backend.rag_store import expand_query, get_rag_index_status, is_valid_chunk
 from backend.schemas import AgentPlan, AgentPlanStep, ChatRequest, ChatResponse, FlashcardItem
@@ -76,13 +76,30 @@ class LLMUsageTrackingTests(unittest.TestCase):
             self.prompt = prompt
             return self.response
 
+    def test_explain_prompt_uses_concise_default_for_all_context_modes(self):
+        cases = [
+            {},
+            {"history_context": "用户：什么是 RAG？"},
+            {"context": "RAG 会先检索知识，再生成回答。"},
+        ]
+
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                fake_llm = self.FakeLLM(self.FakeResponse("ok"))
+                explain("RAG", custom_llm=fake_llm, **kwargs)
+
+                self.assertIn("否则控制在 300 字以内", fake_llm.prompt)
+                self.assertIn("优先遵循用户要求", fake_llm.prompt)
+                self.assertIn("3 个核心要点和 1 个简短例子", fake_llm.prompt)
+
+
     def test_usage_tracker_prefers_api_token_usage(self):
         tracked_llm = track_llm_usage(
             self.FakeLLM(self.FakeResponse(
                 "ok",
                 {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
             )),
-            "mimo-v2.5",
+            "deepseek-v4-pro",
         )
 
         self.assertEqual(tracked_llm.invoke("hello").content, "ok")
@@ -97,7 +114,7 @@ class LLMUsageTrackingTests(unittest.TestCase):
     def test_usage_tracker_estimates_when_api_usage_is_missing(self):
         tracked_llm = track_llm_usage(
             self.FakeLLM(self.FakeResponse("estimated response")),
-            "mimo-v2.5",
+            "deepseek-v4-pro",
         )
 
         tracked_llm.invoke("estimate this prompt")
@@ -276,6 +293,7 @@ class SchemaTests(unittest.TestCase):
 
         self.assertEqual(request.message, "What is RAG?")
         self.assertEqual(request.mode, "explain")
+        self.assertEqual(request.model, "deepseek-v4-pro")
         self.assertFalse(request.use_langgraph)
         self.assertEqual(request.planner_mode, "rule")
         self.assertEqual(request.retrieval_mode, "vector")
@@ -296,7 +314,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(request.planner_mode, "llm")
 
     def test_chat_response_runtime_info_defaults_to_empty_dict(self):
-        response = ChatResponse(answer="ok", mode="chat", model="mimo-v2.5")
+        response = ChatResponse(answer="ok", mode="chat", model="deepseek-v4-pro")
 
         self.assertEqual(response.runtime_info, {})
 
@@ -304,7 +322,7 @@ class SchemaTests(unittest.TestCase):
         response = ChatResponse(
             answer="ok",
             mode="chat",
-            model="mimo-v2.5",
+            model="deepseek-v4-pro",
             judge_evaluation={
                 "accuracy": 8,
                 "completeness": 7,
@@ -466,7 +484,7 @@ class LangGraphChatRoutingTests(unittest.TestCase):
         request = ChatRequest(
             message="use langgraph",
             mode="auto",
-            model="mimo-v2.5",
+            model="deepseek-v4-pro",
             use_agent=True,
             use_langgraph=True,
             top_k=5,
@@ -569,7 +587,21 @@ class LangGraphChatRoutingTests(unittest.TestCase):
 
 class ToolsTests(unittest.TestCase):
     def test_tool_registry_contains_expected_tools(self):
-        expected_tools = {"chat", "rag", "explain", "summarize", "quiz", "flashcard"}
+        expected_tools = {
+            "chat",
+            "rag_search",
+            "study",
+            "save_note",
+            "save_flashcards",
+            "save_quiz",
+            "delete_saved_item",
+            "delete_knowledge_file",
+            "reset_saved_items",
+            "reset_rag_index",
+            "rebuild_rag_index",
+            "run_code_sandbox",
+            "delete_run",
+        }
 
         self.assertEqual(set(TOOL_REGISTRY), expected_tools)
 
@@ -653,10 +685,48 @@ class ToolsTests(unittest.TestCase):
         self.assertTrue(result["used_context"])
         self.assertEqual(result["context_sources"], ["agent_skills.md"])
 
+    def test_rag_tool_can_skip_answer_generation_for_downstream_node(self):
+        rag_context = {
+            "sources": [{"source": "agent_skills.md", "score": 0.8}],
+            "context": "Agent Skill is a reusable workflow knowledge package.",
+            "retrieval_mode": "vector",
+            "candidate_k": 3,
+            "vector_candidates": 1,
+            "bm25_candidates": 0,
+            "hybrid_used": False,
+            "expanded_query": "Agent Skill",
+            "max_score": 0.8,
+            "threshold": None,
+            "raw_count": 1,
+            "valid_count": 1,
+            "discarded_invalid_count": 0,
+            "found": True,
+            "error": None,
+        }
+
+        with (
+            patch("backend.tools.get_rag_context", return_value=rag_context),
+            patch("backend.tools.chat") as mock_chat,
+        ):
+            result = tools_module._run_rag_tool(
+                "什么是 skill",
+                custom_llm=object(),
+                generate_answer=False,
+            )
+
+        mock_chat.assert_not_called()
+        self.assertEqual(result["answer"], "")
+        self.assertEqual(result["context"], rag_context["context"])
+        self.assertIn("RAG answer generation：skipped", result["trace"])
+
 
 class ConfigTests(unittest.TestCase):
     def test_unknown_model_falls_back_to_default(self):
         self.assertEqual(normalize_model("unknown-model"), DEFAULT_MODEL)
+
+    def test_removed_mimo_model_falls_back_to_deepseek(self):
+        self.assertEqual(DEFAULT_MODEL, "deepseek-v4-pro")
+        self.assertEqual(normalize_model("mimo-v2.5"), "deepseek-v4-pro")
 
     def test_config_paths_are_project_local(self):
         config = get_config()

@@ -28,9 +28,20 @@ def create_or_get_session(
     return new_id
 
 
-def save_message(db: Session, session_id: str, role: str, content: str) -> None:
+def save_message(
+    db: Session,
+    session_id: str,
+    role: str,
+    content: str,
+    response: dict | None = None,
+) -> None:
     """Save a single message to the database."""
-    message = ChatMessage(session_id=session_id, role=role, content=content)
+    message = ChatMessage(
+        session_id=session_id,
+        role=role,
+        content=content,
+        response_json=response,
+    )
     db.add(message)
     db.commit()
 
@@ -92,6 +103,7 @@ def get_session_messages(db: Session, session_id: str, limit: int = 50) -> list[
             "session_id": msg.session_id,
             "role": msg.role,
             "content": msg.content,
+            "response": msg.response_json,
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
         for msg in messages
