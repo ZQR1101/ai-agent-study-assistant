@@ -258,6 +258,7 @@ class RagStoreTests(unittest.TestCase):
                     {
                         "EMBEDDING_MODEL_PATH": str(missing_model),
                         "EMBEDDING_MODEL_LOCAL_ONLY": "true",
+                        "ENABLE_RAG_AUTO_BUILD": "true",
                     },
                     clear=False,
                 ),
@@ -282,6 +283,40 @@ class RagStoreTests(unittest.TestCase):
                 self.assertIsNone(rag_store.embedding_model)
 
             rag_store.embedding_model = None
+            rag_store.index = None
+            rag_store.chunks = []
+            rag_store.rag_index_error = None
+
+    def test_auto_build_disabled_does_not_load_embedding_model(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"ENABLE_RAG_AUTO_BUILD": "false"},
+                    clear=False,
+                ),
+                patch.object(rag_store, "INDEX_FILE", Path(tmpdir) / "index.faiss"),
+                patch.object(rag_store, "CHUNKS_FILE", Path(tmpdir) / "chunks.json"),
+                patch.object(rag_store, "rebuild_rag_index") as mock_rebuild,
+                patch.object(rag_store, "get_embedding_model") as mock_model,
+            ):
+                rag_store.index = None
+                rag_store.chunks = []
+                rag_store.rag_index_error = None
+
+                result = rag_store.search_relevant_chunks(
+                    "what is RAG",
+                    include_metadata=True,
+                )
+
+                self.assertEqual(result["chunks"], [])
+                self.assertEqual(
+                    result["error"],
+                    "Automatic RAG index building is disabled",
+                )
+                mock_rebuild.assert_not_called()
+                mock_model.assert_not_called()
+
             rag_store.index = None
             rag_store.chunks = []
             rag_store.rag_index_error = None

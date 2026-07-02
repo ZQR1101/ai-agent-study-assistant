@@ -23,6 +23,12 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
+    env:
+      ENABLE_RAG_AUTO_BUILD: "false"
+      ENABLE_RAG_WARMUP: "false"
+      EMBEDDING_MODEL_LOCAL_ONLY: "true"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
 
     steps:
       - name: Checkout repository
@@ -47,9 +53,9 @@ jobs:
         run: |
           python scripts/check_setup.py
 
-      - name: Run offline unit tests
+      - name: Run offline backend tests
         run: |
-          python -m unittest discover tests
+          python -m pytest
 
   frontend-build:
     runs-on: ubuntu-latest

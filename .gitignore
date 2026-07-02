@@ -15,3 +15,5 @@ DESIGN.md
 frontend_server.err.log
 frontend_server.out.log
 data/
+logs/
+models/

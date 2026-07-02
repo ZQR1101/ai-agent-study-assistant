@@ -692,7 +692,7 @@ Flashcard 内容会作为结构化数据返回，LangGraph finalizer 会尽量�
 ### 离线单元测试
 
 ```bash
-python -m unittest discover tests
+python -m pytest
 ```
 
 ### Setup Check
@@ -737,7 +737,7 @@ CI 位于 `.github/workflows/tests.yml`。
 CI 运行：
 
 - `python scripts/check_setup.py`
-- `python -m unittest discover tests`
+- `python -m pytest`
 - `npm ci` 或 `npm install`
 - `npm run build`
 
@@ -749,6 +749,8 @@ CI 不运行：
 - 真实 LLM 调用
 
 CI 不需要真实 API key。
+CI 同时禁用 RAG 自动 warmup 和缺失索引自动构建，并强制 Hugging Face/
+Transformers 离线模式；RAG 单测使用 mock/fake embedding，不下载模型权重。
 
 ## 23. Evaluation Tools
 

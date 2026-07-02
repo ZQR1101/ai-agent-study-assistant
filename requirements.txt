@@ -11,3 +11,4 @@ faiss-cpu
 langgraph
 SQLAlchemy
 psycopg[binary]
+pytest

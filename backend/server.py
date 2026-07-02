@@ -255,7 +255,8 @@ class _PinnedImageResponse:
 def _image_request_target(parsed: ParseResult) -> str:
     target = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
     if parsed.query:
-        target = f"{target}?{quote(parsed.query, safe='=&%:@!$\'()*+,;/?-._~')}"
+        encoded_query = quote(parsed.query, safe="=&%:@!$'()*+,;/?-._~")
+        target = f"{target}?{encoded_query}"
     return target
 
 
@@ -403,6 +404,7 @@ def health_check():
             "api_key_source": config.api_key_source,
             "embedding_model": config.embedding_model,
             "embedding_model_local_only": config.embedding_model_local_only,
+            "rag_auto_build_enabled": config.enable_rag_auto_build,
         },
         "rag_index": get_rag_index_status(),
         "rag_warmup": {

@@ -341,6 +341,12 @@ def ensure_rag_index():
 
     loaded = load_rag_index()
 
+    if not loaded and not get_config().enable_rag_auto_build:
+        with _rag_index_lock:
+            index = None
+            rag_index_error = "Automatic RAG index building is disabled"
+        return
+
     if not loaded:
         try:
             rebuild_rag_index()
@@ -399,6 +405,7 @@ def get_rag_index_status() -> dict:
         "chunks_error": chunks_error,
         "embedding_model": model_name_or_path,
         "embedding_model_local_only": local_only,
+        "auto_build_enabled": get_config().enable_rag_auto_build,
         "embedding_model_path_missing": model_path_missing,
         "error": rag_index_error,
         "message": message,

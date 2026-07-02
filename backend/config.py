@@ -61,6 +61,7 @@ class AppConfig:
     api_key_source: str | None
     embedding_model: str
     embedding_model_local_only: bool
+    enable_rag_auto_build: bool
     enable_rag_warmup: bool
     rag_warmup_load_index: bool
     enable_reranker: bool
@@ -182,6 +183,7 @@ def get_config() -> AppConfig:
         api_key_source=api_key_source,
         embedding_model=embedding_model,
         embedding_model_local_only=embedding_model_local_only,
+        enable_rag_auto_build=read_bool_env("ENABLE_RAG_AUTO_BUILD", True),
         enable_rag_warmup=read_bool_env("ENABLE_RAG_WARMUP", False),
         rag_warmup_load_index=read_bool_env("RAG_WARMUP_LOAD_INDEX", True),
         enable_reranker=read_bool_env("ENABLE_RERANKER", False),
