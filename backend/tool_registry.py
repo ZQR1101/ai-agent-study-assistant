@@ -42,9 +42,9 @@ class ToolSpec:
 
 
 class ToolConfirmationRequired(RuntimeError):
-    def __init__(self, tool_name: str, token: str, expires_in_seconds: int):
+    def __init__(self, tool_name: str, request_id: str, expires_in_seconds: int):
         self.tool_name = tool_name
-        self.token = token
+        self.request_id = request_id
         self.expires_in_seconds = expires_in_seconds
         super().__init__(f"Tool {tool_name!r} requires explicit confirmation")
 
@@ -52,7 +52,7 @@ class ToolConfirmationRequired(RuntimeError):
         return {
             "error": "confirmation_required",
             "tool": self.tool_name,
-            "confirmation_token": self.token,
+            "approval_request_id": self.request_id,
             "expires_in_seconds": self.expires_in_seconds,
         }
 
@@ -158,47 +158,75 @@ class AuditLog:
 class _PendingConfirmation:
     tool_name: str
     arguments_digest: str
-    actor: str
+    subject: str
     expires_at: float
 
 
 class ConfirmationManager:
     def __init__(self, ttl_seconds: int = 300):
         self.ttl_seconds = ttl_seconds
-        self._pending: dict[str, _PendingConfirmation] = {}
+        self._pending_requests: dict[str, _PendingConfirmation] = {}
+        self._approved_tokens: dict[str, _PendingConfirmation] = {}
         self._lock = threading.Lock()
 
-    def issue(self, tool_name: str, arguments: Mapping[str, Any], actor: str) -> str:
-        token = secrets.token_urlsafe(32)
+    def issue(self, tool_name: str, arguments: Mapping[str, Any], subject: str) -> str:
+        request_id = secrets.token_urlsafe(24)
         pending = _PendingConfirmation(
             tool_name=tool_name,
             arguments_digest=_arguments_digest(tool_name, arguments),
-            actor=actor,
+            subject=subject,
             expires_at=monotonic() + self.ttl_seconds,
         )
         with self._lock:
             self._prune_locked()
-            self._pending[token] = pending
-        return token
+            self._pending_requests[request_id] = pending
+        return request_id
 
-    def consume(self, token: str, tool_name: str, arguments: Mapping[str, Any], actor: str) -> None:
+    def approve(self, request_id: str, tool_name: str) -> str:
         with self._lock:
             self._prune_locked()
-            pending = self._pending.pop(token, None)
+            pending = self._pending_requests.get(request_id)
+            if pending is None:
+                raise InvalidConfirmation("Approval request is invalid, expired, or already used")
+            if pending.tool_name != tool_name:
+                raise InvalidConfirmation("Approval request was issued for a different tool")
+            self._pending_requests.pop(request_id, None)
+            token = secrets.token_urlsafe(32)
+            self._approved_tokens[token] = _PendingConfirmation(
+                tool_name=pending.tool_name,
+                arguments_digest=pending.arguments_digest,
+                subject=pending.subject,
+                expires_at=monotonic() + self.ttl_seconds,
+            )
+        return token
+
+    def consume(
+        self,
+        token: str,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        subject: str,
+    ) -> None:
+        with self._lock:
+            self._prune_locked()
+            pending = self._approved_tokens.pop(token, None)
         if pending is None:
             raise InvalidConfirmation("Confirmation token is invalid, expired, or already used")
         if pending.tool_name != tool_name:
             raise InvalidConfirmation("Confirmation token was issued for a different tool")
-        if pending.actor != actor:
-            raise InvalidConfirmation("Confirmation token was issued for a different actor")
+        if pending.subject != subject:
+            raise InvalidConfirmation("Confirmation token was issued for a different requester")
         if pending.arguments_digest != _arguments_digest(tool_name, arguments):
             raise InvalidConfirmation("Tool arguments changed after confirmation was requested")
 
     def _prune_locked(self) -> None:
         now = monotonic()
-        expired = [token for token, item in self._pending.items() if item.expires_at <= now]
-        for token in expired:
-            self._pending.pop(token, None)
+        for confirmations in (self._pending_requests, self._approved_tokens):
+            expired = [
+                token for token, item in confirmations.items() if item.expires_at <= now
+            ]
+            for token in expired:
+                confirmations.pop(token, None)
 
 
 class ToolRegistry(Mapping[str, ToolSpec]):
@@ -239,12 +267,39 @@ class ToolRegistry(Mapping[str, ToolSpec]):
     def agent_specs(self) -> list[ToolSpec]:
         return [spec for spec in self._specs.values() if spec.agent_visible]
 
+    def approve_confirmation(
+        self,
+        request_id: str,
+        tool_name: str,
+        *,
+        approver: str,
+    ) -> str:
+        canonical_name = self.canonical_name(tool_name)
+        spec = self._specs.get(canonical_name)
+        if spec is None:
+            raise KeyError(f"Unknown tool: {tool_name}")
+        if not spec.requires_confirmation:
+            raise ValueError(f"Tool {canonical_name!r} does not require confirmation")
+
+        token = self.confirmations.approve(request_id, canonical_name)
+        self.audit_log.record(
+            {
+                "event": "tool_approval",
+                "tool": canonical_name,
+                "status": "approved",
+                "approver": approver,
+                "approval_request_id": request_id,
+            }
+        )
+        return token
+
     def execute(
         self,
         name: str,
         *,
         confirmation_token: str | None = None,
         actor: str = "system",
+        confirmation_subject: str | None = None,
         **arguments: Any,
     ) -> dict:
         requested_name = name
@@ -252,6 +307,7 @@ class ToolRegistry(Mapping[str, ToolSpec]):
         spec = self._specs.get(canonical_name)
         invocation_id = str(uuid4())
         run_id = _event_run_id({"arguments": arguments})
+        confirmation_subject = confirmation_subject or actor
 
         if spec is None:
             self.audit_log.record({
@@ -272,7 +328,10 @@ class ToolRegistry(Mapping[str, ToolSpec]):
             if confirmation_token:
                 try:
                     self.confirmations.consume(
-                        confirmation_token, canonical_name, arguments, actor
+                        confirmation_token,
+                        canonical_name,
+                        arguments,
+                        confirmation_subject,
                     )
                 except InvalidConfirmation as exc:
                     self.audit_log.record({
@@ -288,7 +347,11 @@ class ToolRegistry(Mapping[str, ToolSpec]):
                     })
                     raise
             else:
-                token = self.confirmations.issue(canonical_name, arguments, actor)
+                request_id = self.confirmations.issue(
+                    canonical_name,
+                    arguments,
+                    confirmation_subject,
+                )
                 self.audit_log.record({
                     "event": "tool_call",
                     "invocation_id": invocation_id,
@@ -300,7 +363,9 @@ class ToolRegistry(Mapping[str, ToolSpec]):
                     "arguments": arguments,
                 })
                 raise ToolConfirmationRequired(
-                    canonical_name, token, self.confirmations.ttl_seconds
+                    canonical_name,
+                    request_id,
+                    self.confirmations.ttl_seconds,
                 )
 
         started_at = perf_counter()

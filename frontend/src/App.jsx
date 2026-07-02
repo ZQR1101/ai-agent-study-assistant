@@ -2151,6 +2151,7 @@ export default function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/upload`, {
         method: "POST",
+        headers: { "X-Requested-With": "AI-Study-Assistant" },
         body: formData,
       })
 

@@ -140,7 +140,10 @@ class RunApiLifecycleTests(unittest.TestCase):
 
         with patch(
             "backend.server.get_config",
-            return_value=SimpleNamespace(tool_approval_key="approval-secret"),
+            return_value=SimpleNamespace(
+                tool_approval_key="requester-secret",
+                tool_approver_key="approver-secret",
+            ),
         ):
             response = self.client.post(f"/tools/delete_run/invoke", json=request)
 
@@ -159,7 +162,10 @@ class RunApiLifecycleTests(unittest.TestCase):
 
         with patch(
             "backend.server.get_config",
-            return_value=SimpleNamespace(tool_approval_key=None),
+            return_value=SimpleNamespace(
+                tool_approval_key="existing-requester-secret",
+                tool_approver_key=None,
+            ),
         ):
             response = self.client.post(
                 "/tools/delete_run/invoke",
@@ -171,33 +177,82 @@ class RunApiLifecycleTests(unittest.TestCase):
         self.assertNotIn("confirmation_token", response.text)
         self.assertEqual(self.repository.get_run(run.id).status, "running")
 
+    def test_approver_key_alone_cannot_request_dangerous_tool_execution(self):
+        run = self.repository.create_run(request={"message": "keep me"})
+        request = {
+            "arguments": {"target_run_id": run.id},
+            "actor": "run-api-test",
+        }
+        with patch(
+            "backend.server.get_config",
+            return_value=SimpleNamespace(
+                tool_approval_key="requester-secret",
+                tool_approver_key="approver-secret",
+            ),
+        ):
+            response = self.client.post(
+                "/tools/delete_run/invoke",
+                json=request,
+                headers={"X-Tool-Approver-Key": "approver-secret"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("approval_request_id", response.text)
+        self.assertEqual(self.repository.get_run(run.id).status, "running")
+
     def test_confirmed_delete_run_soft_deletes_and_records_the_action(self):
         run = self.repository.create_run(request={"message": "delete me"})
         request = {
             "arguments": {"target_run_id": run.id},
             "actor": "run-api-test",
         }
-        headers = {"X-Tool-Approval-Key": "approval-secret"}
+        requester_headers = {"X-Tool-Approval-Key": "requester-secret"}
+        approver_headers = {"X-Tool-Approver-Key": "approver-secret"}
         with patch(
             "backend.server.get_config",
-            return_value=SimpleNamespace(tool_approval_key="approval-secret"),
+            return_value=SimpleNamespace(
+                tool_approval_key="requester-secret",
+                tool_approver_key="approver-secret",
+            ),
         ):
             first_response = self.client.post(
-                f"/tools/delete_run/invoke", json=request, headers=headers
+                "/tools/delete_run/invoke",
+                json=request,
+                headers=requester_headers,
             )
-            token = first_response.json()["detail"]["confirmation_token"]
+            self.assertEqual(first_response.status_code, 409)
+            self.assertNotIn("confirmation_token", first_response.text)
+            approval_request_id = first_response.json()["detail"][
+                "approval_request_id"
+            ]
+
+            missing_approver_response = self.client.post(
+                f"/tools/delete_run/approvals/{approval_request_id}",
+            )
+            self.assertEqual(missing_approver_response.status_code, 403)
+
+            approval_response = self.client.post(
+                f"/tools/delete_run/approvals/{approval_request_id}",
+                headers=approver_headers,
+            )
+            self.assertEqual(approval_response.status_code, 200)
+            token = approval_response.json()["confirmation_token"]
 
             rejected_response = self.client.post(
-                f"/tools/delete_run/invoke",
+                "/tools/delete_run/invoke",
                 json={**request, "confirmation_token": token},
                 headers={"X-Tool-Approval-Key": "wrong-secret"},
             )
             self.assertEqual(rejected_response.status_code, 403)
 
             confirmed_response = self.client.post(
-                f"/tools/delete_run/invoke",
-                json={**request, "confirmation_token": token},
-                headers=headers,
+                "/tools/delete_run/invoke",
+                json={
+                    **request,
+                    "actor": "forged-different-actor",
+                    "confirmation_token": token,
+                },
+                headers=requester_headers,
             )
 
         self.assertEqual(confirmed_response.status_code, 200)
@@ -209,9 +264,33 @@ class RunApiLifecycleTests(unittest.TestCase):
         self.assertTrue(any(
             event.get("tool") == "delete_run"
             and event.get("status") == "succeeded"
-            and event.get("actor") == "run-api-test"
+            and str(event.get("actor", "")).startswith("requester:")
+            and event.get("actor") != "forged-different-actor"
             for event in stored.audit
         ))
+
+    def test_dangerous_tool_rejects_identical_requester_and_approver_keys(self):
+        run = self.repository.create_run(request={"message": "keep me"})
+        request = {
+            "arguments": {"target_run_id": run.id},
+            "actor": "run-api-test",
+        }
+        with patch(
+            "backend.server.get_config",
+            return_value=SimpleNamespace(
+                tool_approval_key="shared-secret",
+                tool_approver_key="shared-secret",
+            ),
+        ):
+            response = self.client.post(
+                "/tools/delete_run/invoke",
+                json=request,
+                headers={"X-Tool-Approval-Key": "shared-secret"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("approval_request_id", response.text)
+        self.assertEqual(self.repository.get_run(run.id).status, "running")
 
     def test_failed_chat_keeps_a_failed_run(self):
         failing_client = TestClient(self.client.app, raise_server_exceptions=False)

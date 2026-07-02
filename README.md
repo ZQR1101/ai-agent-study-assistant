@@ -15,7 +15,7 @@ AI Study Assistant 是一个面向学习场景的 AI 应用开发项目，基于
 - LangGraph 支持 `planner_mode=rule | llm`，其中 `rule` 是默认模式，`llm` 是可选结构化 Planner。
 - LLM Planner 使用 JSON-only prompt、`AgentPlan` schema、Pydantic validation 和 fallback，失败时回退 rule planner。
 - Tool Registry 按 `read / write / dangerous` 分级，统一执行确认与 Audit Log。
-- 前端“Dev Tool Debugger”支持分类浏览、JSON 参数调用、危险操作二次确认和 Audit Log 查看。
+- 前端“Dev Tool Debugger”支持分类浏览、read/write 工具调用和 Audit Log 查看；dangerous 工具不在浏览器中批准或执行。
 - `/chat` 返回 `run_id / run_summary / run_details`；每条 AI 回复下方挂载对应 Run，展开时从 RunRepository 读取 Overview、Plan、Tools、Audit 和 Artifacts。Judge 作为独立 Evaluation 展示。
 - 每轮 Plan 与 Flashcards 直接显示在回答结果中；右侧检查器仅保留来源、路径和评分。
 - RAG 支持 `sources / score / snippet / threshold / fallback`，避免弱相关知识库命中污染回答。
@@ -339,6 +339,13 @@ DEEPSEEK_API_KEY
 
 - 本地真实 key 放在 `.env`，不要提交。
 - `DEEPSEEK_BASE_URL` 可选，默认使用 DeepSeek API endpoint。
+- 上传接口在 multipart 解析前限制请求体，并通过 `MAX_UPLOAD_SIZE_BYTES`、`MAX_UPLOAD_TOTAL_BYTES`、`UPLOAD_MAX_CONCURRENCY`、`UPLOAD_RATE_LIMIT` 和 `UPLOAD_RATE_WINDOW_SECONDS` 控制单文件大小、`docs/` 总容量、单进程并发和每客户端速率。浏览器上传还必须来自 CORS allowlist 并携带 `X-Requested-With: AI-Study-Assistant`。
+- PDF 在写入知识库前由隔离子进程严格解析；`MAX_PDF_PAGES`、`PDF_VALIDATION_TIMEOUT_SECONDS` 和 `PDF_VALIDATION_MAX_MEMORY_BYTES` 分别限制页数、解析时间和 POSIX 部署的地址空间。加密、结构损坏、超页数或超时 PDF 会被拒绝并清理临时文件。
+- `/image-proxy` 通过 `IMAGE_PROXY_MAX_RESPONSE_BYTES`、`IMAGE_PROXY_MAX_CONCURRENCY`、`IMAGE_PROXY_RATE_LIMIT`、`IMAGE_PROXY_RATE_WINDOW_SECONDS` 和 `IMAGE_PROXY_TIMEOUT_SECONDS` 控制响应内存、单进程并发、每客户端速率和总抓取时间；每一跳最多尝试 8 个已验证公网地址。
+- 图片代理只返回签名匹配的 PNG、JPEG、GIF 或 WebP，并设置 `X-Content-Type-Options: nosniff`；SVG 和 MIME 伪装内容会被拒绝。
+- 浏览器明确标记为 cross-site，或 Origin/Referer 不属于 `CORS_ALLOWED_ORIGINS` 的图片代理请求会被拒绝。
+- 上述限制是单进程安全护栏；多进程或多实例部署仍应在反向代理/API Gateway 配置全局请求体、速率和并发限制。未正确传递客户端地址时，图片限速会按代理地址聚合。
+- CI 使用固定提交 SHA 的 GitHub Actions；Gitleaks 扫描跟踪文件和完整 Git 历史，`pip-audit` 检查 Python 依赖的已知漏洞。
 - CI 不配置真实 API key，也不会运行真实 LLM 调用。
 
 ## 11. 后端启动
@@ -518,13 +525,15 @@ Tool Registry 位于 `backend/tools.py`，当前工具包括：
 
 `study` 合并了原来的 `explain / summarize / quiz / flashcard`，通过 `operation` 参数选择一种或多种学习内容。旧工作流名称只在 Agent/LangGraph 适配层迁移，不再注册为工具。
 
-所有调用必须经过 `ToolRegistry.execute()`，并写入 `logs/tool_audit.jsonl`。dangerous 工具要求服务端配置 `TOOL_APPROVAL_KEY`，HTTP 请求必须通过 `X-Tool-Approval-Key` 传入该密钥。审批通过后的首次调用返回一次性确认令牌；令牌与工具名、完整调用参数和 actor 绑定，5 分钟内有效且只能使用一次。HTTP 接口：
+所有调用必须经过 `ToolRegistry.execute()`，并写入 `logs/tool_audit.jsonl`。dangerous 工具采用职责分离的三步流程：调用方使用 `TOOL_APPROVAL_KEY`，独立批准方使用不同的 `TOOL_APPROVER_KEY`；两个密钥都必须至少 32 个字符且不能相同。调用方凭据由服务端生成身份指纹，确认流程不信任请求体中的 `actor`。批准产生的令牌与工具名、完整调用参数和调用方身份绑定，5 分钟内有效且只能使用一次。HTTP 接口：
 
 - `GET /tools`：查看工具分类与确认要求。
-- `POST /tools/{tool_name}/invoke`：调用工具；dangerous 工具缺少审批密钥时返回 `403`，服务端未配置密钥时返回 `503`，审批通过但未确认时返回 `409` 和 `confirmation_token`。
+- `POST /tools/{tool_name}/invoke`：调用工具。dangerous 工具通过 `X-Tool-Approval-Key` 验证调用方；首次调用返回 `409` 和 `approval_request_id`，不会返回可执行令牌。
+- `POST /tools/{tool_name}/approvals/{approval_request_id}`：独立批准方通过 `X-Tool-Approver-Key` 批准请求并取得一次性 `confirmation_token`。
+- 调用方使用原参数、`confirmation_token` 和 `X-Tool-Approval-Key` 再次调用 `/invoke` 执行危险工具。
 - `GET /tools/audit/recent`：查看最近的审计事件。
 
-前端左侧导航的“Dev Tool Debugger”仍可直接调用 read/write 工具。dangerous 工具默认不能由浏览器页面执行，应由持有审批密钥的受信任管理客户端完成两阶段确认。
+前端左侧导航的“Dev Tool Debugger”仍可直接调用 read/write 工具。dangerous 工具不能由浏览器页面批准或执行；调用方密钥与批准方密钥必须由不同的受信任客户端分别保管，不能写入前端源码。
 
 Executor 通过 shared context 在步骤间传递：
 

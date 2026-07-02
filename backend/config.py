@@ -16,6 +16,10 @@ CORS_DEFAULT_ORIGINS = (
     "http://127.0.0.1:5500",
     "http://localhost:5500",
 )
+TOOL_SECRET_PLACEHOLDERS = {
+    "replace-with-a-long-random-requester-secret",
+    "replace-with-a-different-long-random-approver-secret",
+}
 DASHSCOPE_OPENAI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_API_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 MODEL_PROVIDERS = {
@@ -64,7 +68,20 @@ class AppConfig:
     reranker_top_n: int
     cors_allowed_origins: tuple[str, ...]
     tool_approval_key: str | None
+    tool_approver_key: str | None
     max_upload_size_bytes: int
+    max_upload_total_bytes: int
+    upload_max_concurrency: int
+    upload_rate_limit: int
+    upload_rate_window_seconds: int
+    image_proxy_max_response_bytes: int
+    image_proxy_max_concurrency: int
+    image_proxy_rate_limit: int
+    image_proxy_rate_window_seconds: int
+    image_proxy_timeout_seconds: int
+    max_pdf_pages: int
+    pdf_validation_timeout_seconds: int
+    pdf_validation_max_memory_bytes: int
 
     @property
     def has_api_key(self) -> bool:
@@ -134,6 +151,13 @@ def read_cors_allowed_origins() -> tuple[str, ...]:
     return origins
 
 
+def read_tool_secret(name: str) -> str | None:
+    value = (os.getenv(name) or "").strip()
+    if not value or len(value) < 32 or value.lower() in TOOL_SECRET_PLACEHOLDERS:
+        return None
+    return value
+
+
 def get_embedding_model_settings() -> tuple[str, bool]:
     configured_model = os.getenv("EMBEDDING_MODEL_PATH") or os.getenv("EMBEDDING_MODEL")
     if configured_model:
@@ -164,8 +188,37 @@ def get_config() -> AppConfig:
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
         cors_allowed_origins=read_cors_allowed_origins(),
-        tool_approval_key=os.getenv("TOOL_APPROVAL_KEY") or None,
+        tool_approval_key=read_tool_secret("TOOL_APPROVAL_KEY"),
+        tool_approver_key=read_tool_secret("TOOL_APPROVER_KEY"),
         max_upload_size_bytes=read_positive_int_env(
             "MAX_UPLOAD_SIZE_BYTES", 10 * 1024 * 1024
+        ),
+        max_upload_total_bytes=read_positive_int_env(
+            "MAX_UPLOAD_TOTAL_BYTES", 100 * 1024 * 1024
+        ),
+        upload_max_concurrency=read_positive_int_env("UPLOAD_MAX_CONCURRENCY", 2),
+        upload_rate_limit=read_positive_int_env("UPLOAD_RATE_LIMIT", 10),
+        upload_rate_window_seconds=read_positive_int_env(
+            "UPLOAD_RATE_WINDOW_SECONDS", 60
+        ),
+        image_proxy_max_response_bytes=read_positive_int_env(
+            "IMAGE_PROXY_MAX_RESPONSE_BYTES", 20 * 1024 * 1024
+        ),
+        image_proxy_max_concurrency=read_positive_int_env(
+            "IMAGE_PROXY_MAX_CONCURRENCY", 4
+        ),
+        image_proxy_rate_limit=read_positive_int_env("IMAGE_PROXY_RATE_LIMIT", 30),
+        image_proxy_rate_window_seconds=read_positive_int_env(
+            "IMAGE_PROXY_RATE_WINDOW_SECONDS", 60
+        ),
+        image_proxy_timeout_seconds=read_positive_int_env(
+            "IMAGE_PROXY_TIMEOUT_SECONDS", 20
+        ),
+        max_pdf_pages=read_positive_int_env("MAX_PDF_PAGES", 500),
+        pdf_validation_timeout_seconds=read_positive_int_env(
+            "PDF_VALIDATION_TIMEOUT_SECONDS", 5
+        ),
+        pdf_validation_max_memory_bytes=read_positive_int_env(
+            "PDF_VALIDATION_MAX_MEMORY_BYTES", 256 * 1024 * 1024
         ),
     )

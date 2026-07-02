@@ -1,17 +1,19 @@
 from pathlib import Path
+import asyncio
 import codecs
+import hashlib
+import http.client
 import ipaddress
 import logging
+import os
 import secrets
 import socket
 from time import perf_counter
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin
-from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
+from urllib.parse import ParseResult, quote, urljoin, urlparse
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
@@ -27,6 +29,18 @@ from backend.judge_service import is_judge_persistence_enabled, is_llm_judge_ena
 from backend.schemas import ChatRequest, ChatResponse, JudgeFeedbackRequest
 from backend.run_metadata import build_run_metadata
 from backend.run_repository import Run, get_run_repository
+from backend.pdf_validation import (
+    PDFPageLimitExceeded,
+    PDFValidationError,
+    PDFValidationTimeout,
+    validate_pdf_file,
+)
+from backend.resource_limits import (
+    ConcurrencyGate,
+    TokenBucketRateLimiter,
+    UploadBodyLimitMiddleware,
+    UploadQuotaReservations,
+)
 from backend.session_store import (
     create_or_get_session,
     get_recent_messages,
@@ -44,12 +58,27 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DOCS_PATH = PROJECT_ROOT / "docs"
 SUPPORTED_DOC_EXTENSIONS = {".md", ".txt", ".pdf"}
 IMAGE_PROXY_MAX_REDIRECTS = 3
+IMAGE_PROXY_MAX_RESOLVED_ADDRESSES = 8
 UPLOAD_CHUNK_SIZE = 64 * 1024
+UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 ALLOWED_UPLOAD_CONTENT_TYPES = {
     ".pdf": {"application/pdf"},
     ".md": {"text/markdown", "text/plain"},
     ".txt": {"text/plain"},
 }
+WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+_UPLOAD_CONCURRENCY_GATE = ConcurrencyGate()
+_UPLOAD_RATE_LIMITER = TokenBucketRateLimiter()
+_UPLOAD_QUOTA = UploadQuotaReservations()
+_IMAGE_PROXY_CONCURRENCY_GATE = ConcurrencyGate()
+_IMAGE_PROXY_RATE_LIMITER = TokenBucketRateLimiter()
 
 app = FastAPI(
     title="AI 学习助手 API",
@@ -66,11 +95,20 @@ app = FastAPI(
 
 
 app.add_middleware(
+    UploadBodyLimitMiddleware,
+    config_provider=lambda: get_config(),
+    concurrency_gate=_UPLOAD_CONCURRENCY_GATE,
+    rate_limiter=_UPLOAD_RATE_LIMITER,
+    multipart_overhead_bytes=UPLOAD_MULTIPART_OVERHEAD_BYTES,
+)
+
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=list(get_config().cors_allowed_origins),
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Tool-Approval-Key"],
+    allow_headers=["Content-Type", "X-Requested-With", "X-Tool-Approval-Key"],
 )
 
 
@@ -116,7 +154,7 @@ class ToolInvokeRequest(BaseModel):
     actor: str = "api"
 
 
-def _is_public_image_url(url: str) -> bool:
+def _resolve_public_image_url(url: str) -> tuple[ParseResult, tuple[str, ...]] | None:
     parsed = urlparse(url)
     if (
         parsed.scheme not in {"http", "https"}
@@ -124,61 +162,206 @@ def _is_public_image_url(url: str) -> bool:
         or parsed.username
         or parsed.password
     ):
-        return False
+        return None
 
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, None)
-    except socket.gaierror:
-        return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        hostname = parsed.hostname.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return None
 
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None
+
+    resolved_addresses: list[str] = []
     for item in addresses:
         host = item[4][0]
         try:
             address = ipaddress.ip_address(host)
         except ValueError:
-            return False
-        if address.is_private or address.is_loopback or address.is_link_local or address.is_multicast:
-            return False
+            return None
+        if not address.is_global:
+            return None
+        normalized_host = str(address)
+        if normalized_host not in resolved_addresses:
+            resolved_addresses.append(normalized_host)
 
-    return True
-
-
-class _NoImageRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    if not resolved_addresses:
         return None
 
-
-def _build_image_opener():
-    return build_opener(_NoImageRedirectHandler())
+    return parsed, tuple(resolved_addresses[:IMAGE_PROXY_MAX_RESOLVED_ADDRESSES])
 
 
-def _open_public_image(url: str):
-    opener = _build_image_opener()
+def _is_public_image_url(url: str) -> bool:
+    return _resolve_public_image_url(url) is not None
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, hostname: str, pinned_ip: str, port: int, timeout: float):
+        super().__init__(hostname, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = self._create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, hostname: str, pinned_ip: str, port: int, timeout: float):
+        super().__init__(hostname, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = self._create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+class _PinnedImageResponse:
+    def __init__(self, connection, response):
+        self._connection = connection
+        self._response = response
+        self.headers = response.headers
+        self.status = response.status
+
+    def read(self, amount: int = -1):
+        return self._response.read(amount)
+
+    def set_timeout(self, timeout: float) -> None:
+        if self._connection.sock is not None:
+            self._connection.sock.settimeout(timeout)
+
+    def close(self):
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+
+def _image_request_target(parsed: ParseResult) -> str:
+    target = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
+    if parsed.query:
+        target = f"{target}?{quote(parsed.query, safe='=&%:@!$\'()*+,;/?-._~')}"
+    return target
+
+
+def _image_host_header(hostname: str, port: int, scheme: str) -> str:
+    try:
+        is_ipv6 = ipaddress.ip_address(hostname).version == 6
+    except ValueError:
+        is_ipv6 = False
+    host = f"[{hostname}]" if is_ipv6 else hostname
+    default_port = 443 if scheme == "https" else 80
+    return host if port == default_port else f"{host}:{port}"
+
+
+def _open_pinned_image_response(
+    parsed: ParseResult,
+    pinned_ip: str,
+    *,
+    timeout: float,
+):
+    hostname = parsed.hostname.encode("idna").decode("ascii")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    connection_class = (
+        _PinnedHTTPSConnection if parsed.scheme == "https" else _PinnedHTTPConnection
+    )
+    connection = connection_class(hostname, pinned_ip, port, timeout=timeout)
+    try:
+        connection.request(
+            "GET",
+            _image_request_target(parsed),
+            headers={
+                "Host": _image_host_header(hostname, port, parsed.scheme),
+                "User-Agent": "AI-Study-Assistant/1.0",
+                "Connection": "close",
+            },
+        )
+        return _PinnedImageResponse(connection, connection.getresponse())
+    except Exception:
+        connection.close()
+        raise
+
+
+def _open_public_image(url: str, *, deadline: float | None = None):
+    deadline = deadline or (perf_counter() + 20)
     current_url = url
 
     for redirect_count in range(IMAGE_PROXY_MAX_REDIRECTS + 1):
-        if not _is_public_image_url(current_url):
+        resolved = _resolve_public_image_url(current_url)
+        if resolved is None:
             raise HTTPException(status_code=400, detail="Unsupported image URL")
 
-        request = UrlRequest(
-            current_url,
-            headers={"User-Agent": "AI-Study-Assistant/1.0"},
-        )
-        try:
-            return opener.open(request, timeout=20)
-        except HTTPError as exc:
-            if exc.code not in {301, 302, 303, 307, 308}:
-                raise
-            location = exc.headers.get("Location") if exc.headers else None
-            exc.close()
+        parsed, addresses = resolved
+        last_error: OSError | None = None
+        response = None
+        for pinned_ip in addresses:
+            remaining = deadline - perf_counter()
+            if remaining <= 0:
+                raise URLError("Image fetch timed out")
+            try:
+                response = _open_pinned_image_response(
+                    parsed,
+                    pinned_ip,
+                    timeout=remaining,
+                )
+                break
+            except OSError as exc:
+                last_error = exc
+
+        if response is None:
+            raise URLError(last_error or "Unable to connect to image host")
+
+        if response.status in {301, 302, 303, 307, 308}:
+            location = response.headers.get("Location") if response.headers else None
+            response.close()
             if not location or redirect_count >= IMAGE_PROXY_MAX_REDIRECTS:
                 raise HTTPException(
                     status_code=400,
                     detail="Image redirect is invalid or exceeds the redirect limit",
-                ) from exc
+                )
             current_url = urljoin(current_url, location)
+            continue
+
+        if response.status >= 400:
+            status = response.status
+            headers = response.headers
+            response.close()
+            raise HTTPError(current_url, status, "Image fetch failed", headers, None)
+
+        return response
 
     raise HTTPException(status_code=400, detail="Image redirect limit exceeded")
+
+
+def _is_safe_proxy_image(content_type: str, content: bytes) -> bool:
+    if content_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type in {"image/jpeg", "image/pjpeg"}:
+        return content.startswith(b"\xff\xd8\xff")
+    if content_type == "image/gif":
+        return content.startswith((b"GIF87a", b"GIF89a"))
+    if content_type == "image/webp":
+        return (
+            len(content) >= 12
+            and content.startswith(b"RIFF")
+            and content[8:12] == b"WEBP"
+        )
+    return False
 
 
 def _safe_doc_path(filename: str) -> Path:
@@ -249,19 +432,53 @@ def list_tools_api():
     }
 
 
-def _require_tool_approval(tool_name: str, approval_key: str | None) -> None:
+def _dangerous_tool_keys(tool_name: str) -> tuple[str, str] | None:
     spec = TOOL_REGISTRY.get(tool_name)
     if spec is None or not spec.requires_confirmation:
-        return
+        return None
 
-    configured_key = get_config().tool_approval_key
-    if not configured_key:
+    config = get_config()
+    request_key = config.tool_approval_key
+    approver_key = config.tool_approver_key
+    if not request_key or not approver_key:
         raise HTTPException(
             status_code=503,
-            detail="Dangerous tool approval is not configured",
+            detail="Dangerous tool requester and approver keys are not configured",
         )
-    if not approval_key or not secrets.compare_digest(approval_key, configured_key):
+    if secrets.compare_digest(request_key, approver_key):
+        raise HTTPException(
+            status_code=503,
+            detail="Dangerous tool requester and approver keys must be different",
+        )
+    return request_key, approver_key
+
+
+def _key_identity(role: str, key: str) -> str:
+    fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return f"{role}:{fingerprint}"
+
+
+def _require_tool_requester(tool_name: str, approval_key: str | None) -> str | None:
+    configured_keys = _dangerous_tool_keys(tool_name)
+    if configured_keys is None:
+        return None
+    request_key, _ = configured_keys
+    if not approval_key or not secrets.compare_digest(approval_key, request_key):
         raise HTTPException(status_code=403, detail="Dangerous tool approval denied")
+    return _key_identity("requester", request_key)
+
+
+def _require_tool_approver(tool_name: str, approver_key: str | None) -> str:
+    configured_keys = _dangerous_tool_keys(tool_name)
+    if configured_keys is None:
+        raise HTTPException(status_code=400, detail="Tool does not require approval")
+    _, configured_approver_key = configured_keys
+    if not approver_key or not secrets.compare_digest(
+        approver_key,
+        configured_approver_key,
+    ):
+        raise HTTPException(status_code=403, detail="Dangerous tool approval denied")
+    return _key_identity("approver", configured_approver_key)
 
 
 @app.post(
@@ -283,12 +500,13 @@ def invoke_tool_api(
     arguments = dict(request.arguments)
     for reserved in ("actor", "confirmed", "confirmation_token"):
         arguments.pop(reserved, None)
-    _require_tool_approval(tool_name, approval_key)
+    confirmation_subject = _require_tool_requester(tool_name, approval_key)
     try:
         return TOOL_REGISTRY.execute(
             tool_name,
             confirmation_token=request.confirmation_token,
-            actor=request.actor,
+            actor=confirmation_subject or request.actor,
+            confirmation_subject=confirmation_subject,
             **arguments,
         )
     except ToolConfirmationRequired as exc:
@@ -299,6 +517,40 @@ def invoke_tool_api(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/tools/{tool_name}/approvals/{approval_request_id}",
+    tags=["Tools"],
+    responses={
+        400: {"description": "Approval request is invalid or expired"},
+        403: {"description": "Dangerous tool approval denied"},
+        404: {"description": "Tool not found"},
+        503: {"description": "Dangerous tool approval is not configured safely"},
+    },
+)
+def approve_tool_api(
+    tool_name: str,
+    approval_request_id: str,
+    approver_key: str | None = Header(default=None, alias="X-Tool-Approver-Key"),
+):
+    approver = _require_tool_approver(tool_name, approver_key)
+    try:
+        token = TOOL_REGISTRY.approve_confirmation(
+            approval_request_id,
+            tool_name,
+            approver=approver,
+        )
+    except InvalidConfirmation as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "confirmation_token": token,
+        "expires_in_seconds": TOOL_REGISTRY.confirmations.ttl_seconds,
+    }
 
 
 @app.get("/tools/audit/recent", tags=["Tools"])
@@ -619,24 +871,108 @@ def judge_result_feedback_api(result_id: int, request: JudgeFeedbackRequest):
 
 
 @app.get("/image-proxy", include_in_schema=False)
-def image_proxy(url: str = Query(..., min_length=1)):
+def image_proxy(request: Request, url: str = Query(..., min_length=1)):
+    config = get_config()
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise HTTPException(status_code=403, detail="Cross-site image proxy request denied")
+
+    source_origin = request.headers.get("origin", "").rstrip("/")
+    referer = request.headers.get("referer", "")
+    if not source_origin and referer:
+        parsed_referer = urlparse(referer)
+        if parsed_referer.scheme and parsed_referer.netloc:
+            source_origin = f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+        else:
+            source_origin = "invalid"
+    if source_origin and source_origin not in set(config.cors_allowed_origins):
+        raise HTTPException(status_code=403, detail="Image proxy request source denied")
+
+    client_host = request.client.host if request.client else "unknown"
+    allowed, retry_after = _IMAGE_PROXY_RATE_LIMITER.allow(
+        client_host,
+        getattr(config, "image_proxy_rate_limit", 30),
+        getattr(config, "image_proxy_rate_window_seconds", 60),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Image proxy rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    if not _IMAGE_PROXY_CONCURRENCY_GATE.try_acquire(
+        getattr(config, "image_proxy_max_concurrency", 4)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Image proxy capacity is busy; retry later",
+            headers={"Retry-After": "1"},
+        )
+
     try:
-        with _open_public_image(url) as response:
-            content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail="URL did not return an image")
-            content = response.read(20 * 1024 * 1024 + 1)
-    except HTTPException:
-        raise
-    except HTTPError as exc:
-        raise HTTPException(status_code=exc.code, detail="Image fetch failed") from exc
-    except URLError as exc:
-        raise HTTPException(status_code=502, detail=f"Image fetch failed: {exc.reason}") from exc
+        max_response_bytes = getattr(
+            config,
+            "image_proxy_max_response_bytes",
+            20 * 1024 * 1024,
+        )
+        deadline = perf_counter() + getattr(
+            config,
+            "image_proxy_timeout_seconds",
+            20,
+        )
+        try:
+            with _open_public_image(url, deadline=deadline) as response:
+                content_type = response.headers.get("content-type", "image/png").split(
+                    ";"
+                )[0].strip()
+                chunks = []
+                total_size = 0
+                while total_size <= max_response_bytes:
+                    remaining_timeout = deadline - perf_counter()
+                    if remaining_timeout <= 0:
+                        raise HTTPException(status_code=504, detail="Image fetch timed out")
+                    if hasattr(response, "set_timeout"):
+                        response.set_timeout(remaining_timeout)
+                    chunk = response.read(
+                        min(UPLOAD_CHUNK_SIZE, max_response_bytes + 1 - total_size)
+                    )
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total_size += len(chunk)
+                content = b"".join(chunks)
+        except HTTPException:
+            raise
+        except HTTPError as exc:
+            raise HTTPException(status_code=exc.code, detail="Image fetch failed") from exc
+        except URLError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Image fetch failed: {exc.reason}",
+            ) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Image fetch timed out") from exc
+        except (OSError, http.client.HTTPException) as exc:
+            raise HTTPException(status_code=502, detail="Image fetch failed") from exc
 
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Image is too large")
+        if len(content) > max_response_bytes:
+            raise HTTPException(status_code=413, detail="Image is too large")
+        if not _is_safe_proxy_image(content_type, content):
+            raise HTTPException(
+                status_code=400,
+                detail="URL did not return a supported image",
+            )
 
-    return Response(content=content, media_type=content_type)
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "private, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    finally:
+        _IMAGE_PROXY_CONCURRENCY_GATE.release()
 
 
 @app.post("/debug-langgraph", include_in_schema=False)
@@ -707,7 +1043,15 @@ def agent_api(request: TextRequest):
 async def upload_file(file: UploadFile = File(...)):
     original_filename = file.filename or ""
     filename = Path(original_filename).name
-    if not filename or filename != original_filename:
+    filename_stem = Path(filename).stem.upper()
+    if (
+        not filename
+        or filename != original_filename
+        or len(filename) > 128
+        or filename != filename.rstrip(" .")
+        or any(ord(character) < 32 for character in filename)
+        or filename_stem in WINDOWS_RESERVED_FILENAMES
+    ):
         raise HTTPException(status_code=400, detail="Invalid file name")
 
     suffix = Path(filename).suffix.lower()
@@ -723,10 +1067,26 @@ async def upload_file(file: UploadFile = File(...)):
 
     DOCS_PATH.mkdir(parents=True, exist_ok=True)
     save_path = DOCS_PATH / filename
-    max_size = get_config().max_upload_size_bytes
+    config = get_config()
+    max_size = config.max_upload_size_bytes
+    max_total_size = getattr(
+        config,
+        "max_upload_total_bytes",
+        max_size * 10,
+    )
+    declared_size = file.size if isinstance(file.size, int) and file.size >= 0 else 0
+    if declared_size > max_size:
+        await file.close()
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {max_size} byte upload limit",
+        )
+
     total_size = 0
+    pdf_pages = None
     header = b""
-    created = False
+    reserved_bytes = 0
+    temp_path = DOCS_PATH / f".upload-{secrets.token_hex(16)}.tmp"
     text_decoder = (
         codecs.getincrementaldecoder("utf-8")()
         if suffix in {".md", ".txt"}
@@ -734,8 +1094,19 @@ async def upload_file(file: UploadFile = File(...)):
     )
 
     try:
-        with save_path.open("xb") as handle:
-            created = True
+        reservation = _UPLOAD_QUOTA.reserve(
+            DOCS_PATH,
+            declared_size,
+            max_total_size,
+        )
+        if reservation is None:
+            raise HTTPException(
+                status_code=507,
+                detail="Knowledge file storage quota is full",
+            )
+        reserved_bytes = reservation
+
+        with temp_path.open("xb") as handle:
             while True:
                 chunk = await file.read(UPLOAD_CHUNK_SIZE)
                 if not chunk:
@@ -746,6 +1117,18 @@ async def upload_file(file: UploadFile = File(...)):
                         status_code=413,
                         detail=f"File exceeds the {max_size} byte upload limit",
                     )
+                grown_reservation = _UPLOAD_QUOTA.grow(
+                    DOCS_PATH,
+                    reserved_bytes,
+                    total_size,
+                    max_total_size,
+                )
+                if grown_reservation is None:
+                    raise HTTPException(
+                        status_code=507,
+                        detail="Knowledge file storage quota is full",
+                    )
+                reserved_bytes = grown_reservation
                 if len(header) < 5:
                     header = (header + chunk)[:5]
                 if text_decoder is not None:
@@ -771,23 +1154,44 @@ async def upload_file(file: UploadFile = File(...)):
                     status_code=415,
                     detail="Uploaded PDF does not have a valid PDF signature",
                 )
+        if suffix == ".pdf":
+            try:
+                pdf_pages = await asyncio.to_thread(
+                    validate_pdf_file,
+                    temp_path,
+                    max_pages=getattr(config, "max_pdf_pages", 500),
+                    timeout_seconds=getattr(
+                        config,
+                        "pdf_validation_timeout_seconds",
+                        5,
+                    ),
+                    max_memory_bytes=getattr(
+                        config,
+                        "pdf_validation_max_memory_bytes",
+                        256 * 1024 * 1024,
+                    ),
+                )
+            except PDFPageLimitExceeded as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except PDFValidationTimeout as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except PDFValidationError as exc:
+                raise HTTPException(status_code=415, detail=str(exc)) from exc
+        os.link(temp_path, save_path)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail="A file with this name already exists") from exc
-    except HTTPException:
-        if created:
-            save_path.unlink(missing_ok=True)
-        raise
     except OSError as exc:
-        if created:
-            save_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to store uploaded file") from exc
     finally:
+        temp_path.unlink(missing_ok=True)
+        _UPLOAD_QUOTA.release(reserved_bytes)
         await file.close()
 
     return {
         "message": f"{filename} uploaded successfully; rebuild the RAG index to use it",
         "rebuild_required": True,
         "size": total_size,
+        **({"pages": pdf_pages} if pdf_pages is not None else {}),
     }
 
 
@@ -857,12 +1261,16 @@ def rebuild_index_api(
     approval_key: str | None = Header(default=None, alias="X-Tool-Approval-Key"),
 ):
     request = request or ToolInvokeRequest()
-    _require_tool_approval("rebuild_rag_index", approval_key)
+    confirmation_subject = _require_tool_requester(
+        "rebuild_rag_index",
+        approval_key,
+    )
     try:
         TOOL_REGISTRY.execute(
             "rebuild_rag_index",
             confirmation_token=request.confirmation_token,
-            actor=request.actor,
+            actor=confirmation_subject or request.actor,
+            confirmation_subject=confirmation_subject,
         )
     except ToolConfirmationRequired as exc:
         raise HTTPException(status_code=409, detail=exc.as_dict()) from exc

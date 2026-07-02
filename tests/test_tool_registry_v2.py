@@ -2,9 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.tool_registry import (
     AuditLog,
+    ConfirmationManager,
     InvalidConfirmation,
     ToolCategory,
     ToolConfirmationRequired,
@@ -55,6 +57,10 @@ class ToolRegistryV2Tests(unittest.TestCase):
         self.assertIn("/chat", paths)
         self.assertIn("/tools", paths)
         self.assertIn("/tools/{tool_name}/invoke", paths)
+        self.assertIn(
+            "/tools/{tool_name}/approvals/{approval_request_id}",
+            paths,
+        )
         self.assertIn("/tools/audit/recent", paths)
         self.assertIn("/runs", paths)
         self.assertIn("/runs/{run_id}", paths)
@@ -105,20 +111,30 @@ class ToolRegistryV2Tests(unittest.TestCase):
             )
             self.assertTrue(all(event["run_id"] == run.id for event in stored.audit))
 
-    def test_confirmation_is_bound_to_actor_arguments_and_single_use(self):
+    def test_confirmation_is_bound_to_requester_arguments_and_single_use(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = []
             registry = self._registry(directory, calls)
 
             with self.assertRaises(ToolConfirmationRequired) as raised:
-                registry.execute("dangerous", value="A", actor="user-1")
+                registry.execute(
+                    "dangerous",
+                    value="A",
+                    actor="claimed-user-1",
+                    confirmation_subject="request-key-1",
+                )
             self.assertEqual(calls, [])
 
-            token = raised.exception.token
+            token = registry.approve_confirmation(
+                raised.exception.request_id,
+                "dangerous",
+                approver="admin-1",
+            )
             result = registry.execute(
                 "dangerous",
                 value="A",
-                actor="user-1",
+                actor="claimed-user-2",
+                confirmation_subject="request-key-1",
                 confirmation_token=token,
             )
             self.assertEqual(result, {"value": "A"})
@@ -128,21 +144,71 @@ class ToolRegistryV2Tests(unittest.TestCase):
                 registry.execute(
                     "dangerous",
                     value="A",
-                    actor="user-1",
+                    actor="claimed-user-1",
+                    confirmation_subject="request-key-1",
                     confirmation_token=token,
                 )
+
+    def test_confirmation_rejects_a_different_server_requester_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = self._registry(directory, [])
+            with self.assertRaises(ToolConfirmationRequired) as raised:
+                registry.execute(
+                    "dangerous",
+                    value="A",
+                    actor="same-claimed-actor",
+                    confirmation_subject="request-key-1",
+                )
+            token = registry.approve_confirmation(
+                raised.exception.request_id,
+                "dangerous",
+                approver="admin-1",
+            )
+            with self.assertRaises(InvalidConfirmation):
+                registry.execute(
+                    "dangerous",
+                    value="A",
+                    actor="same-claimed-actor",
+                    confirmation_subject="request-key-2",
+                    confirmation_token=token,
+                )
+
+    def test_approval_request_is_single_use_and_expires(self):
+        manager = ConfirmationManager(ttl_seconds=1)
+        with patch("backend.tool_registry.monotonic", return_value=10):
+            request_id = manager.issue("dangerous", {"value": "A"}, "requester-1")
+            token = manager.approve(request_id, "dangerous")
+
+        self.assertTrue(token)
+        with self.assertRaises(InvalidConfirmation):
+            manager.approve(request_id, "dangerous")
+
+        with patch("backend.tool_registry.monotonic", return_value=20):
+            expired_request_id = manager.issue(
+                "dangerous",
+                {"value": "B"},
+                "requester-1",
+            )
+        with patch("backend.tool_registry.monotonic", return_value=22):
+            with self.assertRaises(InvalidConfirmation):
+                manager.approve(expired_request_id, "dangerous")
 
     def test_argument_changes_reject_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             registry = self._registry(directory, [])
             with self.assertRaises(ToolConfirmationRequired) as raised:
                 registry.execute("dangerous", value="A", actor="user-1")
+            token = registry.approve_confirmation(
+                raised.exception.request_id,
+                "dangerous",
+                approver="admin-1",
+            )
             with self.assertRaises(InvalidConfirmation):
                 registry.execute(
                     "dangerous",
                     value="B",
                     actor="user-1",
-                    confirmation_token=raised.exception.token,
+                    confirmation_token=token,
                 )
 
     def test_argument_changes_after_a_long_common_prefix_reject_confirmation(self):
@@ -155,12 +221,17 @@ class ToolRegistryV2Tests(unittest.TestCase):
                     value=f"{common_prefix}-approved",
                     actor="user-1",
                 )
+            token = registry.approve_confirmation(
+                raised.exception.request_id,
+                "dangerous",
+                approver="admin-1",
+            )
             with self.assertRaises(InvalidConfirmation):
                 registry.execute(
                     "dangerous",
                     value=f"{common_prefix}-changed",
                     actor="user-1",
-                    confirmation_token=raised.exception.token,
+                    confirmation_token=token,
                 )
 
     def test_audit_records_blocked_success_and_failure(self):
