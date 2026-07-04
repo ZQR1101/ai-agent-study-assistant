@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
+from time import monotonic
 from typing import Any
 
 from backend.config import get_config
@@ -10,7 +11,9 @@ from backend.config import get_config
 _reranker_model = None
 _reranker_model_name: str | None = None
 _reranker_model_error: str | None = None
+_reranker_last_failure_at: float | None = None
 _reranker_lock = threading.Lock()
+RERANKER_RETRY_COOLDOWN_SECONDS = 30.0
 
 
 def _get_cross_encoder():
@@ -33,24 +36,40 @@ def is_reranker_enabled(requested: bool | None = None) -> bool:
     return configured if requested is None else configured and bool(requested)
 
 
+def _retry_cooldown_active(model_name: str) -> bool:
+    return bool(
+        _reranker_model_name == model_name
+        and _reranker_model is None
+        and _reranker_model_error
+        and _reranker_last_failure_at is not None
+        and monotonic() - _reranker_last_failure_at < RERANKER_RETRY_COOLDOWN_SECONDS
+    )
+
+
 def get_reranker_model():
     global _reranker_model, _reranker_model_name, _reranker_model_error
+    global _reranker_last_failure_at
 
     config = get_config()
     model_name = config.reranker_model
     if not config.enable_reranker or not model_name:
         return None
 
-    if _reranker_model_name == model_name:
+    if _reranker_model_name == model_name and _reranker_model is not None:
         return _reranker_model
+    if _retry_cooldown_active(model_name):
+        return None
 
     with _reranker_lock:
-        if _reranker_model_name == model_name:
+        if _reranker_model_name == model_name and _reranker_model is not None:
             return _reranker_model
+        if _retry_cooldown_active(model_name):
+            return None
 
         _reranker_model = None
         _reranker_model_name = model_name
         _reranker_model_error = None
+        _reranker_last_failure_at = None
         try:
             model_path = Path(model_name)
             if _is_path_like(model_name) and not model_path.exists():
@@ -60,6 +79,7 @@ def get_reranker_model():
             _reranker_model = CrossEncoder(model_name)
         except Exception as exc:
             _reranker_model_error = str(exc)
+            _reranker_last_failure_at = monotonic()
 
     return _reranker_model
 
@@ -142,8 +162,10 @@ def rerank_chunks(query: str, chunks: list[dict], top_k: int) -> list[dict]:
 
 def _reset_reranker_state() -> None:
     global _reranker_model, _reranker_model_name, _reranker_model_error
+    global _reranker_last_failure_at
 
     with _reranker_lock:
         _reranker_model = None
         _reranker_model_name = None
         _reranker_model_error = None
+        _reranker_last_failure_at = None
