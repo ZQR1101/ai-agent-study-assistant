@@ -202,12 +202,19 @@ function mapBackendMessages(messages) {
 
   return messages
     .filter((message) => message?.role === "user" || message?.role === "assistant")
-    .map((message, index) => ({
-      id: message.id ? `db-message-${message.id}` : `db-message-${index}-${message.role}`,
-      role: message.role,
-      content: message.content || "",
-      createdAt: message.created_at || null,
-    }))
+    .map((message, index) => {
+      const response = message.response && typeof message.response === "object" && !Array.isArray(message.response)
+        ? getResponseSnapshot({ answer: message.content || "", ...message.response })
+        : null
+
+      return {
+        id: message.id ? `db-message-${message.id}` : `db-message-${index}-${message.role}`,
+        role: message.role,
+        content: message.content || "",
+        createdAt: message.created_at || null,
+        ...(response ? { response } : {}),
+      }
+    })
 }
 
 function getResponseSnapshot(data) {
@@ -219,12 +226,16 @@ function getResponseSnapshot(data) {
     answer: data.answer || "",
     mode: data.mode || "",
     model: data.model || "",
+    session_id: data.session_id || null,
+    run_id: data.run_id || null,
     sources: Array.isArray(data.sources) ? data.sources : [],
     plan: Array.isArray(data.plan) ? data.plan : [],
     trace: Array.isArray(data.trace) ? data.trace : [],
     flashcards,
     runtime_info: hasRuntimeInfo(data.runtime_info) ? data.runtime_info : {},
     judge_evaluation: data.judge_evaluation || null,
+    run_summary: data.run_summary && typeof data.run_summary === "object" ? data.run_summary : {},
+    run_details: data.run_details && typeof data.run_details === "object" ? data.run_details : {},
   }
 }
 
@@ -716,11 +727,263 @@ function ChatMessage({ message }) {
         )}
       </div>
       {isAssistant && message.response ? (
-        <AnswerBlock response={message.response} />
+        <>
+          <AnswerBlock response={message.response} />
+          <AnswerArtifacts response={message.response} />
+        </>
       ) : (
         <div>{compactText(message.content)}</div>
       )}
+      {isAssistant ? <RunSummaryPanel response={message.response || { mode: "history" }} /> : null}
     </article>
+  )
+}
+
+function AnswerArtifacts({ response }) {
+  const detailsPlan = response?.run_details?.plan
+  const plan = Array.isArray(detailsPlan)
+    ? detailsPlan
+    : Array.isArray(response?.plan) ? response.plan : []
+  const cards = getResponseCards(response)
+
+  if (plan.length === 0 && cards.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="answer-artifacts" data-testid="answer-artifacts">
+      {plan.length > 0 ? (
+        <section className="answer-artifact-section answer-plan-section">
+          <header>
+            <div>
+              <span className="answer-artifact-icon">P</span>
+              <strong>执行计划</strong>
+            </div>
+            <span>{plan.length} steps</span>
+          </header>
+          <div className="answer-plan-list">
+            {plan.map((step, index) => (
+              <article className="answer-plan-item" key={`${step.tool}-${index}`}>
+                <span>{index + 1}</span>
+                <div>
+                  <strong>{step.tool || "step"}</strong>
+                  {step.reason ? <p>{step.reason}</p> : null}
+                  {step.input ? <small>{step.input}</small> : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {cards.length > 0 ? (
+        <section className="answer-artifact-section answer-cards-section">
+          <header>
+            <div>
+              <span className="answer-artifact-icon">C</span>
+              <strong>复习卡片</strong>
+            </div>
+            <span>{cards.length} cards · 点击翻面</span>
+          </header>
+          <div className="answer-flashcard-grid">
+            {cards.map((card, index) => (
+              <Flashcard card={card} index={index + 1} key={`${card.front}-${index}`} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
+function RunSummaryPanel({ response }) {
+  const [expanded, setExpanded] = useState(false)
+  const [activeDetail, setActiveDetail] = useState(response?.run_id ? "overview" : "plan")
+  const [canonicalRun, setCanonicalRun] = useState(null)
+  const [runLoading, setRunLoading] = useState(false)
+  const [runError, setRunError] = useState("")
+  const runId = response?.run_id || null
+
+  useEffect(() => {
+    setCanonicalRun(null)
+    setRunError("")
+    setActiveDetail(runId ? "overview" : "plan")
+  }, [runId])
+
+  useEffect(() => {
+    if (!expanded || !runId || canonicalRun) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+    setRunLoading(true)
+    setRunError("")
+    fetch(`${API_BASE_URL}/runs/${encodeURIComponent(runId)}`, { signal: controller.signal })
+      .then(async (result) => {
+        if (!result.ok) {
+          throw new Error(`Run 加载失败：${result.status}`)
+        }
+        return result.json()
+      })
+      .then((run) => setCanonicalRun(run))
+      .catch((error) => {
+        if (error.name !== "AbortError") {
+          setRunError(error.message || "Run 加载失败")
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setRunLoading(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [expanded, runId, canonicalRun])
+
+  const runtimeInfo = response?.runtime_info || {}
+  const explicitSummary = response?.run_summary || {}
+  const explicitDetails = response?.run_details || {}
+  const fallbackTools = Array.isArray(runtimeInfo.tool_calls) ? runtimeInfo.tool_calls : []
+  const plan = Array.isArray(canonicalRun?.plan)
+    ? canonicalRun.plan
+    : Array.isArray(explicitDetails.plan)
+    ? explicitDetails.plan
+    : Array.isArray(response?.plan) ? response.plan : []
+  const tools = Array.isArray(canonicalRun?.tools)
+    ? canonicalRun.tools
+    : Array.isArray(explicitDetails.tools) ? explicitDetails.tools : fallbackTools
+  const audit = Array.isArray(canonicalRun?.audit) ? canonicalRun.audit : []
+  const artifacts = canonicalRun?.artifacts && typeof canonicalRun.artifacts === "object"
+    ? canonicalRun.artifacts
+    : {}
+  const actualTools = tools.filter((call) => call?.tool !== "planner")
+  const canonicalStatus = canonicalRun?.status === "completed" ? "succeeded" : canonicalRun?.status
+  const summary = {
+    status: canonicalStatus || explicitSummary.status || (response?.mode === "error" ? "failed" : response?.mode === "history" ? "archived" : "succeeded"),
+    runtime: explicitSummary.runtime || runtimeInfo.runtime || response?.mode || "history",
+    duration_ms: explicitSummary.duration_ms,
+    tool_count: explicitSummary.tool_count ?? actualTools.length,
+    token_usage: explicitSummary.token_usage || runtimeInfo.token_usage || {},
+  }
+  const totalTokens = summary.token_usage?.total_tokens
+  const statusLabel = {
+    succeeded: "运行成功",
+    partial: "部分完成",
+    failed: "运行失败",
+    deleted: "已软删除",
+    archived: "历史记录",
+  }[summary.status] || summary.status
+
+  return (
+    <section className={`message-run-summary ${expanded ? "expanded" : ""}`} data-testid="message-run-summary">
+      <button
+        type="button"
+        className="run-summary-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className={`run-status-dot ${summary.status}`} />
+        <strong>{runId ? `Run ${runId.slice(0, 8)}` : statusLabel}</strong>
+        {runId ? <span>{statusLabel}</span> : null}
+        <span>{summary.runtime}</span>
+        <span>{summary.tool_count} tools</span>
+        <span>{formatLatency(summary.duration_ms, "—")}</span>
+        <span>{Number.isFinite(Number(totalTokens)) ? `${formatTokenCount(totalTokens)} tokens` : "— tokens"}</span>
+        <b>{expanded ? "收起" : "详情"} {expanded ? "↑" : "↓"}</b>
+      </button>
+
+      {expanded ? (
+        <div className="run-details-panel" data-testid="run-details-panel">
+          {runLoading ? <div className="run-fetch-state">正在读取 RunRepository…</div> : null}
+          {runError ? <div className="run-fetch-state error">{runError}，下面显示消息快照。</div> : null}
+          <nav className="run-detail-tabs" aria-label="运行详情">
+            {(runId ? ["overview", "plan", "tools", "audit", "artifacts"] : ["plan", "tools"]).map((detail) => (
+              <button
+                type="button"
+                className={activeDetail === detail ? "active" : ""}
+                key={detail}
+                onClick={() => setActiveDetail(detail)}
+              >
+                {detail === "overview" ? "Overview" : detail === "plan" ? `Plan ${plan.length}` : detail === "tools" ? `Tools ${tools.length}` : detail === "audit" ? `Audit ${audit.length}` : "Artifacts"}
+              </button>
+            ))}
+          </nav>
+
+          {activeDetail === "overview" ? (
+            <div className="run-detail-content">
+              <dl className="run-metric-grid">
+                <div><dt>状态</dt><dd>{statusLabel}</dd></div>
+                <div><dt>耗时</dt><dd>{formatLatency(summary.duration_ms, "—")}</dd></div>
+                <div><dt>工具调用</dt><dd>{actualTools.length}</dd></div>
+                <div><dt>创建时间</dt><dd>{canonicalRun?.created_at ? new Date(canonicalRun.created_at).toLocaleString() : "—"}</dd></div>
+              </dl>
+              <details className="run-technical-details">
+                <summary>技术信息</summary>
+                <dl className="run-metric-grid">
+                  <div><dt>Run ID</dt><dd title={runId || ""}>{runId || "—"}</dd></div>
+                  <div><dt>Session</dt><dd>{canonicalRun?.session_id || response?.session_id || "—"}</dd></div>
+                  <div><dt>Version</dt><dd>{canonicalRun?.version ?? "—"}</dd></div>
+                  <div><dt>Finished</dt><dd>{canonicalRun?.finished_at ? new Date(canonicalRun.finished_at).toLocaleString() : "—"}</dd></div>
+                </dl>
+              </details>
+            </div>
+          ) : null}
+
+          {activeDetail === "plan" ? (
+            <div className="run-detail-content">
+              {plan.length === 0 ? <span className="run-detail-empty">本轮没有结构化 Plan。</span> : plan.map((step, index) => (
+                <article className="message-plan-step" key={`${step.tool}-${index}`}>
+                  <span>{index + 1}</span>
+                  <div>
+                    <strong>{step.tool || "step"}</strong>
+                    <p>{step.reason || step.input || "无补充信息"}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {activeDetail === "tools" ? (
+            <div className="run-detail-content">
+              {tools.length === 0 ? <span className="run-detail-empty">本轮没有 Tool 调用。</span> : tools.map((call, index) => (
+                <article className="message-tool-call" key={`${call.tool}-${index}`}>
+                  <span className={`tool-call-status ${call.success === false ? "failed" : "succeeded"}`}>
+                    {call.success === false ? "失败" : "成功"}
+                  </span>
+                  <strong>{call.tool || call.node || "tool"}</strong>
+                  <span>{formatLatency(getToolLatency(call), "—")}</span>
+                  <span>{formatTokenCount(call.token_usage?.total_tokens, "—")} tokens</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {activeDetail === "audit" ? (
+            <div className="run-detail-content">
+              {audit.length === 0 ? <span className="run-detail-empty">本轮没有 Run Audit 事件。</span> : audit.map((event, index) => (
+                <article className="message-audit-event" key={`${event.invocation_id || event.tool}-${event.status}-${index}`}>
+                  <span className={`audit-status ${event.status}`}>{event.status || "event"}</span>
+                  <strong>{event.tool || event.event || "audit"}</strong>
+                  <span>{event.actor || "system"}</span>
+                  <time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : "—"}</time>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {activeDetail === "artifacts" ? (
+            <div className="run-detail-content">
+              <dl className="run-metric-grid">
+                <div><dt>Answer</dt><dd>{artifacts.answer ? `${String(artifacts.answer).length} chars` : "—"}</dd></div>
+                <div><dt>Sources</dt><dd>{Array.isArray(artifacts.sources) ? artifacts.sources.length : 0}</dd></div>
+                <div><dt>Flashcards</dt><dd>{Array.isArray(artifacts.flashcards) ? artifacts.flashcards.length : 0}</dd></div>
+                <div><dt>Trace</dt><dd>{Array.isArray(artifacts.trace) ? artifacts.trace.length : 0}</dd></div>
+              </dl>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   )
 }
 
@@ -756,107 +1019,73 @@ function StudyView({ messages, loading, input, setInput, onSend, onClear, settin
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [messages, loading])
 
+  const engineLabel = settings.useLangGraph ? "LangGraph" : settings.useAgent ? "Agent" : "Chat"
+
   return (
-    <div className="workspace-page workspace-view active builder-workspace">
-      <header className="builder-topbar">
-        <div className="builder-breadcrumb">
-          <span>AI 学习助手</span>
-          <b>/</b>
-          <strong>学习构建器</strong>
+    <div className="workspace-page workspace-view active study-chat">
+      <header className="chat-topbar">
+        <div className="chat-topbar-title">
+          <h1>学习对话</h1>
+          <span>自动规划 · 解释、来源与复习卡片</span>
         </div>
-        <nav className="builder-tabs" aria-label="Builder views">
-          <button type="button" className="active">工作台</button>
-          <button type="button">知识库</button>
-          <button type="button">复习</button>
-          <button type="button">路径</button>
-        </nav>
-        <div className="builder-actions">
-          <span className="status-pill">● 草稿</span>
+        <div className="chat-topbar-actions">
+          <span className="model-pill">{engineLabel} · {settings.model}</span>
           <button type="button" className="ghost-button" onClick={onClear}>重置</button>
-          <button type="button" className="primary-button" onClick={onSend}>运行学习</button>
         </div>
       </header>
 
-      <div className="builder-canvas workflow-canvas" aria-label="学习 Builder 画布">
-        <section className="workflow-board">
-          <article className="canvas-label label-user">用户问题</article>
-          <article className="canvas-label label-files">上传资料</article>
-
-          <article className="workflow-node node-input">
-            <header>
-              <span className="node-icon">✎</span>
-              <strong>文本输入</strong>
-            </header>
-            <p>输入要学习的主题、问题或材料片段。</p>
-            <section className="composer builder-composer" aria-label="发送消息">
-              <textarea
-                rows="3"
-                placeholder="例如：帮我理解 Agentic RAG，并生成复习卡片"
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                    onSend()
-                  }
-                }}
-              />
-              <button type="button" className="send-button" aria-label="发送" onClick={onSend}>↑</button>
-            </section>
-            <footer>Ctrl / ⌘ + Enter 运行</footer>
-          </article>
-
-          <article className="workflow-node node-files">
-            <header>
-              <span className="node-icon">▤</span>
-              <strong>知识库文件</strong>
-            </header>
-            <p>连接本地 PDF、Markdown 和 TXT 资料。</p>
-            <div className="node-action-row">
-              <span>{settings.useRag ? "RAG 检索已启用" : "可在右侧启用 RAG"}</span>
-            </div>
-            <footer>docs/ 本地知识库</footer>
-          </article>
-
-          <article className="workflow-node node-agent">
-            <header>
-              <span className="node-icon logo-node"><AppLogo /></span>
-              <strong>AI 学习助手</strong>
-            </header>
-            <p>组织解释、来源、学习计划和复习卡片。</p>
-            <div className="node-action-row">
-              <span>{settings.useLangGraph ? "LangGraph 工作流" : "Agent Planner"}</span>
-            </div>
-            <footer>{loading ? "正在运行..." : "等待运行"}</footer>
-          </article>
-
-          <article className="workflow-node node-output">
-            <header>
-              <span className="node-icon">↳</span>
-              <strong>学习产出</strong>
-            </header>
-            <div className="chat-panel" aria-label="学习对话">
-              <div className="chat-feed" aria-live="polite">
-                {messages.length === 0 ? (
-                  <article className="ai-message welcome-message">
-                    <div className="answer">运行后，这里会显示解释、来源摘要和下一步复习建议。</div>
-                  </article>
-                ) : (
-                  messages.map((message) => <ChatMessage key={message.id} message={message} />)
-                )}
-                {loading ? <div className="loading-text visible">正在整理学习成果...</div> : null}
-                <div ref={chatEndRef} />
+      <div className="chat-scroll" aria-live="polite">
+        <div className="chat-thread">
+          {messages.length === 0 ? (
+            <div className="chat-empty">
+              <span className="chat-empty-logo"><AppLogo /></span>
+              <h2>开始一次学习</h2>
+              <p>输入要学习的主题、问题或材料片段，我会组织解释、引用来源，并生成复习卡片。</p>
+              <div className="chat-empty-hints">
+                <button type="button" onClick={() => setInput("帮我理解 Agentic RAG，并生成复习卡片")}>
+                  理解 Agentic RAG
+                </button>
+                <button type="button" onClick={() => setInput("用通俗的方式解释向量检索和 BM25 的区别")}>
+                  向量检索 vs BM25
+                </button>
+                <button type="button" onClick={() => setInput("总结一下 LangGraph 工作流的核心概念")}>
+                  总结 LangGraph
+                </button>
               </div>
             </div>
-            <footer>用户可见结果</footer>
-          </article>
-
-          <svg className="workflow-lines" viewBox="0 0 980 560" preserveAspectRatio="none" aria-hidden="true">
-            <path d="M202 168 C270 168, 302 282, 335 282" />
-            <path d="M202 420 C270 420, 302 312, 335 312" />
-            <path d="M595 292 C604 292, 612 292, 620 292" />
-          </svg>
-        </section>
+          ) : (
+            messages.map((message) => <ChatMessage key={message.id} message={message} />)
+          )}
+          {loading ? <div className="loading-text visible">正在整理学习成果...</div> : null}
+          <div ref={chatEndRef} />
+        </div>
       </div>
+
+      <footer className="composer-bar">
+        <section className="composer" aria-label="发送消息">
+          <textarea
+            rows="1"
+            placeholder="输入学习主题或问题…"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                onSend()
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="send-button"
+            aria-label="发送"
+            onClick={onSend}
+            disabled={loading || !input.trim()}
+          >
+            ↑
+          </button>
+        </section>
+        <p className="composer-hint">Ctrl / ⌘ + Enter 发送 · 模式由系统自动规划</p>
+      </footer>
     </div>
   )
 }
@@ -1086,7 +1315,7 @@ function ResultsPanel({
       <section className="inspector-section">
         <div className="inspector-row">
           <span>学习模式</span>
-          <strong>{settings.useLangGraph ? "LangGraph" : "Agent 导师"}</strong>
+          <strong>{settings.useLangGraph ? "工作流模式" : "智能体模式"}</strong>
         </div>
         <div className="inspector-row">
           <span>默认产出</span>
@@ -1094,119 +1323,132 @@ function ResultsPanel({
         </div>
       </section>
 
-      <details className="inspector-form inspector-settings" aria-label="运行设置">
-        <summary>运行设置</summary>
-        <label>
-          Planner 模式
-          <select value={settings.plannerMode} onChange={(event) => onSettingsChange({ plannerMode: event.target.value })}>
-            <option value="rule">rule（规则）</option>
-            <option value="llm">llm（模型规划）</option>
-          </select>
-        </label>
-        <label>
-          模型
-          <select value={settings.model} onChange={(event) => onSettingsChange({ model: event.target.value })}>
-            <option value="mimo-v2.5">mimo-v2.5</option>
-            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-            <option value="qwen3.7-max">qwen3.7-max</option>
-            <option value="wanx2.1-t2i-plus">wanx2.1-t2i-plus</option>
-          </select>
-        </label>
-        <div className="inspector-grid">
-          <label>
-            温度
-            <input
-              type="number"
-              min="0"
-              max="2"
-              step="0.1"
-              value={settings.temperature}
-              onChange={(event) => onSettingsChange({ temperature: event.target.value })}
-            />
-          </label>
-          <label>
-            Top K
-            <input
-              type="number"
-              min="1"
-              max="10"
-              step="1"
-              value={settings.topK}
-              onChange={(event) => onSettingsChange({ topK: event.target.value })}
-            />
-          </label>
-        </div>
-        <label className="inspector-toggle">
-          <span>
-            <strong>Agent 模式</strong>
-            <em>启用规划与工具执行</em>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.useAgent}
-            onChange={(event) => onSettingsChange({
-              useAgent: event.target.checked,
-              useLangGraph: event.target.checked ? false : settings.useLangGraph,
-            })}
-          />
-        </label>
-        <label className="inspector-toggle">
-          <span>
-            <strong>RAG 检索</strong>
-            <em>从本地知识库查找来源</em>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.useRag}
-            onChange={(event) => onSettingsChange({ useRag: event.target.checked })}
-          />
-        </label>
-        <label>
-          Retrieval Mode
-          <select
-            value={settings.retrievalMode}
-            onChange={(event) => onSettingsChange({ retrievalMode: event.target.value })}
-          >
-            <option value="vector">Vector</option>
-            <option value="bm25">BM25</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
-        </label>
-        {settings.useRag ? (
-          <label className="inspector-toggle">
+      <details className="inspector-form inspector-settings" aria-label="学习模式设置">
+        <summary>
+          <span>学习模式设置</span>
+          <small>{settings.useLangGraph ? "工作流模式" : "智能体模式"}</small>
+        </summary>
+        <div className="settings-body">
+          <fieldset className="mode-selector">
+            <legend>运行模式</legend>
+            <label className={`mode-option${settings.useAgent ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="runtime-mode"
+                checked={settings.useAgent}
+                onChange={() => onSettingsChange({ useAgent: true, useLangGraph: false })}
+              />
+              <span>
+                <strong>智能体模式</strong>
+                <em>自动规划并调用学习工具</em>
+              </span>
+            </label>
+            <label className={`mode-option${settings.useLangGraph ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="runtime-mode"
+                checked={settings.useLangGraph}
+                onChange={() => onSettingsChange({ useAgent: false, useLangGraph: true })}
+              />
+              <span>
+                <strong>工作流模式</strong>
+                <em>按固定步骤组织学习过程</em>
+              </span>
+            </label>
+          </fieldset>
+
+          <label className="inspector-toggle knowledge-toggle">
             <span>
-              <strong>Enable Reranker</strong>
-              <em>对召回候选进行精排</em>
+              <strong>使用知识库</strong>
+              <em>从本地资料中查找并引用内容</em>
             </span>
             <input
               type="checkbox"
-              checked={settings.rerankerEnabled}
-              onChange={(event) => onSettingsChange({ rerankerEnabled: event.target.checked })}
+              checked={settings.useRag}
+              onChange={(event) => onSettingsChange({ useRag: event.target.checked })}
             />
           </label>
-        ) : null}
-        <label className="inspector-toggle">
-          <span>
-            <strong>LangGraph Workflow</strong>
-            <em>使用图工作流运行</em>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.useLangGraph}
-            onChange={(event) => onSettingsChange({
-              useLangGraph: event.target.checked,
-              useAgent: event.target.checked ? false : settings.useAgent,
-            })}
-          />
-        </label>
+
+          <details className="settings-advanced">
+            <summary>高级设置</summary>
+            <div className="advanced-settings-body">
+              {settings.useLangGraph ? (
+                <label>
+                  规划方式
+                  <select value={settings.plannerMode} onChange={(event) => onSettingsChange({ plannerMode: event.target.value })}>
+                    <option value="rule">规则规划</option>
+                    <option value="llm">模型规划</option>
+                  </select>
+                </label>
+              ) : null}
+              {settings.useRag ? (
+                <>
+                  <div className="inspector-grid">
+                    <label>
+                      检索方式
+                      <select
+                        value={settings.retrievalMode}
+                        onChange={(event) => onSettingsChange({ retrievalMode: event.target.value })}
+                      >
+                        <option value="vector">语义检索</option>
+                        <option value="bm25">关键词检索</option>
+                        <option value="hybrid">混合检索</option>
+                      </select>
+                    </label>
+                    <label>
+                      引用数量
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        step="1"
+                        value={settings.topK}
+                        onChange={(event) => onSettingsChange({ topK: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <label className="inspector-toggle">
+                    <span>
+                      <strong>Enable Reranker</strong>
+                      <em>对召回候选进行精排</em>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.rerankerEnabled}
+                      onChange={(event) => onSettingsChange({ rerankerEnabled: event.target.checked })}
+                    />
+                  </label>
+                </>
+              ) : null}
+              <label>
+                模型
+                <select value={settings.model} onChange={(event) => onSettingsChange({ model: event.target.value })}>
+                  <option value="mimo-v2.5">mimo-v2.5</option>
+                  <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                  <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  <option value="qwen3.7-max">qwen3.7-max</option>
+                  <option value="wanx2.1-t2i-plus">wanx2.1-t2i-plus</option>
+                </select>
+              </label>
+              <label>
+                回答灵活度
+                <input
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={settings.temperature}
+                  onChange={(event) => onSettingsChange({ temperature: event.target.value })}
+                />
+              </label>
+            </div>
+          </details>
+        </div>
       </details>
 
       <nav className="insight-tabs inspector-tabs" aria-label="成果类型">
         {[
           ["sources", "来源"],
-          ["plan", "计划"],
-          ["flashcards", "卡片"],
           ["trace", "路径"],
           ["judge", "评分"],
         ].map(([tab, label]) => (
@@ -1281,12 +1523,8 @@ function InsightContent({ tab, turns, judgeTrend, judgeTrendLoading, judgeTrendE
                 const sourceName = typeof source === "string" ? source : source.source || "未知来源"
                 const score = typeof source === "string" || source.score == null ? "" : `相似度 ${Number(source.score).toFixed(4)}`
                 const retrieval = typeof source === "string" || !source.retrieval ? "" : `检索：${RETRIEVAL_LABELS[source.retrieval] || source.retrieval}`
-                const rerankScore = typeof source === "string" || source.rerank_score == null
-                  ? ""
-                  : `精排分数 ${Number(source.rerank_score).toFixed(4)}`
-                const rerankRank = typeof source === "string" || source.rerank_rank == null
-                  ? ""
-                  : `精排排名 ${source.rerank_rank}`
+                const rerankScore = typeof source === "string" || source.rerank_score == null ? "" : `精排分数 ${Number(source.rerank_score).toFixed(4)}`
+                const rerankRank = typeof source === "string" || source.rerank_rank == null ? "" : `精排排名 #${source.rerank_rank}`
                 const snippet = typeof source === "string" ? "" : source.text || source.snippet || ""
                 return (
                   <li key={`${sourceName}-${sourceIndex}`}>
@@ -2314,7 +2552,7 @@ export default function App() {
         setActiveTab("judge")
         loadJudgeTrend()
       } else {
-        setActiveTab(data.mode === "image" && responseCards.length > 0 ? "flashcards" : "sources")
+        setActiveTab("sources")
       }
     } catch (error) {
       const errorMessage = {
