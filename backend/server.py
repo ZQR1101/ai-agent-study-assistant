@@ -35,6 +35,7 @@ from backend.pdf_validation import (
     PDFValidationTimeout,
     validate_pdf_file,
 )
+from backend.ocr_service import extract_text_from_document
 from backend.resource_limits import (
     ConcurrencyGate,
     TokenBucketRateLimiter,
@@ -1189,8 +1190,19 @@ async def upload_file(file: UploadFile = File(...)):
         _UPLOAD_QUOTA.release(reserved_bytes)
         await file.close()
 
+    parse_result = await asyncio.to_thread(extract_text_from_document, save_path)
+    if parse_result["need_ocr"] and not parse_result["ocr_used"]:
+        message = "文件已上传，但可能是扫描版 PDF，当前 OCR 未启用或不可用，未能提取有效文本"
+    else:
+        message = f"{filename} 上传成功；重建知识库索引后生效"
+
     return {
-        "message": f"{filename} uploaded successfully; rebuild the RAG index to use it",
+        "message": message,
+        "file": filename,
+        "parse_method": parse_result["method"],
+        "need_ocr": parse_result["need_ocr"],
+        "ocr_used": parse_result["ocr_used"],
+        "warnings": parse_result["warnings"],
         "rebuild_required": True,
         "size": total_size,
         **({"pages": pdf_pages} if pdf_pages is not None else {}),
@@ -1216,6 +1228,23 @@ def knowledge_files_api():
         )
 
     return {"count": len(files), "files": files}
+
+
+@app.get("/knowledge-files/{filename}/parse-status", tags=["Knowledge Base"])
+def knowledge_file_parse_status_api(filename: str):
+    file_path = _safe_doc_path(filename)
+    parse_result = extract_text_from_document(file_path)
+    return {
+        "name": file_path.name,
+        "type": file_path.suffix.lower().lstrip("."),
+        "parse_method": parse_result["method"],
+        "need_ocr": parse_result["need_ocr"],
+        "ocr_used": parse_result["ocr_used"],
+        "page_count": parse_result["page_count"],
+        "text_char_count": parse_result["text_char_count"],
+        "ocr_error": parse_result["ocr_error"],
+        "warnings": parse_result["warnings"],
+    }
 
 
 @app.get("/knowledge-files/{filename}", tags=["Knowledge Base"])
@@ -1283,12 +1312,13 @@ def rebuild_index_api(
 
 @app.get("/debug-index-sources", include_in_schema=False)
 def debug_index_sources_api():
-    from backend.rag_store import list_index_sources
+    from backend.rag_store import list_index_sources, list_index_source_statuses
 
     sources = list_index_sources()
     return {
         "count": len(sources),
         "sources": sources,
+        "source_statuses": list_index_source_statuses(),
     }
 
 

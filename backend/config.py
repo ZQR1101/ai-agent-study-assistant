@@ -83,6 +83,11 @@ class AppConfig:
     max_pdf_pages: int
     pdf_validation_timeout_seconds: int
     pdf_validation_max_memory_bytes: int
+    enable_ocr: bool
+    ocr_engine: str
+    ocr_min_text_chars: int
+    ocr_render_dpi: int
+    ocr_max_pages: int
 
     @property
     def has_api_key(self) -> bool:
@@ -223,4 +228,9 @@ def get_config() -> AppConfig:
         pdf_validation_max_memory_bytes=read_positive_int_env(
             "PDF_VALIDATION_MAX_MEMORY_BYTES", 256 * 1024 * 1024
         ),
+        enable_ocr=read_bool_env("ENABLE_OCR", False),
+        ocr_engine=(os.getenv("OCR_ENGINE", "none").strip().lower() or "none"),
+        ocr_min_text_chars=read_positive_int_env("OCR_MIN_TEXT_CHARS", 80),
+        ocr_render_dpi=read_positive_int_env("OCR_RENDER_DPI", 200),
+        ocr_max_pages=read_positive_int_env("OCR_MAX_PAGES", 20),
     )
