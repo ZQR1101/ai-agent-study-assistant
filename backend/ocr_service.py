@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -12,15 +13,56 @@ SCANNED_PDF_WARNING = (
     "This PDF appears to be scanned or image-based. Enable OCR to extract text."
 )
 OCR_NOT_CONFIGURED_ERROR = "OCR is disabled or no OCR engine is configured"
+OCR_PRODUCED_NO_TEXT_WARNING = "OCR produced no text"
+RAPIDOCR_NOT_INSTALLED_ERROR = (
+    "RapidOCR is not installed. Install it with: pip install rapidocr-onnxruntime"
+)
 SUPPORTED_OCR_ENGINES = {"none", "rapidocr", "paddleocr", "tesseract"}
 
 
+class OCRServiceError(RuntimeError):
+    """Expected OCR failure that should be exposed as a safe parse result."""
+
+
+class OCRUnavailableError(OCRServiceError):
+    """The selected optional OCR engine or renderer is not installed."""
+
+
 class OCRAdapter(Protocol):
-    def extract_text(self, images: list[object]) -> list[str]: ...
+    def extract_text(self, image_paths: list[Path]) -> list[str]: ...
 
 
 OCRAdapterFactory = Callable[[], OCRAdapter]
 _OCR_ADAPTER_FACTORIES: dict[str, OCRAdapterFactory] = {}
+
+
+class RenderedPDFPages(list[Path]):
+    """Temporary rendered page paths that remain valid until ``cleanup``."""
+
+    def __init__(
+        self,
+        paths: list[Path],
+        temporary_directory: tempfile.TemporaryDirectory,
+        *,
+        page_count: int,
+        warnings: list[str],
+    ) -> None:
+        super().__init__(paths)
+        self.page_count = page_count
+        self.warnings = warnings
+        self._temporary_directory = temporary_directory
+
+    def cleanup(self) -> None:
+        temporary_directory = self._temporary_directory
+        if temporary_directory is not None:
+            self._temporary_directory = None
+            temporary_directory.cleanup()
+
+    def __enter__(self) -> "RenderedPDFPages":
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.cleanup()
 
 
 def register_ocr_adapter(name: str, factory: OCRAdapterFactory) -> None:
@@ -66,8 +108,7 @@ def detect_pdf_text_quality(pdf_path: Path) -> dict:
     """Extract native PDF text and report whether any page looks image-based."""
 
     path = Path(pdf_path)
-    config = get_config()
-    min_chars = getattr(config, "ocr_min_text_chars", 80)
+    min_chars = getattr(get_config(), "ocr_min_text_chars", 80)
     warnings: list[str] = []
 
     try:
@@ -121,71 +162,181 @@ def detect_pdf_text_quality(pdf_path: Path) -> dict:
     }
 
 
-def _render_pdf_pages(pdf_path: Path, page_indices: list[int], dpi: int) -> list[object]:
-    try:
-        import pypdfium2 as pdfium  # type: ignore[import-not-found]
-
-        document = pdfium.PdfDocument(str(pdf_path))
-        scale = dpi / 72
-        try:
-            return [document[index].render(scale=scale).to_pil() for index in page_indices]
-        finally:
-            document.close()
-    except ImportError:
-        pass
+def render_pdf_pages_to_images(
+    pdf_path: Path,
+    dpi: int,
+    max_pages: int,
+) -> RenderedPDFPages:
+    """Render the first PDF pages to temporary PNG files using optional PyMuPDF."""
 
     try:
         import fitz  # type: ignore[import-not-found]
-        from PIL import Image  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise RuntimeError(
-            "PDF rendering is unavailable; install pypdfium2 or PyMuPDF with Pillow"
+        raise OCRUnavailableError(
+            "PyMuPDF is not installed. Install it with: pip install PyMuPDF"
         ) from exc
 
-    document = fitz.open(str(pdf_path))
-    scale = dpi / 72
+    temporary_directory = tempfile.TemporaryDirectory(prefix="ai-study-ocr-")
+    output_directory = Path(temporary_directory.name)
+    document = None
     try:
-        images = []
-        for index in page_indices:
-            pixmap = document[index].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-            images.append(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples))
-        return images
+        document = fitz.open(str(pdf_path))
+        page_count = int(document.page_count)
+        page_limit = max(1, int(max_pages))
+        render_count = min(page_count, page_limit)
+        scale = max(1, int(dpi)) / 72
+        matrix = fitz.Matrix(scale, scale)
+        image_paths: list[Path] = []
+
+        for page_index in range(render_count):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            image_path = output_directory / f"page-{page_index + 1:04d}.png"
+            pixmap.save(str(image_path))
+            image_paths.append(image_path)
+
+        warnings = []
+        if page_count > page_limit:
+            warnings.append(
+                f"OCR was limited to the first {page_limit} pages by OCR_MAX_PAGES."
+            )
+        return RenderedPDFPages(
+            image_paths,
+            temporary_directory,
+            page_count=page_count,
+            warnings=warnings,
+        )
+    except Exception:
+        temporary_directory.cleanup()
+        raise
     finally:
-        document.close()
+        if document is not None:
+            document.close()
+
+
+def _box_reading_order(box: object, original_index: int) -> tuple[float, float, int]:
+    try:
+        points = list(box)  # type: ignore[arg-type]
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        return min(ys), min(xs), original_index
+    except (TypeError, ValueError, IndexError):
+        return float(original_index), 0.0, original_index
+
+
+def _as_list(value: object) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    try:
+        return list(value)  # type: ignore[arg-type]
+    except TypeError:
+        return [value]
+
+
+def _rapidocr_text_lines(raw_result: object) -> list[str]:
+    """Normalize common rapidocr-onnxruntime and RapidOCR output structures."""
+
+    result = raw_result
+    if isinstance(result, tuple) and len(result) >= 1:
+        result = result[0]
+
+    if hasattr(result, "txts"):
+        texts = _as_list(getattr(result, "txts"))
+        boxes = _as_list(getattr(result, "boxes", None))
+        entries = [
+            (boxes[index] if index < len(boxes) else None, str(text), index)
+            for index, text in enumerate(texts)
+        ]
+    elif isinstance(result, dict):
+        text_value = result.get("txts")
+        if text_value is None:
+            text_value = result.get("texts")
+        if text_value is None:
+            text_value = result.get("text")
+        texts = _as_list(text_value)
+        box_value = result.get("boxes")
+        if box_value is None:
+            box_value = result.get("dt_boxes")
+        boxes = _as_list(box_value)
+        entries = [
+            (boxes[index] if index < len(boxes) else None, str(text), index)
+            for index, text in enumerate(texts)
+        ]
+    else:
+        entries = []
+        for index, item in enumerate(_as_list(result)):
+            box = None
+            text = ""
+            if isinstance(item, str):
+                text = item
+            elif isinstance(item, dict):
+                box = item.get("box")
+                if box is None:
+                    box = item.get("points")
+                text = str(item.get("text") or item.get("txt") or "")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                box = item[0]
+                text_value = item[1]
+                if isinstance(text_value, (list, tuple)):
+                    text_value = text_value[0] if text_value else ""
+                text = str(text_value or "")
+            entries.append((box, text, index))
+
+    entries.sort(key=lambda entry: _box_reading_order(entry[0], entry[2]))
+    return [text.strip() for _box, text, _index in entries if text.strip()]
+
+
+def _load_rapidocr_engine():
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise OCRUnavailableError(RAPIDOCR_NOT_INSTALLED_ERROR) from exc
+    return RapidOCR()
+
+
+def _run_rapidocr_on_image(image_path: Path, engine: object) -> str:
+    try:
+        raw_result = engine(str(image_path))  # type: ignore[operator]
+        return "\n".join(_rapidocr_text_lines(raw_result))
+    except OCRServiceError:
+        raise
+    except Exception as exc:
+        raise OCRServiceError(f"RapidOCR failed for {image_path.name}: {exc}") from exc
+
+
+def run_rapidocr_on_image(image_path: Path) -> str:
+    """Run optional RapidOCR on one image and return reading-order plain text."""
+
+    return _run_rapidocr_on_image(Path(image_path), _load_rapidocr_engine())
+
+
+class _RapidOCRAdapter:
+    def __init__(self) -> None:
+        self._engine = _load_rapidocr_engine()
+
+    def extract_text(self, image_paths: list[Path]) -> list[str]:
+        return [_run_rapidocr_on_image(path, self._engine) for path in image_paths]
 
 
 class _TesseractAdapter:
     def __init__(self) -> None:
         try:
             import pytesseract  # type: ignore[import-not-found]
+            from PIL import Image  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise RuntimeError("install pytesseract to use OCR_ENGINE=tesseract") from exc
-        self._pytesseract = pytesseract
-
-    def extract_text(self, images: list[object]) -> list[str]:
-        return [self._pytesseract.image_to_string(image) or "" for image in images]
-
-
-class _RapidOCRAdapter:
-    def __init__(self) -> None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise RuntimeError(
-                "install rapidocr-onnxruntime to use OCR_ENGINE=rapidocr"
+            raise OCRUnavailableError(
+                "Install pytesseract and Pillow to use OCR_ENGINE=tesseract"
             ) from exc
-        self._engine = RapidOCR()
+        self._pytesseract = pytesseract
+        self._image_class = Image
 
-    def extract_text(self, images: list[object]) -> list[str]:
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("RapidOCR requires numpy") from exc
-
+    def extract_text(self, image_paths: list[Path]) -> list[str]:
         texts = []
-        for image in images:
-            result, _elapsed = self._engine(np.asarray(image))
-            texts.append("\n".join(str(item[1]) for item in (result or []) if len(item) > 1))
+        for image_path in image_paths:
+            with self._image_class.open(image_path) as image:
+                texts.append(self._pytesseract.image_to_string(image) or "")
         return texts
 
 
@@ -194,18 +345,15 @@ class _PaddleOCRAdapter:
         try:
             from paddleocr import PaddleOCR  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise RuntimeError("install paddleocr to use OCR_ENGINE=paddleocr") from exc
+            raise OCRUnavailableError(
+                "Install paddleocr to use OCR_ENGINE=paddleocr"
+            ) from exc
         self._engine = PaddleOCR(use_angle_cls=True, lang="ch")
 
-    def extract_text(self, images: list[object]) -> list[str]:
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("PaddleOCR requires numpy") from exc
-
+    def extract_text(self, image_paths: list[Path]) -> list[str]:
         texts = []
-        for image in images:
-            pages = self._engine.ocr(np.asarray(image), cls=True) or []
+        for image_path in image_paths:
+            pages = self._engine.ocr(str(image_path), cls=True) or []
             lines = []
             for page in pages:
                 for item in page or []:
@@ -227,96 +375,95 @@ def _get_ocr_adapter(engine: str) -> OCRAdapter:
     }
     if engine not in builtin_factories:
         supported = ", ".join(sorted(SUPPORTED_OCR_ENGINES))
-        raise RuntimeError(f"Unknown OCR engine '{engine}'. Supported engines: {supported}")
+        raise OCRUnavailableError(
+            f"Unknown OCR engine '{engine}'. Supported engines: {supported}"
+        )
     return builtin_factories[engine]()
+
+
+def _without_scanned_warning(warnings: list[str]) -> list[str]:
+    return [warning for warning in warnings if warning != SCANNED_PDF_WARNING]
 
 
 def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
     config = get_config()
-    engine = str(getattr(config, "ocr_engine", "none") or "none").strip().lower()
-    base_warnings = list(quality.get("warnings") or [])
+    engine_name = str(getattr(config, "ocr_engine", "none") or "none").strip().lower()
+    warnings = list(quality.get("warnings") or [])
+    original_text = str(quality.get("text") or "")
+    quality_page_count = int(quality.get("page_count", 0))
 
-    if not bool(getattr(config, "enable_ocr", False)) or engine == "none":
-        return {
-            **_result(
-                text=quality.get("text", ""),
-                method=quality.get("method", "failed"),
-                need_ocr=True,
-                page_count=quality.get("page_count", 0),
-                ocr_error=OCR_NOT_CONFIGURED_ERROR,
-                warnings=base_warnings,
-            )
-        }
-
-    page_count = int(quality.get("page_count", 0))
-    max_pages = getattr(config, "ocr_max_pages", 20)
-    low_text_pages = list(quality.get("low_text_pages") or range(page_count))
-    page_indices = [index for index in low_text_pages if index < max_pages]
-    if page_count > max_pages:
-        base_warnings.append(
-            f"OCR was limited to the first {max_pages} pages by OCR_MAX_PAGES."
-        )
-    if not page_indices:
-        error = "No PDF pages are eligible for OCR within OCR_MAX_PAGES"
+    if not bool(getattr(config, "enable_ocr", False)) or engine_name == "none":
         return _result(
-            text=quality.get("text", ""),
+            text=original_text,
             method=quality.get("method", "failed"),
             need_ocr=True,
-            page_count=page_count,
-            ocr_error=error,
-            warnings=[*base_warnings, error],
+            page_count=quality_page_count,
+            ocr_error=OCR_NOT_CONFIGURED_ERROR,
+            warnings=warnings,
         )
 
+    rendered_pages = None
     try:
-        adapter = _get_ocr_adapter(engine)
-        images = _render_pdf_pages(
+        adapter = _get_ocr_adapter(engine_name)
+        rendered_pages = render_pdf_pages_to_images(
             Path(pdf_path),
-            page_indices,
             getattr(config, "ocr_render_dpi", 200),
+            getattr(config, "ocr_max_pages", 20),
         )
-        extracted_pages = adapter.extract_text(images)
-        if len(extracted_pages) != len(page_indices):
-            raise RuntimeError("OCR adapter returned an unexpected number of pages")
-    except Exception as exc:
-        error = f"OCR engine '{engine}' is unavailable or failed: {exc}"
+        warnings.extend(getattr(rendered_pages, "warnings", []))
+        image_paths = list(rendered_pages)
+        extracted_pages = adapter.extract_text(image_paths)
+        if len(extracted_pages) != len(image_paths):
+            raise OCRServiceError("OCR adapter returned an unexpected number of pages")
+        rendered_page_count = int(
+            getattr(rendered_pages, "page_count", quality_page_count)
+        )
+    except OCRUnavailableError as exc:
         return _result(
-            text=quality.get("text", ""),
-            method=quality.get("method", "failed"),
+            text=original_text,
+            method="failed",
             need_ocr=True,
-            page_count=page_count,
-            ocr_error=error,
-            warnings=[*base_warnings, error],
+            page_count=quality_page_count,
+            ocr_error=str(exc),
+            warnings=[*warnings, str(exc)],
         )
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, OCRServiceError) else f"OCR failed: {exc}"
+        return _result(
+            text=original_text,
+            method="failed",
+            need_ocr=True,
+            page_count=quality_page_count,
+            ocr_error=error,
+            warnings=[*warnings, error],
+        )
+    finally:
+        if rendered_pages is not None and hasattr(rendered_pages, "cleanup"):
+            rendered_pages.cleanup()
 
-    page_texts = list(quality.get("page_texts") or [""] * page_count)
-    for index, ocr_text in zip(page_indices, extracted_pages):
-        if str(ocr_text or "").strip():
-            page_texts[index] = str(ocr_text).strip()
+    page_count = quality_page_count or rendered_page_count
+    page_texts = list(quality.get("page_texts") or [])
+    if len(page_texts) < page_count:
+        page_texts.extend([""] * (page_count - len(page_texts)))
+    low_text_pages = set(quality.get("low_text_pages") or range(page_count))
+
+    for page_index, ocr_text in enumerate(extracted_pages):
+        if page_index in low_text_pages and str(ocr_text or "").strip():
+            page_texts[page_index] = str(ocr_text).strip()
 
     combined_text = "\n".join(page_texts).strip()
-    ocr_used = any(_text_char_count(text) for text in extracted_pages)
-    if not ocr_used:
-        error = f"OCR engine '{engine}' returned no text"
-        return _result(
-            text=combined_text,
-            method="text" if _text_char_count(combined_text) else "failed",
-            need_ocr=True,
-            page_count=page_count,
-            ocr_error=error,
-            warnings=[*base_warnings, error],
-        )
+    result_warnings = _without_scanned_warning(warnings)
+    if not any(_text_char_count(text) for text in extracted_pages):
+        result_warnings.append(OCR_PRODUCED_NO_TEXT_WARNING)
 
     method = "mixed" if quality.get("text_char_count", 0) else "ocr"
-    success_warnings = [
-        warning for warning in base_warnings if warning != SCANNED_PDF_WARNING
-    ]
     return _result(
         text=combined_text,
         method=method,
         need_ocr=True,
         ocr_used=True,
         page_count=page_count,
-        warnings=success_warnings,
+        warnings=result_warnings,
     )
 
 
@@ -333,7 +480,10 @@ def extract_text_from_document(file_path: Path) -> dict:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
-            return _result(ocr_error=str(exc), warnings=[f"Document text extraction failed: {exc}"])
+            return _result(
+                ocr_error=str(exc),
+                warnings=[f"Document text extraction failed: {exc}"],
+            )
         return _result(text=text, method="text", page_count=1)
 
     if suffix != ".pdf":

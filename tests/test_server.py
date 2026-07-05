@@ -91,6 +91,27 @@ class OCRServerTests(unittest.TestCase):
         self.assertTrue(payload["need_ocr"])
         self.assertEqual(payload["text_char_count"], 0)
 
+    def test_parse_status_can_report_successful_rapidocr(self):
+        path = self.docs_path / "scan.pdf"
+        path.write_bytes(b"%PDF-test")
+        result = _parse_result(
+            text="recognized OCR content",
+            method="ocr",
+            ocr_used=True,
+            text_char_count=20,
+            ocr_error=None,
+            warnings=[],
+        )
+        with patch("backend.server.extract_text_from_document", return_value=result):
+            response = self.client.get("/knowledge-files/scan.pdf/parse-status")
+
+        payload = response.json()
+        self.assertEqual(payload["parse_method"], "ocr")
+        self.assertTrue(payload["need_ocr"])
+        self.assertTrue(payload["ocr_used"])
+        self.assertEqual(payload["text_char_count"], 20)
+        self.assertEqual(payload["warnings"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

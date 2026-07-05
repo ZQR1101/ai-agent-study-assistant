@@ -49,6 +49,49 @@ class OCRRagStoreTests(unittest.TestCase):
         self.assertTrue(chunks[0]["ocr_used"])
         self.assertTrue(chunks[0]["need_ocr"])
 
+    def test_rapidocr_document_text_enters_chunks_and_keyword_search(self):
+        parse_result = {
+            "text": (
+                "Scanned invoice reference RAPID-OCR-2026 contains a payable total "
+                "and enough recognized text for retrieval. " * 3
+            ),
+            "method": "ocr",
+            "need_ocr": True,
+            "ocr_used": True,
+            "page_count": 1,
+            "text_char_count": 300,
+            "ocr_error": None,
+            "warnings": [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docs_path = Path(tmpdir)
+            (docs_path / "scan.pdf").write_bytes(b"%PDF-mocked")
+            with (
+                patch.object(rag_store, "DOCS_PATH", docs_path),
+                patch(
+                    "backend.rag_store.extract_text_from_document",
+                    return_value=parse_result,
+                ),
+            ):
+                chunks = rag_store.build_chunks()
+
+        self.assertTrue(chunks)
+        self.assertIn("RAPID-OCR-2026", chunks[0]["text"])
+        self.assertEqual(chunks[0]["parse_method"], "ocr")
+        self.assertTrue(chunks[0]["ocr_used"])
+
+        rag_store.chunks = chunks
+        rag_store._reset_bm25_index()
+        results = rag_store.search_keyword_chunks("RAPID-OCR-2026", top_k=1)
+        self.assertEqual(results[0]["source"], "scan.pdf")
+        self.assertEqual(results[0]["parse_method"], "ocr")
+
+        with patch("backend.rag_store.search_vector_chunks", return_value=[]):
+            hybrid_results = rag_store.search_hybrid_chunks("RAPID-OCR-2026", top_k=1)
+        self.assertEqual(hybrid_results[0]["source"], "scan.pdf")
+        self.assertEqual(hybrid_results[0]["retrieval"], "hybrid")
+        self.assertTrue(hybrid_results[0]["ocr_used"])
+
     def test_scanned_pdf_without_ocr_does_not_break_rebuild(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             docs_path = Path(tmpdir)
