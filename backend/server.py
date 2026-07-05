@@ -35,7 +35,7 @@ from backend.pdf_validation import (
     PDFValidationTimeout,
     validate_pdf_file,
 )
-from backend.ocr_service import extract_text_from_document
+from backend.ocr_service import extract_text_from_document, safe_document_parse_result
 from backend.resource_limits import (
     ConcurrencyGate,
     TokenBucketRateLimiter,
@@ -1087,6 +1087,9 @@ async def upload_file(file: UploadFile = File(...)):
 
     total_size = 0
     pdf_pages = None
+    pdf_validation_status = "not_applicable"
+    pdf_validation_warnings: list[str] = []
+    bypass_upload_parse = False
     header = b""
     reserved_bytes = 0
     temp_path = DOCS_PATH / f".upload-{secrets.token_hex(16)}.tmp"
@@ -1174,12 +1177,20 @@ async def upload_file(file: UploadFile = File(...)):
                         256 * 1024 * 1024,
                     ),
                 )
+                pdf_validation_status = "valid"
             except PDFPageLimitExceeded as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             except PDFValidationTimeout as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                pdf_validation_status = "timeout"
+                bypass_upload_parse = True
+                pdf_validation_warnings.append(
+                    f"{exc}. The PDF was stored safely, but parsing was bypassed."
+                )
             except PDFValidationError as exc:
-                raise HTTPException(status_code=415, detail=str(exc)) from exc
+                pdf_validation_status = "warning"
+                pdf_validation_warnings.append(
+                    f"{exc}. The PDF was stored safely and fallback parsing was attempted."
+                )
         os.link(temp_path, save_path)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail="A file with this name already exists") from exc
@@ -1190,8 +1201,29 @@ async def upload_file(file: UploadFile = File(...)):
         _UPLOAD_QUOTA.release(reserved_bytes)
         await file.close()
 
-    parse_result = await asyncio.to_thread(extract_text_from_document, save_path)
-    if parse_result["need_ocr"] and not parse_result["ocr_used"]:
+    if bypass_upload_parse:
+        parse_result = safe_document_parse_result(pdf_validation_warnings[0])
+    else:
+        try:
+            parse_result = await asyncio.to_thread(extract_text_from_document, save_path)
+        except Exception as exc:
+            parse_result = safe_document_parse_result(
+                f"Document parsing failed unexpectedly: {exc}. The file remains safely stored.",
+                corrupted_pdf=suffix == ".pdf",
+            )
+
+    parse_result = {**parse_result}
+    if pdf_validation_warnings:
+        parse_result["corrupted_pdf"] = True
+        parse_result["warnings"] = list(
+            dict.fromkeys([*pdf_validation_warnings, *parse_result["warnings"]])
+        )
+
+    if parse_result.get("safe_fallback"):
+        message = "文件已安全上传，但文档解析和 OCR 均未获得有效文本；文件已保留，请查看 warnings"
+    elif parse_result.get("corrupted_pdf"):
+        message = f"{filename} 已上传；检测到 PDF 结构异常，并已通过 fallback 完成解析"
+    elif parse_result["need_ocr"] and not parse_result["ocr_used"]:
         message = "文件已上传，但可能是扫描版 PDF，当前 OCR 未启用或不可用，未能提取有效文本"
     else:
         message = f"{filename} 上传成功；重建知识库索引后生效"
@@ -1203,6 +1235,10 @@ async def upload_file(file: UploadFile = File(...)):
         "need_ocr": parse_result["need_ocr"],
         "ocr_used": parse_result["ocr_used"],
         "warnings": parse_result["warnings"],
+        "corrupted_pdf": parse_result.get("corrupted_pdf", False),
+        "safe_fallback": parse_result.get("safe_fallback", False),
+        "pdf_parser": parse_result.get("pdf_parser"),
+        "pdf_validation_status": pdf_validation_status,
         "rebuild_required": True,
         "size": total_size,
         **({"pages": pdf_pages} if pdf_pages is not None else {}),
@@ -1233,7 +1269,13 @@ def knowledge_files_api():
 @app.get("/knowledge-files/{filename}/parse-status", tags=["Knowledge Base"])
 def knowledge_file_parse_status_api(filename: str):
     file_path = _safe_doc_path(filename)
-    parse_result = extract_text_from_document(file_path)
+    try:
+        parse_result = extract_text_from_document(file_path)
+    except Exception as exc:
+        parse_result = safe_document_parse_result(
+            f"Document parsing failed unexpectedly: {exc}",
+            corrupted_pdf=file_path.suffix.lower() == ".pdf",
+        )
     return {
         "name": file_path.name,
         "type": file_path.suffix.lower().lstrip("."),
@@ -1244,6 +1286,9 @@ def knowledge_file_parse_status_api(filename: str):
         "text_char_count": parse_result["text_char_count"],
         "ocr_error": parse_result["ocr_error"],
         "warnings": parse_result["warnings"],
+        "corrupted_pdf": parse_result.get("corrupted_pdf", False),
+        "safe_fallback": parse_result.get("safe_fallback", False),
+        "pdf_parser": parse_result.get("pdf_parser"),
     }
 
 

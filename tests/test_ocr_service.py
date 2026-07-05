@@ -33,6 +33,10 @@ class OCRServiceTests(unittest.TestCase):
         reader = SimpleNamespace(pages=[_Page("A" * 100)])
         with (
             patch("backend.ocr_service.get_config", return_value=_config()),
+            patch(
+                "backend.ocr_service._extract_pdf_pages_with_pymupdf",
+                return_value=None,
+            ),
             patch("pypdf.PdfReader", return_value=reader),
         ):
             result = ocr_service.detect_pdf_text_quality(Path("text.pdf"))
@@ -45,6 +49,10 @@ class OCRServiceTests(unittest.TestCase):
         reader = SimpleNamespace(pages=[_Page("short")])
         with (
             patch("backend.ocr_service.get_config", return_value=_config()),
+            patch(
+                "backend.ocr_service._extract_pdf_pages_with_pymupdf",
+                return_value=None,
+            ),
             patch("pypdf.PdfReader", return_value=reader),
         ):
             result = ocr_service.detect_pdf_text_quality(Path("scan.pdf"))
@@ -284,6 +292,91 @@ class OCRServiceTests(unittest.TestCase):
         self.assertEqual(result["method"], "ocr")
         self.assertIsNone(result["ocr_error"])
         self.assertIn(ocr_service.OCR_PRODUCED_NO_TEXT_WARNING, result["warnings"])
+
+    def test_pymupdf_failure_marks_pdf_as_corrupted(self):
+        native_result = {
+            "page_texts": [],
+            "warnings": [
+                ocr_service.CORRUPTED_PDF_WARNING,
+                "PyMuPDF parsing failed: broken xref",
+            ],
+            "corrupted_pdf": True,
+            "pdf_parser": "pymupdf",
+            "parse_error": "PyMuPDF parsing failed: broken xref",
+        }
+        with (
+            patch("backend.ocr_service.get_config", return_value=_config()),
+            patch(
+                "backend.ocr_service._extract_pdf_pages_with_pymupdf",
+                return_value=native_result,
+            ),
+        ):
+            result = ocr_service.detect_pdf_text_quality(Path("broken.pdf"))
+
+        self.assertTrue(result["corrupted_pdf"])
+        self.assertTrue(result["safe_fallback"])
+        self.assertTrue(result["need_ocr"])
+        self.assertEqual(result["pdf_parser"], "pymupdf")
+
+    def test_corrupted_pdf_can_recover_through_ocr_bypass(self):
+        class FakeAdapter:
+            def extract_text(self, _image_paths):
+                return ["recovered text from damaged PDF " * 4]
+
+        quality = {
+            "text": "",
+            "method": "failed",
+            "need_ocr": True,
+            "page_count": 0,
+            "text_char_count": 0,
+            "warnings": [ocr_service.CORRUPTED_PDF_WARNING],
+            "page_texts": [],
+            "low_text_pages": [],
+            "corrupted_pdf": True,
+            "safe_fallback": True,
+            "pdf_parser": "pymupdf",
+        }
+        class FakeRenderedPages(list):
+            warnings = []
+            page_count = 1
+
+            def __init__(self):
+                super().__init__([Path("page-0001.png")])
+                self.cleanup = Mock()
+
+        rendered = FakeRenderedPages()
+        with (
+            patch(
+                "backend.ocr_service.get_config",
+                return_value=_config(enable_ocr=True, ocr_engine="rapidocr"),
+            ),
+            patch("backend.ocr_service.detect_pdf_text_quality", return_value=quality),
+            patch(
+                "backend.ocr_service.render_pdf_pages_to_images",
+                return_value=rendered,
+            ),
+            patch("backend.ocr_service._get_ocr_adapter", return_value=FakeAdapter()),
+        ):
+            result = ocr_service.extract_text_with_ocr(Path("broken.pdf"))
+
+        self.assertEqual(result["method"], "ocr")
+        self.assertTrue(result["ocr_used"])
+        self.assertTrue(result["corrupted_pdf"])
+        self.assertFalse(result["safe_fallback"])
+        self.assertIn("recovered text", result["text"])
+        rendered.cleanup.assert_called_once()
+
+    def test_extreme_pipeline_exception_returns_safe_result(self):
+        with patch(
+            "backend.ocr_service.detect_pdf_text_quality",
+            side_effect=MemoryError("parser exhausted memory"),
+        ):
+            result = ocr_service.extract_text_from_document(Path("extreme.pdf"))
+
+        self.assertEqual(result["method"], "failed")
+        self.assertTrue(result["corrupted_pdf"])
+        self.assertTrue(result["safe_fallback"])
+        self.assertIn("parser exhausted memory", " ".join(result["warnings"]))
 
 
 if __name__ == "__main__":

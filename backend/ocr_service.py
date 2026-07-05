@@ -14,6 +14,7 @@ SCANNED_PDF_WARNING = (
 )
 OCR_NOT_CONFIGURED_ERROR = "OCR is disabled or no OCR engine is configured"
 OCR_PRODUCED_NO_TEXT_WARNING = "OCR produced no text"
+CORRUPTED_PDF_WARNING = "This PDF appears to be corrupted or structurally invalid."
 RAPIDOCR_NOT_INSTALLED_ERROR = (
     "RapidOCR is not installed. Install it with: pip install rapidocr-onnxruntime"
 )
@@ -91,6 +92,9 @@ def _result(
     page_count: int = 0,
     ocr_error: str | None = None,
     warnings: list[str] | None = None,
+    corrupted_pdf: bool = False,
+    safe_fallback: bool = False,
+    pdf_parser: str | None = None,
 ) -> dict:
     return {
         "text": text,
@@ -101,41 +105,106 @@ def _result(
         "text_char_count": _text_char_count(text),
         "ocr_error": ocr_error,
         "warnings": list(warnings or []),
+        "corrupted_pdf": corrupted_pdf,
+        "safe_fallback": safe_fallback,
+        "pdf_parser": pdf_parser,
     }
 
 
-def detect_pdf_text_quality(pdf_path: Path) -> dict:
-    """Extract native PDF text and report whether any page looks image-based."""
+def _extract_pdf_pages_with_pymupdf(pdf_path: Path) -> dict | None:
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except ImportError:
+        return None
 
-    path = Path(pdf_path)
-    min_chars = getattr(get_config(), "ocr_min_text_chars", 80)
+    document = None
     warnings: list[str] = []
+    corrupted_pdf = False
+    try:
+        document = fitz.open(str(pdf_path))
+        page_texts = []
+        for page_number in range(int(document.page_count)):
+            try:
+                page_texts.append(document.load_page(page_number).get_text("text") or "")
+            except Exception as exc:
+                corrupted_pdf = True
+                page_texts.append("")
+                warnings.append(
+                    f"PyMuPDF could not parse PDF page {page_number + 1}: {exc}"
+                )
+        return {
+            "page_texts": page_texts,
+            "warnings": warnings,
+            "corrupted_pdf": corrupted_pdf,
+            "pdf_parser": "pymupdf",
+            "parse_error": warnings[0] if warnings else None,
+        }
+    except Exception as exc:
+        error = f"PyMuPDF parsing failed: {exc}"
+        return {
+            "page_texts": [],
+            "warnings": [CORRUPTED_PDF_WARNING, error],
+            "corrupted_pdf": True,
+            "pdf_parser": "pymupdf",
+            "parse_error": error,
+        }
+    finally:
+        if document is not None:
+            try:
+                document.close()
+            except Exception:
+                pass
 
+
+def _extract_pdf_pages_with_pypdf(pdf_path: Path) -> dict:
+    warnings: list[str] = []
     try:
         from pypdf import PdfReader
 
-        reader = PdfReader(path)
-        page_texts: list[str] = []
-        page_char_counts: list[int] = []
+        reader = PdfReader(pdf_path)
+        page_texts = []
+        corrupted_pdf = False
         for page_number, page in enumerate(reader.pages, start=1):
             try:
-                page_text = page.extract_text() or ""
-            except Exception as exc:  # A damaged page should not abort an index rebuild.
-                page_text = ""
+                page_texts.append(page.extract_text() or "")
+            except Exception as exc:
+                corrupted_pdf = True
+                page_texts.append("")
                 warnings.append(f"Could not extract text from PDF page {page_number}: {exc}")
-            page_texts.append(page_text)
-            page_char_counts.append(_text_char_count(page_text))
-    except Exception as exc:
         return {
-            **_result(
-                need_ocr=True,
-                ocr_error=f"PDF text extraction failed: {exc}",
-                warnings=[f"PDF text extraction failed: {exc}"],
-            ),
-            "page_texts": [],
-            "page_char_counts": [],
-            "low_text_pages": [],
+            "page_texts": page_texts,
+            "warnings": warnings,
+            "corrupted_pdf": corrupted_pdf,
+            "pdf_parser": "pypdf",
+            "parse_error": warnings[0] if warnings else None,
         }
+    except Exception as exc:
+        error = f"PDF fallback parsing failed: {exc}"
+        return {
+            "page_texts": [],
+            "warnings": [CORRUPTED_PDF_WARNING, error],
+            "corrupted_pdf": True,
+            "pdf_parser": "pypdf",
+            "parse_error": error,
+        }
+
+
+def detect_pdf_text_quality(pdf_path: Path) -> dict:
+    """Run native PDF parsing and classify scanned or corrupted documents."""
+
+    path = Path(pdf_path)
+    min_chars = getattr(get_config(), "ocr_min_text_chars", 80)
+    native_result = _extract_pdf_pages_with_pymupdf(path)
+    if native_result is None:
+        native_result = _extract_pdf_pages_with_pypdf(path)
+
+    page_texts = native_result["page_texts"]
+    warnings = list(native_result["warnings"])
+    corrupted_pdf = bool(native_result["corrupted_pdf"])
+    parse_error = native_result["parse_error"]
+    if corrupted_pdf and CORRUPTED_PDF_WARNING not in warnings:
+        warnings.insert(0, CORRUPTED_PDF_WARNING)
+    page_char_counts = [_text_char_count(page_text) for page_text in page_texts]
 
     text = "\n".join(page_texts).strip()
     total_chars = _text_char_count(text)
@@ -144,8 +213,8 @@ def detect_pdf_text_quality(pdf_path: Path) -> dict:
         for index, char_count in enumerate(page_char_counts)
         if char_count < min_chars
     ]
-    need_ocr = total_chars < min_chars or bool(low_text_pages)
-    if need_ocr:
+    need_ocr = corrupted_pdf or total_chars < min_chars or bool(low_text_pages)
+    if need_ocr and not corrupted_pdf:
         warnings.append(SCANNED_PDF_WARNING)
 
     return {
@@ -154,7 +223,11 @@ def detect_pdf_text_quality(pdf_path: Path) -> dict:
             method="text" if total_chars else "failed",
             need_ocr=need_ocr,
             page_count=len(page_texts),
+            ocr_error=parse_error,
             warnings=warnings,
+            corrupted_pdf=corrupted_pdf,
+            safe_fallback=corrupted_pdf and not bool(total_chars),
+            pdf_parser=native_result["pdf_parser"],
         ),
         "page_texts": page_texts,
         "page_char_counts": page_char_counts,
@@ -391,6 +464,8 @@ def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
     warnings = list(quality.get("warnings") or [])
     original_text = str(quality.get("text") or "")
     quality_page_count = int(quality.get("page_count", 0))
+    corrupted_pdf = bool(quality.get("corrupted_pdf", False))
+    pdf_parser = quality.get("pdf_parser")
 
     if not bool(getattr(config, "enable_ocr", False)) or engine_name == "none":
         return _result(
@@ -400,6 +475,9 @@ def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
             page_count=quality_page_count,
             ocr_error=OCR_NOT_CONFIGURED_ERROR,
             warnings=warnings,
+            corrupted_pdf=corrupted_pdf,
+            safe_fallback=not bool(original_text.strip()),
+            pdf_parser=pdf_parser,
         )
 
     rendered_pages = None
@@ -426,6 +504,9 @@ def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
             page_count=quality_page_count,
             ocr_error=str(exc),
             warnings=[*warnings, str(exc)],
+            corrupted_pdf=corrupted_pdf,
+            safe_fallback=not bool(original_text.strip()),
+            pdf_parser=pdf_parser,
         )
     except Exception as exc:
         error = str(exc) if isinstance(exc, OCRServiceError) else f"OCR failed: {exc}"
@@ -436,6 +517,9 @@ def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
             page_count=quality_page_count,
             ocr_error=error,
             warnings=[*warnings, error],
+            corrupted_pdf=corrupted_pdf,
+            safe_fallback=not bool(original_text.strip()),
+            pdf_parser=pdf_parser,
         )
     finally:
         if rendered_pages is not None and hasattr(rendered_pages, "cleanup"):
@@ -464,12 +548,36 @@ def _extract_text_with_ocr(pdf_path: Path, quality: dict) -> dict:
         ocr_used=True,
         page_count=page_count,
         warnings=result_warnings,
+        corrupted_pdf=corrupted_pdf,
+        safe_fallback=not bool(combined_text.strip()),
+        pdf_parser=pdf_parser,
     )
 
 
 def extract_text_with_ocr(pdf_path: Path) -> dict:
-    quality = detect_pdf_text_quality(Path(pdf_path))
+    try:
+        quality = detect_pdf_text_quality(Path(pdf_path))
+    except Exception as exc:
+        return safe_document_parse_result(
+            f"PDF parsing pipeline failed unexpectedly: {exc}",
+        )
     return _extract_text_with_ocr(Path(pdf_path), quality)
+
+
+def safe_document_parse_result(
+    warning: str,
+    *,
+    corrupted_pdf: bool = True,
+) -> dict:
+    """Build a non-throwing result when parsing must be bypassed entirely."""
+
+    return _result(
+        method="failed",
+        need_ocr=True,
+        warnings=[warning],
+        corrupted_pdf=corrupted_pdf,
+        safe_fallback=True,
+    )
 
 
 def extract_text_from_document(file_path: Path) -> dict:
@@ -492,12 +600,20 @@ def extract_text_from_document(file_path: Path) -> dict:
             warnings=[f"Unsupported document type: {suffix or '<none>'}"],
         )
 
-    quality = detect_pdf_text_quality(path)
+    try:
+        quality = detect_pdf_text_quality(path)
+    except Exception as exc:
+        return safe_document_parse_result(
+            f"PDF parsing pipeline failed unexpectedly: {exc}",
+        )
     if not quality["need_ocr"]:
         return _result(
             text=quality["text"],
             method="text",
             page_count=quality["page_count"],
             warnings=quality["warnings"],
+            corrupted_pdf=quality.get("corrupted_pdf", False),
+            safe_fallback=False,
+            pdf_parser=quality.get("pdf_parser"),
         )
     return _extract_text_with_ocr(path, quality)

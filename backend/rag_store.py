@@ -7,7 +7,7 @@ import re
 import threading
 
 from backend.config import get_config, get_embedding_model_settings
-from backend.ocr_service import extract_text_from_document
+from backend.ocr_service import extract_text_from_document, safe_document_parse_result
 from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
 
@@ -198,7 +198,13 @@ def load_documents():
         suffix = file_path.suffix.lower()
 
         if suffix in {".txt", ".md", ".pdf"}:
-            parse_result = extract_text_from_document(file_path)
+            try:
+                parse_result = extract_text_from_document(file_path)
+            except Exception as exc:
+                parse_result = safe_document_parse_result(
+                    f"Document parsing failed unexpectedly: {exc}",
+                    corrupted_pdf=suffix == ".pdf",
+                )
             documents.append({
                 "source": file_path.name,
                 "text": parse_result["text"],
@@ -207,6 +213,8 @@ def load_documents():
                 "need_ocr": parse_result["need_ocr"],
                 "text_char_count": parse_result["text_char_count"],
                 "warnings": parse_result["warnings"],
+                "corrupted_pdf": parse_result.get("corrupted_pdf", False),
+                "safe_fallback": parse_result.get("safe_fallback", False),
             })
 
     return documents
@@ -236,6 +244,8 @@ def build_chunks():
                     "parse_method": doc.get("parse_method", "text"),
                     "ocr_used": bool(doc.get("ocr_used", False)),
                     "need_ocr": bool(doc.get("need_ocr", False)),
+                    "corrupted_pdf": bool(doc.get("corrupted_pdf", False)),
+                    "safe_fallback": bool(doc.get("safe_fallback", False)),
                 })
                 chunk_index += 1
 
@@ -422,6 +432,8 @@ def list_index_source_statuses() -> list[dict]:
             "parse_method": chunk.get("parse_method", "text"),
             "ocr_used": bool(chunk.get("ocr_used", False)),
             "need_ocr": bool(chunk.get("need_ocr", False)),
+            "corrupted_pdf": bool(chunk.get("corrupted_pdf", False)),
+            "safe_fallback": bool(chunk.get("safe_fallback", False)),
         }
     return [statuses[source] for source in sorted(statuses)]
 
@@ -517,6 +529,8 @@ def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> d
         "parse_method": chunk.get("parse_method", "text"),
         "ocr_used": bool(chunk.get("ocr_used", False)),
         "need_ocr": bool(chunk.get("need_ocr", False)),
+        "corrupted_pdf": bool(chunk.get("corrupted_pdf", False)),
+        "safe_fallback": bool(chunk.get("safe_fallback", False)),
     }
 
 

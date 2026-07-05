@@ -119,6 +119,23 @@ class OCRRagStoreTests(unittest.TestCase):
         self.assertIsNone(rag_store.index)
         embedding_model.assert_not_called()
 
+    def test_unexpected_document_parser_failure_does_not_break_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docs_path = Path(tmpdir)
+            (docs_path / "broken.pdf").write_bytes(b"%PDF-broken")
+            with (
+                patch.object(rag_store, "DOCS_PATH", docs_path),
+                patch(
+                    "backend.rag_store.extract_text_from_document",
+                    side_effect=MemoryError("extreme parser failure"),
+                ),
+                patch("backend.rag_store.get_embedding_model") as embedding_model,
+            ):
+                rag_store.rebuild_rag_index()
+
+        self.assertIsNone(rag_store.index)
+        embedding_model.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

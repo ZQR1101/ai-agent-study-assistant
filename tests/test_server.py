@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from backend.pdf_validation import PDFValidationError
 from backend.server import app
 
 
@@ -111,6 +112,69 @@ class OCRServerTests(unittest.TestCase):
         self.assertTrue(payload["ocr_used"])
         self.assertEqual(payload["text_char_count"], 20)
         self.assertEqual(payload["warnings"], [])
+
+    def test_upload_parser_exception_is_safe_fallback(self):
+        with patch(
+            "backend.server.extract_text_from_document",
+            side_effect=MemoryError("parser allocation failed"),
+        ):
+            response = self.client.post(
+                "/upload",
+                files={"file": ("notes.txt", b"safe content", "text/plain")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["safe_fallback"])
+        self.assertIn("parser allocation failed", " ".join(response.json()["warnings"]))
+        self.assertTrue((self.docs_path / "notes.txt").exists())
+
+    def test_validation_failure_can_be_repaired_by_fallback_parser(self):
+        repaired_result = _parse_result(
+            text="repaired PDF text",
+            method="text",
+            need_ocr=False,
+            text_char_count=15,
+            ocr_error=None,
+            warnings=[],
+            safe_fallback=False,
+            corrupted_pdf=False,
+            pdf_parser="pymupdf",
+        )
+        with (
+            patch(
+                "backend.server.validate_pdf_file",
+                side_effect=PDFValidationError("Uploaded PDF structure is invalid"),
+            ),
+            patch(
+                "backend.server.extract_text_from_document",
+                return_value=repaired_result,
+            ),
+        ):
+            response = self.client.post(
+                "/upload",
+                files={"file": ("repair.pdf", b"%PDF-repair", "application/pdf")},
+            )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["parse_method"], "text")
+        self.assertTrue(payload["corrupted_pdf"])
+        self.assertFalse(payload["safe_fallback"])
+        self.assertEqual(payload["pdf_parser"], "pymupdf")
+
+    def test_parse_status_catches_unexpected_parser_exception(self):
+        path = self.docs_path / "broken.pdf"
+        path.write_bytes(b"%PDF-broken")
+        with patch(
+            "backend.server.extract_text_from_document",
+            side_effect=RuntimeError("unexpected parser crash"),
+        ):
+            response = self.client.get("/knowledge-files/broken.pdf/parse-status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["corrupted_pdf"])
+        self.assertTrue(response.json()["safe_fallback"])
+        self.assertIn("unexpected parser crash", " ".join(response.json()["warnings"]))
 
 
 if __name__ == "__main__":
