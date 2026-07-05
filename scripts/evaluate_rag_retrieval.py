@@ -126,6 +126,42 @@ def _source_matches(expected: str, actual: str) -> bool:
     )
 
 
+def compute_ranking_metrics(
+    chunks: list[dict],
+    expected_sources: list[str],
+    expected_keywords: list[str],
+) -> dict:
+    best_source_rank = None
+    best_keyword_rank = None
+
+    for rank, chunk in enumerate(chunks, start=1):
+        source = str(chunk.get("source") or "")
+        if best_source_rank is None and any(
+            _source_matches(expected, source) for expected in expected_sources
+        ):
+            best_source_rank = rank
+
+        keyword_text = " ".join(
+            str(chunk.get(key) or "") for key in ("source", "text", "snippet")
+        ).casefold()
+        if best_keyword_rank is None and any(
+            keyword.casefold() in keyword_text for keyword in expected_keywords
+        ):
+            best_keyword_rank = rank
+
+        if best_source_rank is not None and best_keyword_rank is not None:
+            break
+
+    return {
+        "top1_source_hit": int(best_source_rank is not None and best_source_rank <= 1),
+        "top3_source_hit": int(best_source_rank is not None and best_source_rank <= 3),
+        "top5_source_hit": int(best_source_rank is not None and best_source_rank <= 5),
+        "mrr": 1.0 / best_source_rank if best_source_rank is not None else 0.0,
+        "best_expected_source_rank": best_source_rank,
+        "best_expected_keyword_rank": best_keyword_rank,
+    }
+
+
 def serialize_chunk(chunk: dict, rank: int) -> dict:
     text = chunk.get("text") or chunk.get("snippet") or ""
     payload = {
@@ -152,7 +188,8 @@ def serialize_chunk(chunk: dict, rank: int) -> dict:
 
 
 def score_retrieval(case: dict, mode: str, top_k: int, chunks: list[dict]) -> dict:
-    serialized = [serialize_chunk(chunk, rank) for rank, chunk in enumerate(chunks[:top_k], start=1)]
+    ranked_chunks = chunks[:top_k]
+    serialized = [serialize_chunk(chunk, rank) for rank, chunk in enumerate(ranked_chunks, start=1)]
     haystack = "\n".join(
         f"{chunk['source']} {chunk['snippet']}"
         for chunk in serialized
@@ -171,6 +208,11 @@ def score_retrieval(case: dict, mode: str, top_k: int, chunks: list[dict]) -> di
     unique_sources = list(dict.fromkeys(actual_sources))
     keyword_hits = len(matched_keywords)
     source_hits = len(matched_sources)
+    ranking_metrics = compute_ranking_metrics(
+        ranked_chunks,
+        case["expected_sources"],
+        case["expected_keywords"],
+    )
     return {
         "success": True,
         "error": None,
@@ -186,6 +228,7 @@ def score_retrieval(case: dict, mode: str, top_k: int, chunks: list[dict]) -> di
         "keyword_hit_count": keyword_hits,
         "source_hit_count": source_hits,
         "retrieval_score": keyword_hits + source_hits,
+        "ranking_metrics": ranking_metrics,
         "reranker_enabled": mode == RERANKER_MODE,
         "reranker_used": any(bool(chunk.get("reranker_used")) for chunk in serialized),
     }
@@ -207,6 +250,14 @@ def failed_result(mode: str, top_k: int, error: Exception | str) -> dict:
         "keyword_hit_count": 0,
         "source_hit_count": 0,
         "retrieval_score": 0,
+        "ranking_metrics": {
+            "top1_source_hit": 0,
+            "top3_source_hit": 0,
+            "top5_source_hit": 0,
+            "mrr": 0.0,
+            "best_expected_source_rank": None,
+            "best_expected_keyword_rank": None,
+        },
         "reranker_enabled": mode == RERANKER_MODE,
         "reranker_used": False,
     }
@@ -318,6 +369,17 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
         total_keyword_hits = sum(result["keyword_hit_count"] for result in results)
         total_source_hits = sum(result["source_hit_count"] for result in results)
         total_score = sum(result["retrieval_score"] for result in results)
+        ranking_metrics = [result.get("ranking_metrics") or {} for result in results]
+        source_ranks = [
+            metrics.get("best_expected_source_rank")
+            for metrics in ranking_metrics
+            if metrics.get("best_expected_source_rank") is not None
+        ]
+        keyword_ranks = [
+            metrics.get("best_expected_keyword_rank")
+            for metrics in ranking_metrics
+            if metrics.get("best_expected_keyword_rank") is not None
+        ]
         summary[mode] = {
             "total_keyword_hits": total_keyword_hits,
             "total_source_hits": total_source_hits,
@@ -325,8 +387,68 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             "successful_cases": sum(bool(result.get("success")) for result in results),
             "failed_cases": sum(not bool(result.get("success")) for result in results),
             "reranker_used_cases": sum(bool(result.get("reranker_used")) for result in results),
+            "total_top1_source_hits": sum(
+                int(metrics.get("top1_source_hit", 0)) for metrics in ranking_metrics
+            ),
+            "total_top3_source_hits": sum(
+                int(metrics.get("top3_source_hit", 0)) for metrics in ranking_metrics
+            ),
+            "total_top5_source_hits": sum(
+                int(metrics.get("top5_source_hit", 0)) for metrics in ranking_metrics
+            ),
+            "average_mrr": round(
+                sum(float(metrics.get("mrr", 0.0)) for metrics in ranking_metrics) / case_count,
+                3,
+            ) if case_count else 0.0,
+            "average_best_expected_source_rank": round(
+                sum(source_ranks) / len(source_ranks), 3
+            ) if source_ranks else None,
+            "average_best_expected_keyword_rank": round(
+                sum(keyword_ranks) / len(keyword_ranks), 3
+            ) if keyword_ranks else None,
         }
     return summary
+
+
+def build_hybrid_reranker_diagnostics(cases: list[dict]) -> list[dict]:
+    diagnostics = []
+    for case in cases:
+        results = case.get("results", {})
+        if "hybrid" not in results or RERANKER_MODE not in results:
+            continue
+
+        hybrid = results["hybrid"]
+        reranked = results[RERANKER_MODE]
+        hybrid_rank = (hybrid.get("ranking_metrics") or {}).get("best_expected_source_rank")
+        reranked_rank = (reranked.get("ranking_metrics") or {}).get("best_expected_source_rank")
+
+        if hybrid_rank is None and reranked_rank is None:
+            verdict = "same"
+        elif hybrid_rank is None:
+            verdict = "improved"
+        elif reranked_rank is None:
+            verdict = "worse"
+        elif reranked_rank < hybrid_rank:
+            verdict = "improved"
+        elif reranked_rank > hybrid_rank:
+            verdict = "worse"
+        else:
+            verdict = "same"
+
+        diagnostics.append({
+            "case_id": case.get("id"),
+            "hybrid_best_source_rank": hybrid_rank,
+            "hybrid_reranker_best_source_rank": reranked_rank,
+            "rank_delta": (
+                hybrid_rank - reranked_rank
+                if hybrid_rank is not None and reranked_rank is not None
+                else None
+            ),
+            "hybrid_source_hit_count": hybrid.get("source_hit_count", 0),
+            "hybrid_reranker_source_hit_count": reranked.get("source_hit_count", 0),
+            "verdict": verdict,
+        })
+    return diagnostics
 
 
 def evaluate_cases(
@@ -364,7 +486,7 @@ def evaluate_cases(
             case_result["results"][mode] = retrieval
         evaluated_cases.append(case_result)
 
-    return {
+    report = {
         "summary": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_count": len(evaluated_cases),
@@ -377,10 +499,23 @@ def evaluate_cases(
         "mode_summary": build_mode_summary(evaluated_cases, modes),
         "cases": evaluated_cases,
     }
+    if "hybrid" in modes and RERANKER_MODE in modes:
+        report["hybrid_reranker_diagnostics"] = build_hybrid_reranker_diagnostics(
+            evaluated_cases
+        )
+    return report
 
 
 def _md_escape(value: Any) -> str:
     return str(value if value is not None else "-").replace("|", "\\|").replace("\n", " ")
+
+
+def _md_metric(value: Any, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.{digits}f}"
+    return str(value)
 
 
 def render_markdown(report: dict) -> str:
@@ -397,16 +532,42 @@ def render_markdown(report: dict) -> str:
         f"- With judge: {summary['with_judge']}",
         f"- With reranker: {summary.get('with_reranker', False)}",
         "",
-        "| Mode | Keyword Hits | Source Hits | Avg Score | Success | Failed | Reranker Used |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Mode | Keyword Hits | Source Hits | Avg Score | Top1 Source | Top3 Source | Top5 Source | Avg MRR | Avg Source Rank | Avg Keyword Rank | Success | Failed | Reranker Used |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for mode in summary["modes"]:
         item = report["mode_summary"][mode]
         lines.append(
             f"| {mode} | {item['total_keyword_hits']} | {item['total_source_hits']} | "
-            f"{item['average_retrieval_score']:.3f} | {item['successful_cases']} | {item['failed_cases']} | "
+            f"{item['average_retrieval_score']:.3f} | {item['total_top1_source_hits']} | "
+            f"{item['total_top3_source_hits']} | {item['total_top5_source_hits']} | "
+            f"{_md_metric(item['average_mrr'])} | "
+            f"{_md_metric(item['average_best_expected_source_rank'])} | "
+            f"{_md_metric(item['average_best_expected_keyword_rank'])} | "
+            f"{item['successful_cases']} | {item['failed_cases']} | "
             f"{item.get('reranker_used_cases', 0)} |"
         )
+
+    diagnostics = report.get("hybrid_reranker_diagnostics")
+    if diagnostics is None and "hybrid" in summary["modes"] and RERANKER_MODE in summary["modes"]:
+        diagnostics = build_hybrid_reranker_diagnostics(report["cases"])
+    if diagnostics is not None:
+        lines.extend([
+            "",
+            "## Hybrid vs Hybrid Reranker Diagnostics",
+            "",
+            "Positive rank delta means the expected source moved closer to rank 1.",
+            "",
+            "| Case ID | Hybrid Best Source Rank | Hybrid Reranker Best Source Rank | Rank Delta | Hybrid Source Hits | Hybrid Reranker Source Hits | Verdict |",
+            "|---|---:|---:|---:|---:|---:|---|",
+        ])
+        for item in diagnostics:
+            lines.append(
+                f"| {_md_escape(item['case_id'])} | {_md_metric(item['hybrid_best_source_rank'])} | "
+                f"{_md_metric(item['hybrid_reranker_best_source_rank'])} | "
+                f"{_md_metric(item['rank_delta'])} | {item['hybrid_source_hit_count']} | "
+                f"{item['hybrid_reranker_source_hit_count']} | {item['verdict']} |"
+            )
 
     lines.extend(["", "## Case Details", ""])
     for case in report["cases"]:
@@ -422,6 +583,7 @@ def render_markdown(report: dict) -> str:
             lines.extend([f"**Notes:** {case['notes']}", ""])
         for mode in summary["modes"]:
             result = case["results"][mode]
+            ranking = result.get("ranking_metrics") or {}
             lines.extend([
                 f"#### {mode.title()}",
                 "",
@@ -429,6 +591,10 @@ def render_markdown(report: dict) -> str:
                 f"- Keyword hits: {result['keyword_hit_count']} ({', '.join(result['matched_expected_keywords']) or 'none'})",
                 f"- Source hits: {result['source_hit_count']} ({', '.join(result['matched_expected_sources']) or 'none'})",
                 f"- Retrieval score: {result['retrieval_score']}",
+                f"- Best expected source rank: {_md_metric(ranking.get('best_expected_source_rank'))}",
+                f"- Best expected keyword rank: {_md_metric(ranking.get('best_expected_keyword_rank'))}",
+                f"- MRR: {_md_metric(ranking.get('mrr', 0.0))}",
+                f"- Top1/Top3/Top5 source hit: {ranking.get('top1_source_hit', 0)}/{ranking.get('top3_source_hit', 0)}/{ranking.get('top5_source_hit', 0)}",
                 f"- Reranker enabled: {result.get('reranker_enabled', False)}",
                 f"- Reranker used: {result.get('reranker_used', False)}",
             ])

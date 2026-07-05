@@ -544,15 +544,17 @@ class UploadSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 415)
         self.assertFalse((self.docs_path / "fake.pdf").exists())
 
-    def test_upload_rejects_malformed_pdf_structure(self):
+    def test_upload_safely_stores_malformed_pdf_structure(self):
         response = self.client.post(
             "/upload",
             files={"file": ("fake.pdf", b"%PDF-broken", "application/pdf")},
         )
 
-        self.assertEqual(response.status_code, 415)
-        self.assertEqual(response.json()["detail"], "Uploaded PDF structure is invalid")
-        self.assertEqual(list(self.docs_path.iterdir()), [])
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["corrupted_pdf"])
+        self.assertTrue(response.json()["safe_fallback"])
+        self.assertIn("structure is invalid", " ".join(response.json()["warnings"]))
+        self.assertTrue((self.docs_path / "fake.pdf").exists())
 
     def test_upload_rejects_pdf_page_limit_and_validation_timeout(self):
         content = _pdf_bytes(page_count=2)
@@ -586,8 +588,10 @@ class UploadSecurityTests(unittest.TestCase):
                 files={"file": ("timeout.pdf", content, "application/pdf")},
             )
 
-        self.assertEqual(timeout_response.status_code, 422)
-        self.assertFalse((self.docs_path / "timeout.pdf").exists())
+        self.assertEqual(timeout_response.status_code, 200)
+        self.assertEqual(timeout_response.json()["pdf_validation_status"], "timeout")
+        self.assertTrue(timeout_response.json()["safe_fallback"])
+        self.assertTrue((self.docs_path / "timeout.pdf").exists())
 
     def test_upload_rejects_oversized_file_without_leaving_partial_file(self):
         response = self.client.post(

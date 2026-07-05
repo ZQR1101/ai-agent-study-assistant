@@ -8,6 +8,7 @@ from backend import rag_store
 from backend.ai_core import run_chat_request
 from backend.reranker import (
     _reset_reranker_state,
+    get_reranker_error,
     get_reranker_model,
     rerank_chunks,
     rerank_chunks_with_metadata,
@@ -91,6 +92,50 @@ class RerankerTests(unittest.TestCase):
         self.assertIs(first, model)
         self.assertIs(second, model)
         mock_get_cross_encoder.return_value.assert_called_once_with("mock/model")
+
+    def test_failed_load_retries_after_cooldown(self):
+        model = object()
+        with (
+            patch.dict(
+                os.environ,
+                {"ENABLE_RERANKER": "true", "RERANKER_MODEL": "mock/model"},
+                clear=False,
+            ),
+            patch("backend.reranker._get_cross_encoder") as mock_get_cross_encoder,
+        ):
+            encoder_class = mock_get_cross_encoder.return_value
+            encoder_class.side_effect = [RuntimeError("temporary failure"), model]
+
+            with patch("backend.reranker.monotonic", return_value=100.0):
+                self.assertIsNone(get_reranker_model())
+            with patch("backend.reranker.monotonic", return_value=110.0):
+                self.assertIsNone(get_reranker_model())
+            with patch("backend.reranker.monotonic", return_value=131.0):
+                self.assertIs(get_reranker_model(), model)
+
+        self.assertEqual(encoder_class.call_count, 2)
+        self.assertIsNone(get_reranker_error())
+
+    def test_reset_allows_immediate_retry_after_failure(self):
+        model = object()
+        with (
+            patch.dict(
+                os.environ,
+                {"ENABLE_RERANKER": "true", "RERANKER_MODEL": "mock/model"},
+                clear=False,
+            ),
+            patch("backend.reranker._get_cross_encoder") as mock_get_cross_encoder,
+            patch("backend.reranker.monotonic", return_value=100.0),
+        ):
+            encoder_class = mock_get_cross_encoder.return_value
+            encoder_class.side_effect = [RuntimeError("temporary failure"), model]
+            self.assertIsNone(get_reranker_model())
+
+            _reset_reranker_state()
+
+            self.assertIs(get_reranker_model(), model)
+
+        self.assertEqual(encoder_class.call_count, 2)
 
     def test_disabled_request_keeps_search_results_unchanged(self):
         metadata = sample_search_metadata()

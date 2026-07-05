@@ -1173,6 +1173,19 @@ function ResultsPanel({
             <option value="hybrid">Hybrid</option>
           </select>
         </label>
+        {settings.useRag ? (
+          <label className="inspector-toggle">
+            <span>
+              <strong>Enable Reranker</strong>
+              <em>对召回候选进行精排</em>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.rerankerEnabled}
+              onChange={(event) => onSettingsChange({ rerankerEnabled: event.target.checked })}
+            />
+          </label>
+        ) : null}
         <label className="inspector-toggle">
           <span>
             <strong>LangGraph Workflow</strong>
@@ -1268,12 +1281,20 @@ function InsightContent({ tab, turns, judgeTrend, judgeTrendLoading, judgeTrendE
                 const sourceName = typeof source === "string" ? source : source.source || "未知来源"
                 const score = typeof source === "string" || source.score == null ? "" : `相似度 ${Number(source.score).toFixed(4)}`
                 const retrieval = typeof source === "string" || !source.retrieval ? "" : `检索：${RETRIEVAL_LABELS[source.retrieval] || source.retrieval}`
+                const rerankScore = typeof source === "string" || source.rerank_score == null
+                  ? ""
+                  : `精排分数 ${Number(source.rerank_score).toFixed(4)}`
+                const rerankRank = typeof source === "string" || source.rerank_rank == null
+                  ? ""
+                  : `精排排名 ${source.rerank_rank}`
                 const snippet = typeof source === "string" ? "" : source.text || source.snippet || ""
                 return (
                   <li key={`${sourceName}-${sourceIndex}`}>
                     <strong>{sourceIndex + 1}. {sourceName}</strong>
                     {retrieval ? <span>{retrieval}</span> : null}
                     {score ? <span>{score}</span> : null}
+                    {rerankScore ? <span>{rerankScore}</span> : null}
+                    {rerankRank ? <span>{rerankRank}</span> : null}
                     {snippet ? <span>{snippet}</span> : null}
                   </li>
                 )
@@ -1679,6 +1700,16 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
         <dd>{formatRuntimeValue(runtimeInfo.bm25_candidates)}</dd>
         <dt>hybrid_used</dt>
         <dd>{formatRuntimeValue(runtimeInfo.hybrid_used)}</dd>
+        <dt>reranker_enabled</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.reranker_enabled)}</dd>
+        <dt>reranker_used</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.reranker_used)}</dd>
+        <dt>reranker_error</dt>
+        <dd className={runtimeInfo.reranker_error ? "runtime-error-text" : ""}>
+          {formatRuntimeValue(runtimeInfo.reranker_error)}
+        </dd>
+        <dt>reranker_top_n</dt>
+        <dd>{formatRuntimeValue(runtimeInfo.reranker_top_n)}</dd>
         <dt>graph_path</dt>
         <dd className="runtime-path">{path.length > 0 ? path.join(" → ") : "无"}</dd>
         <dt>node_count</dt>
@@ -1732,6 +1763,16 @@ function RuntimeInfoPanel({ runtimeInfo, fallbackPath }) {
                     <dd>{formatRuntimeValue(call.vector_candidates)}</dd>
                     <dt>bm25_candidates</dt>
                     <dd>{formatRuntimeValue(call.bm25_candidates)}</dd>
+                    <dt>reranker_enabled</dt>
+                    <dd>{formatRuntimeValue(call.reranker_enabled)}</dd>
+                    <dt>reranker_used</dt>
+                    <dd>{formatRuntimeValue(call.reranker_used)}</dd>
+                    <dt>reranker_error</dt>
+                    <dd className={call.reranker_error ? "runtime-error-text" : ""}>
+                      {formatRuntimeValue(call.reranker_error)}
+                    </dd>
+                    <dt>reranker_top_n</dt>
+                    <dd>{formatRuntimeValue(call.reranker_top_n)}</dd>
                   </>
                 ) : null}
                 <dt>tokens</dt>
@@ -1808,6 +1849,7 @@ export default function App() {
     useRag: false,
     useLangGraph: false,
     retrievalMode: "vector",
+    rerankerEnabled: false,
   })
   const sessionsRequestRef = useRef(0)
   const sessionLoadRequestRef = useRef(0)
@@ -2215,6 +2257,7 @@ export default function App() {
       use_langgraph: normalizedSettings.useLangGraph,
       top_k: Math.round(clampNumber(normalizedSettings.topK, 3, 1, 10)),
       retrieval_mode: normalizedSettings.retrievalMode || "vector",
+      reranker_enabled: Boolean(normalizedSettings.rerankerEnabled),
       session_id: backendHistoryEnabled ? currentSessionId || null : currentSessionId,
       history: historyForRequest,
     }

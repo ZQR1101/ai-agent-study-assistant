@@ -33,6 +33,10 @@ REQUIREMENT_IMPORTS = {
     "SQLAlchemy": "sqlalchemy",
     "psycopg[binary]": "psycopg",
 }
+OPTIONAL_DEPENDENCIES = {
+    "rapidocr-onnxruntime": "rapidocr_onnxruntime",
+    "PyMuPDF": "fitz",
+}
 
 CORE_MODULES = (
     "backend.config",
@@ -138,6 +142,27 @@ def check_core_modules() -> bool:
     return ok
 
 
+def check_optional_dependencies() -> bool:
+    available = []
+    missing = []
+    for package_name, import_name in OPTIONAL_DEPENDENCIES.items():
+        if importlib.util.find_spec(import_name) is None:
+            missing.append(package_name)
+        else:
+            available.append(package_name)
+
+    if available:
+        print_result("OK", "Optional OCR dependencies available: " + ", ".join(available))
+    if missing:
+        print_result(
+            "INFO",
+            "Optional OCR dependencies not installed: "
+            + ", ".join(missing)
+            + "; ordinary PDF/TXT/MD support is unaffected",
+        )
+    return True
+
+
 def check_env() -> bool:
     env_values = read_dotenv(ENV_FILE)
 
@@ -233,6 +258,7 @@ def main() -> int:
         check_python(),
         check_project_structure(),
         check_dependencies(),
+        check_optional_dependencies(),
         check_core_modules(),
         check_env(),
         check_reranker_config(),

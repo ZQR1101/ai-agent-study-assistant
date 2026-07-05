@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.evaluate_rag_retrieval import (
+    build_hybrid_reranker_diagnostics,
     build_mode_summary,
+    compute_ranking_metrics,
     evaluate_cases,
     load_cases,
     parse_args,
@@ -64,6 +66,54 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(result["matched_expected_sources"], ["alpha.md"])
         self.assertEqual(result["retrieval_score"], 3)
 
+    def test_ranking_metrics_track_source_and_keyword_positions(self):
+        chunks = [
+            {
+                "source": "other.md",
+                "text": "Alpha appears before the expected source.",
+            },
+            {
+                "source": "docs/alpha.md",
+                "text": "Relevant source content.",
+            },
+            {"source": "third.md", "text": "Unrelated content."},
+        ]
+
+        metrics = compute_ranking_metrics(
+            chunks,
+            expected_sources=["alpha.md"],
+            expected_keywords=["Alpha"],
+        )
+
+        self.assertEqual(metrics["top1_source_hit"], 0)
+        self.assertEqual(metrics["top3_source_hit"], 1)
+        self.assertEqual(metrics["top5_source_hit"], 1)
+        self.assertEqual(metrics["best_expected_source_rank"], 2)
+        self.assertEqual(metrics["best_expected_keyword_rank"], 1)
+        self.assertEqual(metrics["mrr"], 0.5)
+
+    def test_ranking_metrics_detect_top1_source_hit(self):
+        metrics = compute_ranking_metrics(
+            [{"source": "alpha.md", "text": "Relevant content."}],
+            expected_sources=["alpha.md"],
+            expected_keywords=[],
+        )
+
+        self.assertEqual(metrics["top1_source_hit"], 1)
+        self.assertEqual(metrics["top3_source_hit"], 1)
+        self.assertEqual(metrics["mrr"], 1.0)
+
+    def test_ranking_metrics_return_zero_mrr_without_source_hit(self):
+        metrics = compute_ranking_metrics(
+            [{"source": "other.md", "text": "Alpha keyword only."}],
+            expected_sources=["alpha.md"],
+            expected_keywords=["Alpha"],
+        )
+
+        self.assertIsNone(metrics["best_expected_source_rank"])
+        self.assertEqual(metrics["best_expected_keyword_rank"], 1)
+        self.assertEqual(metrics["mrr"], 0.0)
+
     def test_mode_summary_aggregates_results(self):
         cases = [
             {
@@ -95,6 +145,73 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(summary["average_retrieval_score"], 1.5)
         self.assertEqual(summary["failed_cases"], 1)
 
+    def test_mode_summary_aggregates_ranking_metrics(self):
+        cases = [
+            {
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 1,
+                        "source_hit_count": 1,
+                        "retrieval_score": 2,
+                        "ranking_metrics": {
+                            "top1_source_hit": 1,
+                            "top3_source_hit": 1,
+                            "top5_source_hit": 1,
+                            "mrr": 1.0,
+                            "best_expected_source_rank": 1,
+                            "best_expected_keyword_rank": 2,
+                        },
+                    }
+                }
+            },
+            {
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 1,
+                        "retrieval_score": 1,
+                        "ranking_metrics": {
+                            "top1_source_hit": 0,
+                            "top3_source_hit": 1,
+                            "top5_source_hit": 1,
+                            "mrr": 0.5,
+                            "best_expected_source_rank": 2,
+                            "best_expected_keyword_rank": None,
+                        },
+                    }
+                }
+            },
+            {
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {
+                            "top1_source_hit": 0,
+                            "top3_source_hit": 0,
+                            "top5_source_hit": 0,
+                            "mrr": 0.0,
+                            "best_expected_source_rank": None,
+                            "best_expected_keyword_rank": None,
+                        },
+                    }
+                }
+            },
+        ]
+
+        summary = build_mode_summary(cases, ["hybrid"])["hybrid"]
+
+        self.assertEqual(summary["total_top1_source_hits"], 1)
+        self.assertEqual(summary["total_top3_source_hits"], 2)
+        self.assertEqual(summary["total_top5_source_hits"], 2)
+        self.assertEqual(summary["average_mrr"], 0.5)
+        self.assertEqual(summary["average_best_expected_source_rank"], 1.5)
+        self.assertEqual(summary["average_best_expected_keyword_rank"], 2.0)
+
     def test_markdown_report_can_be_generated(self):
         def search_fn(_question, **_kwargs):
             return {"chunks": sample_chunks(), "error": None}
@@ -106,6 +223,9 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertIn("| vector |", markdown)
         self.assertIn("alpha.md", markdown)
         self.assertIn("Snippet 1", markdown)
+        self.assertIn("Top1 Source", markdown)
+        self.assertIn("Avg MRR", markdown)
+        self.assertIn("Best expected source rank: 1", markdown)
 
     def test_json_report_can_be_written(self):
         report = {
@@ -222,6 +342,73 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertTrue(calls[0]["reranker_enabled"])
         self.assertTrue(result["reranker_used"])
         self.assertEqual(result["chunks"][0]["rerank_rank"], 1)
+
+    def test_hybrid_reranker_diagnostics_detect_all_verdicts(self):
+        def result(rank, source_hits=1):
+            return {
+                "success": True,
+                "keyword_hit_count": 0,
+                "source_hit_count": source_hits,
+                "retrieval_score": source_hits,
+                "ranking_metrics": {
+                    "top1_source_hit": int(rank == 1),
+                    "top3_source_hit": int(rank is not None and rank <= 3),
+                    "top5_source_hit": int(rank is not None and rank <= 5),
+                    "mrr": 1.0 / rank if rank else 0.0,
+                    "best_expected_source_rank": rank,
+                    "best_expected_keyword_rank": None,
+                },
+            }
+
+        cases = [
+            {
+                "id": "improved",
+                "results": {
+                    "hybrid": result(3),
+                    "hybrid_reranker": result(1),
+                },
+            },
+            {
+                "id": "same",
+                "results": {
+                    "hybrid": result(2),
+                    "hybrid_reranker": result(2),
+                },
+            },
+            {
+                "id": "worse",
+                "results": {
+                    "hybrid": result(1),
+                    "hybrid_reranker": result(None, source_hits=0),
+                },
+            },
+        ]
+
+        diagnostics = build_hybrid_reranker_diagnostics(cases)
+
+        self.assertEqual([item["verdict"] for item in diagnostics], ["improved", "same", "worse"])
+        self.assertEqual(diagnostics[0]["rank_delta"], 2)
+        self.assertIsNone(diagnostics[2]["rank_delta"])
+
+        report = {
+            "summary": {
+                "case_count": 3,
+                "modes": ["hybrid", "hybrid_reranker"],
+                "top_k": 5,
+                "with_answer": False,
+                "with_judge": False,
+                "with_reranker": True,
+            },
+            "mode_summary": build_mode_summary(cases, ["hybrid", "hybrid_reranker"]),
+            "hybrid_reranker_diagnostics": diagnostics,
+            "cases": [],
+        }
+        markdown = render_markdown(report)
+
+        self.assertIn("## Hybrid vs Hybrid Reranker Diagnostics", markdown)
+        self.assertIn("| improved |", markdown)
+        self.assertIn("| same |", markdown)
+        self.assertIn("| worse |", markdown)
 
 
 if __name__ == "__main__":

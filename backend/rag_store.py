@@ -7,18 +7,13 @@ import re
 import threading
 
 from backend.config import get_config, get_embedding_model_settings
+from backend.ocr_service import extract_text_from_document, safe_document_parse_result
 from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
 
 embedding_model = None
 _embedding_model_lock = threading.Lock()
 rag_index_error = None
-
-
-def _get_pdf_reader():
-    from pypdf import PdfReader
-
-    return PdfReader
 
 
 def _get_faiss():
@@ -198,28 +193,28 @@ def load_documents():
         return documents
 
     for file_path in DOCS_PATH.iterdir():
+        if not file_path.is_file():
+            continue
         suffix = file_path.suffix.lower()
 
-        if suffix in [".txt", ".md"]:
-            with open(file_path, "r", encoding="utf-8") as f:
-                documents.append({
-                    "source": file_path.name,
-                    "text": f.read()
-                })
-
-        elif suffix == ".pdf":
-            PdfReader = _get_pdf_reader()
-            reader = PdfReader(file_path)
-            pdf_text = ""
-
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    pdf_text += text + "\n"
-
+        if suffix in {".txt", ".md", ".pdf"}:
+            try:
+                parse_result = extract_text_from_document(file_path)
+            except Exception as exc:
+                parse_result = safe_document_parse_result(
+                    f"Document parsing failed unexpectedly: {exc}",
+                    corrupted_pdf=suffix == ".pdf",
+                )
             documents.append({
                 "source": file_path.name,
-                "text": pdf_text
+                "text": parse_result["text"],
+                "parse_method": parse_result["method"],
+                "ocr_used": parse_result["ocr_used"],
+                "need_ocr": parse_result["need_ocr"],
+                "text_char_count": parse_result["text_char_count"],
+                "warnings": parse_result["warnings"],
+                "corrupted_pdf": parse_result.get("corrupted_pdf", False),
+                "safe_fallback": parse_result.get("safe_fallback", False),
             })
 
     return documents
@@ -236,6 +231,7 @@ def build_chunks():
     for doc in documents:
         text = doc["text"]
         source = doc["source"]
+        chunk_index = 0
 
         for i in range(0, len(text), chunk_size - overlap):
             chunk = text[i:i + chunk_size]
@@ -243,8 +239,15 @@ def build_chunks():
             if is_valid_chunk(chunk):
                 new_chunks.append({
                     "source": source,
-                    "text": chunk.strip()
+                    "text": chunk.strip(),
+                    "chunk_index": chunk_index,
+                    "parse_method": doc.get("parse_method", "text"),
+                    "ocr_used": bool(doc.get("ocr_used", False)),
+                    "need_ocr": bool(doc.get("need_ocr", False)),
+                    "corrupted_pdf": bool(doc.get("corrupted_pdf", False)),
+                    "safe_fallback": bool(doc.get("safe_fallback", False)),
                 })
+                chunk_index += 1
 
     return new_chunks
 
@@ -417,6 +420,24 @@ def list_index_sources() -> list[str]:
     return sorted(set(chunk["source"] for chunk in chunks))
 
 
+def list_index_source_statuses() -> list[dict]:
+    ensure_rag_index()
+    statuses: dict[str, dict] = {}
+    for chunk in chunks:
+        source = str(chunk.get("source", ""))
+        if not source:
+            continue
+        statuses[source] = {
+            "source": source,
+            "parse_method": chunk.get("parse_method", "text"),
+            "ocr_used": bool(chunk.get("ocr_used", False)),
+            "need_ocr": bool(chunk.get("need_ocr", False)),
+            "corrupted_pdf": bool(chunk.get("corrupted_pdf", False)),
+            "safe_fallback": bool(chunk.get("safe_fallback", False)),
+        }
+    return [statuses[source] for source in sorted(statuses)]
+
+
 _BM25_TOKEN_PATTERN = re.compile(
     r"/[A-Za-z0-9_./-]+|[A-Za-z0-9_][A-Za-z0-9_./-]*|[\u4e00-\u9fff]+"
 )
@@ -505,6 +526,11 @@ def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> d
         "chunk_id": _chunk_id(chunk, position),
         "chunk_index": chunk.get("chunk_index", position),
         "retrieval": retrieval,
+        "parse_method": chunk.get("parse_method", "text"),
+        "ocr_used": bool(chunk.get("ocr_used", False)),
+        "need_ocr": bool(chunk.get("need_ocr", False)),
+        "corrupted_pdf": bool(chunk.get("corrupted_pdf", False)),
+        "safe_fallback": bool(chunk.get("safe_fallback", False)),
     }
 
 

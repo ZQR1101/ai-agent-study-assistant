@@ -769,6 +769,16 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.docs_path.name, "docs")
         self.assertEqual(config.rag_index_dir.name, "rag_index")
 
+    def test_ocr_is_disabled_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_config()
+
+        self.assertFalse(config.enable_ocr)
+        self.assertEqual(config.ocr_engine, "none")
+        self.assertEqual(config.ocr_min_text_chars, 80)
+        self.assertEqual(config.ocr_render_dpi, 200)
+        self.assertEqual(config.ocr_max_pages, 20)
+
 
 class RagIndexStatusTests(unittest.TestCase):
     def test_rag_index_status_does_not_load_index(self):
