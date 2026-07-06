@@ -77,10 +77,10 @@ Top-1, Top-3 and MRR use positive cases only. Fallback success and source pollut
 |---|---|---|
 | Hybrid Fallback Success | 0.0% | 73.3% |
 | Hybrid Source Pollution | 100.0% | 26.7% |
-| Reranker Fallback | 0.0% | 73.3% |
-| Reranker Source Pollution | 100.0% | 26.7% |
 | Hybrid Top-1 (positive) | 62.5% | 60.0% |
 | Reranker Top-1 (positive) | 82.5% | 82.5% (unchanged) |
+
+> Reranker inherits Hybrid's upstream retrieval, so its fallback and pollution rates are identical to Hybrid (73.3% / 26.7%).
 
 **Trade-off**: One positive case (`v1_term_rrf`) was incorrectly rejected by the Hybrid gate because its Vector similarity failed the 0.55 threshold AND its BM25 top score (13.4) was below 25.0. This query's correct source is still retrievable at BM25 rank 1 and Reranker rank 2.
 
@@ -136,7 +136,7 @@ Raising `BM25_STRONG_THRESHOLD` above 34 would fix Django but risk rejecting leg
 1. On the final 40 positive cases, Hybrid+Reranker achieved Top-1 82.5%, Top-3 90.0%, and MRR 0.863. Compared with Hybrid, MRR changed by +0.153, while average latency was 28.8x higher (73.4 ms → 2114.4 ms). Reranker Top-1 and MRR were unaffected by the source-pollution fix.
 2. BM25 remained a strong baseline at Top-1 72.5%, Top-3 82.5%, and MRR 0.771; on this corpus it outperformed non-reranked Hybrid MRR 0.710.
 3. OCR on added 36 chunks and reduced parse failures from 2 to 1. It made the pure scanned fixture retrievable by BM25 at rank 1, Hybrid at rank 3, and Hybrid+Reranker at rank 5. Vector still missed it, and every mode missed the mixed-PDF marker in Top-5 because OCR joined the marker into one token.
-4. After the source-pollution fix, Hybrid and Reranker achieved 73.3% fallback success (up from 0%) and 26.7% source pollution (down from 100%). The remaining pollution is driven by Vector's inherent 20% false-positive rate (3/4 cases) and one high-BM25 outlier. BM25 alone remains unfixable with simple score thresholds due to score overlap between positive and negative queries.
+4. After the source-pollution fix, Hybrid and Reranker achieved 73.3% fallback success (up from 0%) and 26.7% source pollution (down from 100%). The remaining pollution is driven by Vector's inherent 20% false-positive rate (3/4 cases) and one high-BM25 outlier. BM25 alone：简单阈值策略暂不能有效修复，因为正/负样本 BM25 分数严重重叠。
 
 ## Cautious Resume STAR Bullets
 
@@ -145,7 +145,7 @@ Raising `BM25_STRONG_THRESHOLD` above 34 would fix Django but risk rejecting leg
 - Compared Vector, BM25, Hybrid RRF, and CrossEncoder reranking; on the final local run, reranking improved Hybrid MRR from 0.710 to 0.863 and Top-1 from 60.0% to 82.5%.
 - Quantified the reranking tradeoff: average retrieval latency increased from 73.4 ms for Hybrid to 2114.4 ms for Hybrid+Reranker on the same machine and case set.
 - Added native, scanned, and mixed PDF parsing checks; OCR recovered 36 additional chunks and changed a pure scanned-PDF source from a miss to rank 1 with BM25.
-- Diagnosed and partially fixed source pollution: BM25/Hybrid/Reranker pollution dropped from 100% to 26.7% through a unified gate that requires Vector signal or strong BM25 evidence before accepting results.
+- Diagnosed and partially fixed source pollution: Hybrid and Reranker pollution dropped from 100% to 26.7% through a unified gate that requires Vector signal or strong BM25 evidence before accepting results.
 - Preserved source URLs, collection timestamps, SHA-256 hashes, per-document parse methods, and generated JSON metrics so benchmark claims can be reproduced and audited.
 
 ## Results Too Small or Fragile for a Resume Claim
@@ -156,5 +156,5 @@ Raising `BM25_STRONG_THRESHOLD` above 34 would fix Django but risk rejecting leg
 - Do not present the V1/V2/V3 index-build times as a strict scaling curve: the V3 runner reused parsed documents to avoid a duplicate OCR pass.
 - Do not claim answer correctness from this run: it evaluates source ranking only and does not call an LLM answer generator, human annotator, or LLM-as-Judge.
 - Treat the 15 negative cases as a diagnostic signal, not a calibrated production out-of-domain distribution.
-- Do not claim BM25 source pollution is fixed: BM25 mode alone still has 100% pollution because its score distribution for positive and negative queries overlaps; the fix applies only to Hybrid and Reranker via the Vector gate component.
+- Do not claim BM25 source pollution is solved: BM25 mode still has 100% pollution with current simple-threshold strategy; the fix applies only to Hybrid and Reranker via the Vector gate component.
 - Do not claim V1/V2 negative metrics match V3: V1 and V2 data were collected before the fix and still show 100% source pollution for BM25/Hybrid/Reranker.

@@ -87,6 +87,14 @@ def rebuild_and_measure(version: str) -> dict:
     rag_store.rebuild_rag_index(documents=documents)
     build_ms = (perf_counter() - started_at) * 1000
     status = rag_store.get_rag_index_status()
+    qs = getattr(rag_store, "last_build_quality_stats", {})
+    quality_summary = {
+        "chunks_kept": qs.get("kept", 0),
+        "chunks_low_quality": qs.get("low_quality", 0),
+        "chunks_dropped": qs.get("dropped", 0),
+        "dropped_count": qs.get("dropped", 0),
+        "low_quality_count": qs.get("low_quality", 0),
+    }
     metrics.update({
         "version": version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -100,6 +108,7 @@ def rebuild_and_measure(version: str) -> dict:
         "ocr_engine": config.ocr_engine,
         "reranker_configured": config.enable_reranker and bool(config.reranker_model),
         "reranker_model": config.reranker_model or None,
+        "quality_filter": quality_summary,
     })
     return metrics
 

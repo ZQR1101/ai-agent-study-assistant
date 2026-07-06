@@ -226,7 +226,7 @@ class HybridSearchTests(unittest.TestCase):
     def test_empty_knowledge_base_does_not_error(self):
         with (
             patch("backend.rag_store._load_chunks_file_only", return_value=False),
-            patch("backend.rag_store.build_chunks", return_value=[]),
+            patch("backend.rag_store.build_chunks", return_value=([], {})),
         ):
             results = search_relevant_chunks("anything", retrieval_mode="bm25")
 

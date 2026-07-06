@@ -267,7 +267,10 @@ class RagStoreTests(unittest.TestCase):
                 patch.object(
                     rag_store,
                     "build_chunks",
-                    return_value=[{"source": "doc.md", "text": "RAG retrieves context before generation."}],
+                    return_value=(
+                        [{"source": "doc.md", "text": "RAG retrieves context before generation."}],
+                        {"kept": 1, "low_quality": 0, "dropped": 0},
+                    ),
                 ),
             ):
                 rag_store.embedding_model = None

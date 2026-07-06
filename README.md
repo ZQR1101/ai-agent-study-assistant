@@ -831,7 +831,7 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - BM25 正确拒答率 0%（无相似度阈值，任意词匹配均返回结果）
 - Hybrid / Reranker 经 source-pollution fix 后拒答率从 0% 提升至 73.3%
 - 剩余 26.7% 污染来自 Vector 固有误判和极高 BM25 分数
-- BM25 单独使用时 score pollution 目前无法通过简单阈值消除（正/负样本 BM25 分数严重重叠）
+- BM25 单独使用时 score pollution 目前简单阈值策略暂不能有效修复（正/负样本 BM25 分数严重重叠）
 
 ```bash
 # 运行完整 V3 评测（含 source-pollution fix）
@@ -855,7 +855,7 @@ python scripts/benchmark_rag_batch.py \
 - 当前还没有部署说明。
 - LLM Planner 规划质量仍需要更多样本验证。
 - RAG Reranker 平均耗时 ~2s/query（本地 CrossEncoder），不适合低延迟场景。
-- RAG 负样本处理：BM25 单独使用时 source pollution 为 100%，尚无法通过简单阈值解决。
+- RAG 负样本处理：BM25 单独使用时 source pollution 为 100%，简单阈值策略暂不能有效修复。
 - 前端还没有正式截图和 GIF 展示。
 
 ## 25. Roadmap

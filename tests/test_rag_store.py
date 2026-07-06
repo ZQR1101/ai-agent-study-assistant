@@ -27,7 +27,7 @@ class OCRRagStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.object(rag_store, "DOCS_PATH", docs_path):
-                chunks = rag_store.build_chunks()
+                chunks, _ = rag_store.build_chunks()
 
         self.assertTrue(chunks)
         self.assertEqual(chunks[0]["parse_method"], "text")
@@ -43,7 +43,7 @@ class OCRRagStoreTests(unittest.TestCase):
             "need_ocr": True,
         }
         with patch("backend.rag_store.load_documents", return_value=[document]):
-            chunks = rag_store.build_chunks()
+            chunks, _ = rag_store.build_chunks()
 
         self.assertEqual(chunks[0]["parse_method"], "ocr")
         self.assertTrue(chunks[0]["ocr_used"])
@@ -58,7 +58,7 @@ class OCRRagStoreTests(unittest.TestCase):
             "need_ocr": False,
         }]
         with patch("backend.rag_store.load_documents") as load_documents:
-            chunks = rag_store.build_chunks(documents=documents)
+            chunks, _ = rag_store.build_chunks(documents=documents)
 
         load_documents.assert_not_called()
         self.assertTrue(chunks)
@@ -88,7 +88,7 @@ class OCRRagStoreTests(unittest.TestCase):
                     return_value=parse_result,
                 ),
             ):
-                chunks = rag_store.build_chunks()
+                chunks, _ = rag_store.build_chunks()
 
         self.assertTrue(chunks)
         self.assertIn("RAPID-OCR-2026", chunks[0]["text"])

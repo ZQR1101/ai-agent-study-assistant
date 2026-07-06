@@ -14,6 +14,7 @@ from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 embedding_model = None
 _embedding_model_lock = threading.Lock()
 rag_index_error = None
+last_build_quality_stats: dict = {}
 
 
 def _get_faiss():
@@ -111,6 +112,111 @@ def is_valid_chunk(text: str, min_length: int = MIN_CHUNK_LENGTH) -> bool:
 
     return True
 
+
+# ---------------------------------------------------------------------------
+# Chunk quality filter – conservative, removes only obvious garbage
+# ---------------------------------------------------------------------------
+
+CHUNK_QUALITY_MIN_MEANINGFUL_CHARS = 40
+CHUNK_QUALITY_MAX_SYMBOL_RATIO = 0.45
+
+
+def _char_type_counts(text: str) -> dict:
+    """Count character types for CJK-aware quality heuristics."""
+    alpha = digit = cjk = symbol = 0
+    for ch in text:
+        cp = ord(ch)
+        if ch.isalpha():
+            alpha += 1
+        elif ch.isdigit():
+            digit += 1
+        elif (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+              or 0x20000 <= cp <= 0x2A6DF or 0xF900 <= cp <= 0xFAFF):
+            cjk += 1
+        elif not ch.isspace():
+            symbol += 1
+    return {"alpha": alpha, "digit": digit, "cjk": cjk, "symbol": symbol, "total": max(len(text), 1)}
+
+
+def _repetitive_line_ratio(text: str) -> float:
+    """Ratio of unique to total non-empty lines (lower = more repetition)."""
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) < 3:
+        return 1.0
+    return len(set(lines)) / len(lines)
+
+
+# Patterns that suggest the chunk is a pure reference / page-number fragment
+_REF_FRAGMENT_RE = re.compile(r"^\s*\[?\d+[,\d\s\-\]]*\]?\s*$")
+_PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,4}\s*$")
+_GARBLED_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def chunk_quality_label(text: str) -> tuple[str, dict]:
+    """Return (verdict, reason_map) for a chunk.
+
+    Verdict values
+    --------------
+    keep      – normal, keep as-is
+    low       – suspicious but retain (flagged as low_quality)
+    drop      – obvious garbage, discard
+    """
+    if not text or not text.strip():
+        return "drop", {"reason": "empty"}
+
+    ct = _char_type_counts(text)
+    total = ct["total"]
+    meaningful = ct["alpha"] + ct["digit"] + ct["cjk"]
+    symbol_ratio = ct["symbol"] / total
+    meaningful_ratio = meaningful / total
+    digit_ratio = ct["digit"] / total
+
+    reasons: dict[str, float] = {}
+
+    # --- Hard drop: obvious garbage ---
+    if meaningful < CHUNK_QUALITY_MIN_MEANINGFUL_CHARS:
+        reasons["meaningful_chars"] = float(meaningful)
+        return "drop", reasons
+
+    if _GARBLED_RE.search(text):
+        reasons["garbled"] = 1.0
+        return "drop", reasons
+
+    if _PAGE_NUMBER_RE.match(text.strip()):
+        reasons["page_number"] = 1.0
+        return "drop", reasons
+
+    # Very high symbol ratio with low meaningful content
+    if symbol_ratio > CHUNK_QUALITY_MAX_SYMBOL_RATIO and meaningful_ratio < 0.25:
+        reasons["symbol_ratio"] = round(symbol_ratio, 3)
+        reasons["meaningful_ratio"] = round(meaningful_ratio, 3)
+        return "drop", reasons
+
+    # --- Low-quality flag (keep but mark) ---
+    if symbol_ratio > 0.30:
+        reasons["high_symbol"] = round(symbol_ratio, 3)
+
+    if digit_ratio > 0.30:
+        reasons["high_digits"] = round(digit_ratio, 3)
+
+    if _repetitive_line_ratio(text) < 0.40:
+        reasons["repetitive"] = round(_repetitive_line_ratio(text), 3)
+
+    if _REF_FRAGMENT_RE.match(text.strip()[:40]):
+        reasons["ref_fragment"] = 1.0
+
+    if text.count("�") > 3:
+        reasons["replacement_chars"] = float(text.count("�"))
+
+    if reasons:
+        return "low", reasons
+
+    return "keep", {}
+
+
+# ---------------------------------------------------------------------------
+# Query preprocessing helpers
+# ---------------------------------------------------------------------------
 
 _RETRIEVAL_QUERY_NOISE_PATTERNS = (
     re.compile(r"(?:请问|请|麻烦)?(?:告诉我|给我讲讲|介绍一下|解释一下|说明一下)"),
@@ -230,6 +336,7 @@ def build_chunks(documents: list[dict] | None = None):
     overlap = 100
 
     new_chunks = []
+    quality_stats = {"kept": 0, "low_quality": 0, "dropped": 0, "dropped_reasons": []}
 
     for doc in documents:
         text = doc["text"]
@@ -237,22 +344,45 @@ def build_chunks(documents: list[dict] | None = None):
         chunk_index = 0
 
         for i in range(0, len(text), chunk_size - overlap):
-            chunk = text[i:i + chunk_size]
+            chunk_text = text[i:i + chunk_size]
+            trimmed = chunk_text.strip()
 
-            if is_valid_chunk(chunk):
-                new_chunks.append({
+            if not is_valid_chunk(trimmed):
+                continue
+
+            verdict, reasons = chunk_quality_label(trimmed)
+
+            if verdict == "drop":
+                quality_stats["dropped"] += 1
+                quality_stats["dropped_reasons"].append({
                     "source": source,
-                    "text": chunk.strip(),
-                    "chunk_index": chunk_index,
-                    "parse_method": doc.get("parse_method", "text"),
-                    "ocr_used": bool(doc.get("ocr_used", False)),
-                    "need_ocr": bool(doc.get("need_ocr", False)),
-                    "corrupted_pdf": bool(doc.get("corrupted_pdf", False)),
-                    "safe_fallback": bool(doc.get("safe_fallback", False)),
+                    "text_preview": trimmed[:80],
+                    "reasons": reasons,
                 })
-                chunk_index += 1
+                continue
 
-    return new_chunks
+            chunk_entry = {
+                "source": source,
+                "text": trimmed,
+                "chunk_index": chunk_index,
+                "parse_method": doc.get("parse_method", "text"),
+                "ocr_used": bool(doc.get("ocr_used", False)),
+                "need_ocr": bool(doc.get("need_ocr", False)),
+                "corrupted_pdf": bool(doc.get("corrupted_pdf", False)),
+                "safe_fallback": bool(doc.get("safe_fallback", False)),
+            }
+
+            if verdict == "low":
+                chunk_entry["low_quality"] = True
+                chunk_entry["quality_flags"] = reasons
+                quality_stats["low_quality"] += 1
+            else:
+                quality_stats["kept"] += 1
+
+            new_chunks.append(chunk_entry)
+            chunk_index += 1
+
+    return new_chunks, quality_stats
 
 
 def save_rag_index():
@@ -303,7 +433,9 @@ def rebuild_rag_index(documents: list[dict] | None = None):
 
     print("正在构建 FAISS RAG 索引...")
 
-    chunks = build_chunks(documents=documents)
+    global last_build_quality_stats
+    chunks, quality_stats = build_chunks(documents=documents)
+    last_build_quality_stats = quality_stats
     _reset_bm25_index()
 
     if not chunks:
@@ -579,7 +711,7 @@ def _ensure_keyword_chunks() -> None:
         return
 
     try:
-        chunks = build_chunks()
+        chunks, _quality_stats = build_chunks()
         rag_index_error = None
     except Exception as exc:
         chunks = []
