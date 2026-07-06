@@ -1,0 +1,202 @@
+[
+  {
+    "id": "v1_fact_chunking",
+    "question": "当前项目的 RAG chunk_size 和 overlap 分别是多少？",
+    "expected_keywords": ["500", "100", "切块"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "代码实现参数查找。"
+  },
+  {
+    "id": "v1_fact_vector_threshold",
+    "question": "Vector 检索当前使用的相似度阈值是多少？",
+    "expected_keywords": ["0.55", "SIMILARITY_THRESHOLD", "Vector"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "验证向量阈值事实。"
+  },
+  {
+    "id": "v1_fact_run_storage",
+    "question": "RunRepository 默认把 Run 保存在哪里，使用什么格式？",
+    "expected_keywords": ["data/runs", "JSON", "一个文件"],
+    "expected_sources": ["project_run_repository.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "区分 Run JSON 与 SQLAlchemy 会话历史。"
+  },
+  {
+    "id": "v1_fact_tool_confirmation",
+    "question": "危险工具的一次性 confirmation token 绑定哪些内容？",
+    "expected_keywords": ["工具名", "参数", "身份", "一次性"],
+    "expected_sources": ["project_tool_registry.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "工具安全事实。"
+  },
+  {
+    "id": "v1_fact_db_flags",
+    "question": "启用 PostgreSQL 会话历史需要哪些配置？",
+    "expected_keywords": ["ENABLE_DB_HISTORY", "DATABASE_URL", "SQLAlchemy"],
+    "expected_sources": ["project_sqlalchemy_session_history.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "会话历史配置。"
+  },
+  {
+    "id": "v1_fact_judge_dimensions",
+    "question": "项目的 LLM-as-Judge 会评估哪些维度？",
+    "expected_keywords": ["correctness", "relevance", "completeness", "clarity", "citation_quality"],
+    "expected_sources": ["project_llm_judge.md"],
+    "case_type": "fact_lookup",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "Judge 结构化维度。"
+  },
+  {
+    "id": "v1_concept_retrieval_modes",
+    "question": "解释 Vector、BM25 和 Hybrid 三种检索模式的区别。",
+    "expected_keywords": ["Vector", "BM25", "Hybrid", "Reciprocal Rank Fusion"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "concept_explanation",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "核心检索概念。"
+  },
+  {
+    "id": "v1_concept_run_vs_session",
+    "question": "RunRepository 和 SQLAlchemy 会话历史的职责有什么不同？",
+    "expected_keywords": ["执行", "会话恢复", "JSON", "PostgreSQL"],
+    "expected_sources": ["project_run_repository.md", "project_sqlalchemy_session_history.md"],
+    "case_type": "concept_explanation",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "跨文档职责比较。"
+  },
+  {
+    "id": "v1_concept_agent_runtimes",
+    "question": "Legacy Agent 与 LangGraph Runtime 在当前项目中如何分工？",
+    "expected_keywords": ["Planner", "Executor", "StateGraph", "use_langgraph"],
+    "expected_sources": ["project_agent_langgraph.md"],
+    "case_type": "concept_explanation",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "两条运行路径比较。"
+  },
+  {
+    "id": "v1_concept_reranker_fallback",
+    "question": "Reranker 模型加载失败时检索流程会怎样处理？",
+    "expected_keywords": ["原召回顺序", "reranker_error", "fallback"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "concept_explanation",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "可选模型失败降级。"
+  },
+  {
+    "id": "v1_term_rrf",
+    "question": "RRF 在项目的 Hybrid Search 中是什么意思？",
+    "expected_keywords": ["Reciprocal Rank Fusion", "Vector", "BM25", "融合"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "acronym_term",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "英文缩写。"
+  },
+  {
+    "id": "v1_term_aci",
+    "question": "Agent Loop 里的 ACI 指什么？",
+    "expected_keywords": ["ACI", "Agent", "接口"],
+    "expected_sources": ["agent_hot_01_agent_loop_and_aci.md"],
+    "case_type": "acronym_term",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "现有 docs 专有名词。"
+  },
+  {
+    "id": "v1_term_mcp",
+    "question": "MCP 的 host、client、server 分别是什么？",
+    "expected_keywords": ["MCP", "host", "client", "server"],
+    "expected_sources": ["agent_hot_02_mcp_architecture_primitives.md"],
+    "case_type": "acronym_term",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "中英文混合架构名词。"
+  },
+  {
+    "id": "v1_mixed_tool_registry_execute",
+    "question": "为什么所有 tool call 都要经过 ToolRegistry.execute？",
+    "expected_keywords": ["ToolRegistry.execute", "审计", "确认", "统一执行"],
+    "expected_sources": ["project_tool_registry.md"],
+    "case_type": "mixed_language",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "代码标识符和中文问题混合。"
+  },
+  {
+    "id": "v1_mixed_stategraph",
+    "question": "StateGraph conditional routing 在这个学习助手里负责什么？",
+    "expected_keywords": ["StateGraph", "条件路由", "节点", "intent"],
+    "expected_sources": ["project_agent_langgraph.md"],
+    "case_type": "mixed_language",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "LangGraph 英文 API。"
+  },
+  {
+    "id": "v1_mixed_index_flat_ip",
+    "question": "FAISS IndexFlatIP 为什么可以表示 cosine similarity？",
+    "expected_keywords": ["IndexFlatIP", "L2", "内积", "余弦相似度"],
+    "expected_sources": ["project_rag_implementation.md"],
+    "case_type": "mixed_language",
+    "batch": "v1",
+    "is_negative": false,
+    "notes": "向量索引中英文混合。"
+  },
+  {
+    "id": "v1_negative_kubernetes",
+    "question": "这个项目的 Kubernetes HPA 最小副本数是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v1",
+    "is_negative": true,
+    "notes": "项目没有 Kubernetes HPA 配置。"
+  },
+  {
+    "id": "v1_negative_kafka",
+    "question": "项目的 Kafka consumer group 名称是什么？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v1",
+    "is_negative": true,
+    "notes": "项目没有 Kafka。"
+  },
+  {
+    "id": "v1_negative_ios",
+    "question": "iOS 客户端最低支持哪个系统版本？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v1",
+    "is_negative": true,
+    "notes": "项目没有 iOS 客户端。"
+  },
+  {
+    "id": "v1_negative_blockchain",
+    "question": "项目使用哪条区块链保存学习记录？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v1",
+    "is_negative": true,
+    "notes": "项目没有区块链存储。"
+  }
+]

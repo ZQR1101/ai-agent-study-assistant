@@ -53,6 +53,24 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(cases[0]["id"], "case-1")
         self.assertEqual(cases[0]["expected_sources"], ["alpha.md", "database.md"])
 
+    def test_load_cases_preserves_batch_negative_and_ocr_metadata(self):
+        case = {
+            **sample_case(),
+            "case_type": "ocr_fact",
+            "batch": "v3",
+            "is_negative": True,
+            "requires_ocr": True,
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "cases.json"
+            path.write_text(json.dumps([case]), encoding="utf-8")
+            loaded = load_cases(path)[0]
+
+        self.assertEqual(loaded["case_type"], "ocr_fact")
+        self.assertEqual(loaded["batch"], "v3")
+        self.assertTrue(loaded["is_negative"])
+        self.assertTrue(loaded["requires_ocr"])
+
     def test_expected_keyword_hits_are_counted(self):
         result = score_retrieval(sample_case(), "vector", 5, sample_chunks())
 
@@ -223,9 +241,54 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertIn("| vector |", markdown)
         self.assertIn("alpha.md", markdown)
         self.assertIn("Snippet 1", markdown)
-        self.assertIn("Top1 Source", markdown)
+        self.assertIn("Top-1", markdown)
+        self.assertIn("P95 ms", markdown)
+        self.assertIn("Source Pollution", markdown)
         self.assertIn("Avg MRR", markdown)
         self.assertIn("Best expected source rank: 1", markdown)
+
+    def test_negative_summary_tracks_fallback_and_source_pollution(self):
+        negative_cases = [
+            {
+                "id": "fallback",
+                "is_negative": True,
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {},
+                        "fallback_success": True,
+                        "source_pollution": False,
+                        "latency_ms": 10.0,
+                    }
+                },
+            },
+            {
+                "id": "polluted",
+                "is_negative": True,
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {},
+                        "fallback_success": False,
+                        "source_pollution": True,
+                        "latency_ms": 30.0,
+                    }
+                },
+            },
+        ]
+
+        summary = build_mode_summary(negative_cases, ["hybrid"])["hybrid"]
+
+        self.assertEqual(summary["fallback_success_rate"], 0.5)
+        self.assertEqual(summary["source_pollution_rate"], 0.5)
+        self.assertEqual(summary["average_latency_ms"], 20.0)
+        self.assertEqual(summary["p95_latency_ms"], 30.0)
 
     def test_json_report_can_be_written(self):
         report = {

@@ -1,0 +1,222 @@
+[
+  {
+    "id": "v3_rag_memory_types",
+    "question": "RAG 原论文如何组合 parametric memory 和 non-parametric memory？",
+    "expected_keywords": ["parametric memory", "non-parametric memory", "dense vector index"],
+    "expected_sources": ["paper_rag_2020.pdf"],
+    "case_type": "concept_explanation",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "RAG 原论文概念。"
+  },
+  {
+    "id": "v3_rag_sequence_token",
+    "question": "RAG-Sequence 与 RAG-Token 两种模型有什么区别？",
+    "expected_keywords": ["RAG-Sequence", "RAG-Token", "retrieved passages"],
+    "expected_sources": ["paper_rag_2020.pdf"],
+    "case_type": "acronym_term",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "RAG 论文专有模型名。"
+  },
+  {
+    "id": "v3_rag_provenance",
+    "question": "RAG 论文认为显式非参数记忆如何帮助知识更新和 provenance？",
+    "expected_keywords": ["provenance", "world knowledge", "non-parametric"],
+    "expected_sources": ["paper_rag_2020.pdf"],
+    "case_type": "mixed_language",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "论文动机。"
+  },
+  {
+    "id": "v3_faiss_k_selection",
+    "question": "FAISS GPU 论文的 k-selection 设计解决了什么瓶颈？",
+    "expected_keywords": ["k-selection", "GPU", "memory hierarchy", "parallelism"],
+    "expected_sources": ["paper_faiss_2017.pdf"],
+    "case_type": "concept_explanation",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "FAISS 论文算法。"
+  },
+  {
+    "id": "v3_faiss_speedup",
+    "question": "Billion-scale similarity search 论文报告的 GPU k-NN 相对先前 state of the art 加速是多少？",
+    "expected_keywords": ["8.5", "GPU", "state of the art"],
+    "expected_sources": ["paper_faiss_2017.pdf"],
+    "case_type": "fact_lookup",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "论文数字事实。"
+  },
+  {
+    "id": "v3_faiss_yfcc",
+    "question": "FAISS 论文在 YFCC100M 上构建了多大规模的 k-NN graph？",
+    "expected_keywords": ["95 million", "Yfcc100M", "35 minutes", "k-NN graph"],
+    "expected_sources": ["paper_faiss_2017.pdf"],
+    "case_type": "fact_lookup",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "大规模实验事实。"
+  },
+  {
+    "id": "v3_react_definition",
+    "question": "ReAct 为什么要交错生成 reasoning traces 和 actions？",
+    "expected_keywords": ["reasoning traces", "actions", "interleaved", "external sources"],
+    "expected_sources": ["paper_react_2023.pdf"],
+    "case_type": "concept_explanation",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "ReAct 核心机制。"
+  },
+  {
+    "id": "v3_react_qa_tasks",
+    "question": "ReAct 论文在哪两个任务上评估问答和事实验证？",
+    "expected_keywords": ["HotpotQA", "Fever", "question answering", "fact verification"],
+    "expected_sources": ["paper_react_2023.pdf"],
+    "case_type": "fact_lookup",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "ReAct 数据集。"
+  },
+  {
+    "id": "v3_react_interactive",
+    "question": "ReAct 在 ALFWorld 和 WebShop 上报告了怎样的提升？",
+    "expected_keywords": ["ALFWorld", "WebShop", "34%", "10%"],
+    "expected_sources": ["paper_react_2023.pdf"],
+    "case_type": "mixed_language",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "交互任务结果。"
+  },
+  {
+    "id": "v3_survey_paradigms",
+    "question": "RAG Survey 将 RAG 范式分成哪三个阶段？",
+    "expected_keywords": ["Naive RAG", "Advanced RAG", "Modular RAG"],
+    "expected_sources": ["paper_rag_survey_2023.pdf"],
+    "case_type": "fact_lookup",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Survey 分类。"
+  },
+  {
+    "id": "v3_survey_tripartite",
+    "question": "RAG Survey 讨论的 retrieval、generation、augmentation 三个基础部分是什么？",
+    "expected_keywords": ["retrieval", "generation", "augmentation"],
+    "expected_sources": ["paper_rag_survey_2023.pdf"],
+    "case_type": "concept_explanation",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Survey 框架。"
+  },
+  {
+    "id": "v3_survey_motivation",
+    "question": "RAG Survey 认为 LLM 面临哪些知识问题？",
+    "expected_keywords": ["hallucination", "outdated knowledge", "untraceable"],
+    "expected_sources": ["paper_rag_survey_2023.pdf"],
+    "case_type": "concept_explanation",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Survey 动机。"
+  },
+  {
+    "id": "v3_ocr_scanned_marker",
+    "question": "FAISSSCAN 2017 OCR ONLY 标记位于哪个来源文件？",
+    "expected_keywords": ["FAISSSCAN", "2017", "OCR ONLY"],
+    "expected_sources": ["paper_faiss_2017_scanned_pages.pdf"],
+    "case_type": "ocr_fact",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": true,
+    "notes": "纯图片 PDF；关闭 OCR 时标记不可进入索引。"
+  },
+  {
+    "id": "v3_ocr_mixed_marker",
+    "question": "RAGMIX 2026 OCR PAGE 这个测试标记来自哪个混合 PDF？",
+    "expected_keywords": ["RAGMIX", "2026", "OCR PAGE"],
+    "expected_sources": ["paper_rag_2020_mixed_pages.pdf"],
+    "case_type": "ocr_fact",
+    "batch": "v3",
+    "is_negative": false,
+    "requires_ocr": true,
+    "notes": "混合 PDF 的图片页标记。"
+  },
+  {
+    "id": "v3_negative_graph_neural_network",
+    "question": "这些论文中 GraphSAGE 的邻居采样公式是什么？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "未加入 GraphSAGE 论文。"
+  },
+  {
+    "id": "v3_negative_diffusion",
+    "question": "Stable Diffusion 的 VAE 下采样倍数是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "知识库没有扩散模型论文。"
+  },
+  {
+    "id": "v3_negative_quantum",
+    "question": "Shor 算法分解 2048 位 RSA 的门复杂度是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "知识库没有量子计算材料。"
+  },
+  {
+    "id": "v3_negative_cv",
+    "question": "YOLOv8 的 C2f 模块具体有多少层？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "知识库没有 YOLOv8 文档。"
+  },
+  {
+    "id": "v3_negative_speech",
+    "question": "Whisper large-v3 的 mel bins 数量是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "知识库没有 Whisper 规格。"
+  },
+  {
+    "id": "v3_negative_database",
+    "question": "CockroachDB 的默认 range size 是多少 MiB？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v3",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "知识库没有 CockroachDB 文档。"
+  }
+]

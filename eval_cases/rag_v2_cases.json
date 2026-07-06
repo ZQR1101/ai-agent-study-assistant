@@ -1,0 +1,152 @@
+[
+  {
+    "id": "v2_fastapi_body_model",
+    "question": "FastAPI 如何识别并校验 JSON request body？",
+    "expected_keywords": ["Pydantic", "request body", "JSON Schema", "OpenAPI"],
+    "expected_sources": ["official_fastapi_request_dependencies.md"],
+    "case_type": "concept_explanation",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "FastAPI 官方文档整理。"
+  },
+  {
+    "id": "v2_fastapi_depends",
+    "question": "FastAPI 的 Depends 适合承载哪些共享逻辑？",
+    "expected_keywords": ["Depends", "数据库会话", "安全", "依赖树"],
+    "expected_sources": ["official_fastapi_request_dependencies.md"],
+    "case_type": "fact_lookup",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "依赖注入场景。"
+  },
+  {
+    "id": "v2_sqlalchemy_session",
+    "question": "SQLAlchemy ORM 中 Session.commit 会完成什么？",
+    "expected_keywords": ["Session", "flush", "commit", "事务"],
+    "expected_sources": ["official_sqlalchemy_orm_quick_start.md"],
+    "case_type": "concept_explanation",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "ORM 工作单元。"
+  },
+  {
+    "id": "v2_sqlalchemy_mapped_column",
+    "question": "SQLAlchemy 2.x 声明式 ORM 中 Mapped 和 mapped_column 有什么作用？",
+    "expected_keywords": ["Mapped", "mapped_column", "Declarative", "数据库列"],
+    "expected_sources": ["official_sqlalchemy_orm_quick_start.md"],
+    "case_type": "mixed_language",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "SQLAlchemy 专有 API。"
+  },
+  {
+    "id": "v2_faiss_data_type",
+    "question": "FAISS 输入向量矩阵使用什么数据类型和内存排列？",
+    "expected_keywords": ["float32", "row-major", "固定维度"],
+    "expected_sources": ["official_faiss_getting_started.md"],
+    "case_type": "fact_lookup",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "FAISS 基础输入约束。"
+  },
+  {
+    "id": "v2_faiss_add_search",
+    "question": "FAISS Index 的 add 和 search 分别做什么？",
+    "expected_keywords": ["Index", "add", "search", "k-nearest-neighbor"],
+    "expected_sources": ["official_faiss_getting_started.md"],
+    "case_type": "acronym_term",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "中英文 API 检索。"
+  },
+  {
+    "id": "v2_langgraph_nodes_edges",
+    "question": "LangGraph 的 node、edge 和 conditional edge 如何组成 StateGraph？",
+    "expected_keywords": ["StateGraph", "节点", "conditional edge", "START", "END"],
+    "expected_sources": ["official_langgraph_concepts.md"],
+    "case_type": "concept_explanation",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "LangGraph 核心概念。"
+  },
+  {
+    "id": "v2_langgraph_vs_langchain",
+    "question": "LangGraph 和 LangChain 的定位有什么区别？",
+    "expected_keywords": ["orchestration runtime", "低层", "Agent 抽象", "执行控制"],
+    "expected_sources": ["official_langgraph_concepts.md"],
+    "case_type": "concept_explanation",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "框架定位比较。"
+  },
+  {
+    "id": "v2_pydantic_methods",
+    "question": "Pydantic BaseModel 常用的 validate、dump 和 JSON Schema 方法有哪些？",
+    "expected_keywords": ["model_validate", "model_dump", "model_json_schema", "BaseModel"],
+    "expected_sources": ["official_pydantic_models.md"],
+    "case_type": "acronym_term",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "Pydantic API 名称。"
+  },
+  {
+    "id": "v2_pydantic_strict",
+    "question": "Pydantic 默认类型转换与 strict mode 有什么区别？",
+    "expected_keywords": ["类型转换", "strict mode", "ValidationError"],
+    "expected_sources": ["official_pydantic_models.md"],
+    "case_type": "mixed_language",
+    "batch": "v2",
+    "is_negative": false,
+    "notes": "校验与 coercion。"
+  },
+  {
+    "id": "v2_negative_django",
+    "question": "Django ORM 的 QuerySet select_related 在本项目中如何配置？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v2",
+    "is_negative": true,
+    "notes": "知识库没有 Django 实现。"
+  },
+  {
+    "id": "v2_negative_redis",
+    "question": "项目使用的 Redis Cluster 有多少个 hash slot？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v2",
+    "is_negative": true,
+    "notes": "项目没有 Redis Cluster。"
+  },
+  {
+    "id": "v2_negative_celery",
+    "question": "Celery worker 的默认并发数配置是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v2",
+    "is_negative": true,
+    "notes": "项目没有 Celery。"
+  },
+  {
+    "id": "v2_negative_grpc",
+    "question": "系统的 gRPC proto package 名称是什么？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v2",
+    "is_negative": true,
+    "notes": "项目没有 gRPC schema。"
+  },
+  {
+    "id": "v2_negative_prometheus",
+    "question": "Prometheus 指标 ai_request_queue_depth 的告警阈值是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "v2",
+    "is_negative": true,
+    "notes": "知识库没有该指标。"
+  }
+]

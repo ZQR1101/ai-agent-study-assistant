@@ -49,6 +49,21 @@ class OCRRagStoreTests(unittest.TestCase):
         self.assertTrue(chunks[0]["ocr_used"])
         self.assertTrue(chunks[0]["need_ocr"])
 
+    def test_build_chunks_can_reuse_preparsed_documents(self):
+        documents = [{
+            "source": "preparsed.md",
+            "text": "Preparsed retrieval content is reused without parsing the document again. " * 3,
+            "parse_method": "text",
+            "ocr_used": False,
+            "need_ocr": False,
+        }]
+        with patch("backend.rag_store.load_documents") as load_documents:
+            chunks = rag_store.build_chunks(documents=documents)
+
+        load_documents.assert_not_called()
+        self.assertTrue(chunks)
+        self.assertEqual(chunks[0]["source"], "preparsed.md")
+
     def test_rapidocr_document_text_enters_chunks_and_keyword_search(self):
         parse_result = {
             "text": (

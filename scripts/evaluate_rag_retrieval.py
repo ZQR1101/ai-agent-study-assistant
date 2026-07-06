@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
 
 
@@ -88,11 +89,19 @@ def load_cases(path: str | Path) -> list[dict]:
         if case_id in seen_ids:
             raise ValueError(f"duplicate case id: {case_id}")
         seen_ids.add(case_id)
+        expected_sources = _string_list(
+            raw_case.get("expected_sources", []), "expected_sources", case_id
+        )
+        is_negative = bool(raw_case.get("is_negative", False))
         cases.append({
             "id": case_id,
             "question": question,
             "expected_keywords": _string_list(raw_case.get("expected_keywords", []), "expected_keywords", case_id),
-            "expected_sources": _string_list(raw_case.get("expected_sources", []), "expected_sources", case_id),
+            "expected_sources": expected_sources,
+            "case_type": str(raw_case.get("case_type") or "fact_lookup").strip(),
+            "batch": str(raw_case.get("batch") or "unspecified").strip(),
+            "is_negative": is_negative,
+            "requires_ocr": bool(raw_case.get("requires_ocr", False)),
             "notes": str(raw_case.get("notes") or "").strip(),
         })
     return cases
@@ -156,6 +165,7 @@ def compute_ranking_metrics(
         "top1_source_hit": int(best_source_rank is not None and best_source_rank <= 1),
         "top3_source_hit": int(best_source_rank is not None and best_source_rank <= 3),
         "top5_source_hit": int(best_source_rank is not None and best_source_rank <= 5),
+        "top_k_source_hit": int(best_source_rank is not None),
         "mrr": 1.0 / best_source_rank if best_source_rank is not None else 0.0,
         "best_expected_source_rank": best_source_rank,
         "best_expected_keyword_rank": best_keyword_rank,
@@ -231,6 +241,9 @@ def score_retrieval(case: dict, mode: str, top_k: int, chunks: list[dict]) -> di
         "ranking_metrics": ranking_metrics,
         "reranker_enabled": mode == RERANKER_MODE,
         "reranker_used": any(bool(chunk.get("reranker_used")) for chunk in serialized),
+        "is_negative": bool(case.get("is_negative", False)),
+        "fallback_success": bool(case.get("is_negative", False) and not serialized),
+        "source_pollution": bool(case.get("is_negative", False) and serialized),
     }
 
 
@@ -254,12 +267,17 @@ def failed_result(mode: str, top_k: int, error: Exception | str) -> dict:
             "top1_source_hit": 0,
             "top3_source_hit": 0,
             "top5_source_hit": 0,
+            "top_k_source_hit": 0,
             "mrr": 0.0,
             "best_expected_source_rank": None,
             "best_expected_keyword_rank": None,
         },
         "reranker_enabled": mode == RERANKER_MODE,
         "reranker_used": False,
+        "is_negative": False,
+        "fallback_success": False,
+        "source_pollution": False,
+        "latency_ms": 0.0,
     }
 
 
@@ -269,6 +287,7 @@ def run_retrieval(
     top_k: int,
     search_fn: Callable[..., Any] | None = None,
 ) -> dict:
+    started_at = perf_counter()
     try:
         if search_fn is None:
             configure_offline_embedding()
@@ -290,7 +309,10 @@ def run_retrieval(
         result = score_retrieval(case, mode, top_k, chunks)
         retrieval_error = metadata.get("error")
         if retrieval_error and not chunks and mode == "vector":
-            return failed_result(mode, top_k, retrieval_error)
+            result = failed_result(mode, top_k, retrieval_error)
+            result["is_negative"] = bool(case.get("is_negative", False))
+            result["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
+            return result
         if retrieval_error:
             result["warning"] = str(retrieval_error)
         for key in (
@@ -301,6 +323,7 @@ def run_retrieval(
             "hybrid_used",
             "threshold",
             "highest_score",
+            "passed_threshold",
             "reranker_enabled",
             "reranker_used",
             "reranker_model",
@@ -309,9 +332,13 @@ def run_retrieval(
         ):
             if key in metadata:
                 result[key] = metadata.get(key)
+        result["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
         return result
     except Exception as error:
-        return failed_result(mode, top_k, error)
+        result = failed_result(mode, top_k, error)
+        result["is_negative"] = bool(case.get("is_negative", False))
+        result["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
+        return result
 
 
 def _run_answer(question: str, mode: str, top_k: int, answer_fn: Callable[..., dict] | None) -> dict:
@@ -361,6 +388,14 @@ def _run_judge(
         return {"success": False, "error": str(error)}
 
 
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    index = max(0, min(len(ordered) - 1, int((len(ordered) * percentile + 0.999999)) - 1))
+    return ordered[index]
+
+
 def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
     summary = {}
     case_count = len(cases)
@@ -369,7 +404,17 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
         total_keyword_hits = sum(result["keyword_hit_count"] for result in results)
         total_source_hits = sum(result["source_hit_count"] for result in results)
         total_score = sum(result["retrieval_score"] for result in results)
-        ranking_metrics = [result.get("ranking_metrics") or {} for result in results]
+        positive_results = [
+            case["results"][mode]
+            for case in cases
+            if not bool(case.get("is_negative", False))
+        ]
+        negative_results = [
+            case["results"][mode]
+            for case in cases
+            if bool(case.get("is_negative", False))
+        ]
+        ranking_metrics = [result.get("ranking_metrics") or {} for result in positive_results]
         source_ranks = [
             metrics.get("best_expected_source_rank")
             for metrics in ranking_metrics
@@ -380,6 +425,15 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             for metrics in ranking_metrics
             if metrics.get("best_expected_keyword_rank") is not None
         ]
+        positive_count = len(positive_results)
+        negative_count = len(negative_results)
+        latencies = [float(result.get("latency_ms", 0.0)) for result in results]
+        top1_hits = sum(int(metrics.get("top1_source_hit", 0)) for metrics in ranking_metrics)
+        top3_hits = sum(int(metrics.get("top3_source_hit", 0)) for metrics in ranking_metrics)
+        top5_hits = sum(int(metrics.get("top5_source_hit", 0)) for metrics in ranking_metrics)
+        top_k_hits = sum(int(metrics.get("top_k_source_hit", 0)) for metrics in ranking_metrics)
+        fallback_successes = sum(bool(result.get("fallback_success")) for result in negative_results)
+        pollution_cases = sum(bool(result.get("source_pollution")) for result in negative_results)
         summary[mode] = {
             "total_keyword_hits": total_keyword_hits,
             "total_source_hits": total_source_hits,
@@ -387,25 +441,32 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             "successful_cases": sum(bool(result.get("success")) for result in results),
             "failed_cases": sum(not bool(result.get("success")) for result in results),
             "reranker_used_cases": sum(bool(result.get("reranker_used")) for result in results),
-            "total_top1_source_hits": sum(
-                int(metrics.get("top1_source_hit", 0)) for metrics in ranking_metrics
-            ),
-            "total_top3_source_hits": sum(
-                int(metrics.get("top3_source_hit", 0)) for metrics in ranking_metrics
-            ),
-            "total_top5_source_hits": sum(
-                int(metrics.get("top5_source_hit", 0)) for metrics in ranking_metrics
-            ),
+            "positive_case_count": positive_count,
+            "negative_case_count": negative_count,
+            "total_top1_source_hits": top1_hits,
+            "total_top3_source_hits": top3_hits,
+            "total_top5_source_hits": top5_hits,
+            "total_top_k_source_hits": top_k_hits,
+            "top1_source_hit_rate": round(top1_hits / positive_count, 4) if positive_count else 0.0,
+            "top3_source_hit_rate": round(top3_hits / positive_count, 4) if positive_count else 0.0,
+            "top5_source_hit_rate": round(top5_hits / positive_count, 4) if positive_count else 0.0,
+            "top_k_source_hit_rate": round(top_k_hits / positive_count, 4) if positive_count else 0.0,
             "average_mrr": round(
-                sum(float(metrics.get("mrr", 0.0)) for metrics in ranking_metrics) / case_count,
+                sum(float(metrics.get("mrr", 0.0)) for metrics in ranking_metrics) / positive_count,
                 3,
-            ) if case_count else 0.0,
+            ) if positive_count else 0.0,
             "average_best_expected_source_rank": round(
                 sum(source_ranks) / len(source_ranks), 3
             ) if source_ranks else None,
             "average_best_expected_keyword_rank": round(
                 sum(keyword_ranks) / len(keyword_ranks), 3
             ) if keyword_ranks else None,
+            "average_latency_ms": round(sum(latencies) / len(latencies), 3) if latencies else 0.0,
+            "p95_latency_ms": round(_percentile(latencies, 0.95), 3),
+            "fallback_success_count": fallback_successes,
+            "fallback_success_rate": round(fallback_successes / negative_count, 4) if negative_count else None,
+            "source_pollution_count": pollution_cases,
+            "source_pollution_rate": round(pollution_cases / negative_count, 4) if negative_count else None,
         }
     return summary
 
@@ -413,6 +474,8 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
 def build_hybrid_reranker_diagnostics(cases: list[dict]) -> list[dict]:
     diagnostics = []
     for case in cases:
+        if bool(case.get("is_negative", False)):
+            continue
         results = case.get("results", {})
         if "hybrid" not in results or RERANKER_MODE not in results:
             continue
@@ -490,6 +553,8 @@ def evaluate_cases(
         "summary": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_count": len(evaluated_cases),
+            "positive_case_count": sum(not bool(case.get("is_negative", False)) for case in evaluated_cases),
+            "negative_case_count": sum(bool(case.get("is_negative", False)) for case in evaluated_cases),
             "modes": modes,
             "top_k": top_k,
             "with_answer": effective_answer,
@@ -526,24 +591,25 @@ def render_markdown(report: dict) -> str:
         "## Summary",
         "",
         f"- Cases: {summary['case_count']}",
+        f"- Positive cases: {summary.get('positive_case_count', summary['case_count'])}",
+        f"- Negative cases: {summary.get('negative_case_count', 0)}",
         f"- Top K: {summary['top_k']}",
         f"- Modes: {', '.join(summary['modes'])}",
         f"- With answer: {summary['with_answer']}",
         f"- With judge: {summary['with_judge']}",
         f"- With reranker: {summary.get('with_reranker', False)}",
         "",
-        "| Mode | Keyword Hits | Source Hits | Avg Score | Top1 Source | Top3 Source | Top5 Source | Avg MRR | Avg Source Rank | Avg Keyword Rank | Success | Failed | Reranker Used |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Mode | Top-1 | Top-3 | Top-K | Avg MRR | Avg Latency ms | P95 ms | Fallback Success | Source Pollution | Success | Failed | Reranker Used |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for mode in summary["modes"]:
         item = report["mode_summary"][mode]
         lines.append(
-            f"| {mode} | {item['total_keyword_hits']} | {item['total_source_hits']} | "
-            f"{item['average_retrieval_score']:.3f} | {item['total_top1_source_hits']} | "
-            f"{item['total_top3_source_hits']} | {item['total_top5_source_hits']} | "
-            f"{_md_metric(item['average_mrr'])} | "
-            f"{_md_metric(item['average_best_expected_source_rank'])} | "
-            f"{_md_metric(item['average_best_expected_keyword_rank'])} | "
+            f"| {mode} | {_md_metric(item['top1_source_hit_rate'])} | "
+            f"{_md_metric(item['top3_source_hit_rate'])} | {_md_metric(item['top_k_source_hit_rate'])} | "
+            f"{_md_metric(item['average_mrr'])} | {_md_metric(item['average_latency_ms'])} | "
+            f"{_md_metric(item['p95_latency_ms'])} | {_md_metric(item['fallback_success_rate'])} | "
+            f"{_md_metric(item['source_pollution_rate'])} | "
             f"{item['successful_cases']} | {item['failed_cases']} | "
             f"{item.get('reranker_used_cases', 0)} |"
         )
@@ -578,6 +644,10 @@ def render_markdown(report: dict) -> str:
             "",
             f"**Expected sources:** {', '.join(case['expected_sources']) or '(none)'}",
             "",
+            f"**Case type:** {case.get('case_type', 'fact_lookup')}",
+            "",
+            f"**Negative sample:** {case.get('is_negative', False)}",
+            "",
         ])
         if case.get("notes"):
             lines.extend([f"**Notes:** {case['notes']}", ""])
@@ -595,6 +665,9 @@ def render_markdown(report: dict) -> str:
                 f"- Best expected keyword rank: {_md_metric(ranking.get('best_expected_keyword_rank'))}",
                 f"- MRR: {_md_metric(ranking.get('mrr', 0.0))}",
                 f"- Top1/Top3/Top5 source hit: {ranking.get('top1_source_hit', 0)}/{ranking.get('top3_source_hit', 0)}/{ranking.get('top5_source_hit', 0)}",
+                f"- Latency ms: {_md_metric(result.get('latency_ms'))}",
+                f"- Fallback success: {result.get('fallback_success', False)}",
+                f"- Source pollution: {result.get('source_pollution', False)}",
                 f"- Reranker enabled: {result.get('reranker_enabled', False)}",
                 f"- Reranker used: {result.get('reranker_used', False)}",
             ])
@@ -681,7 +754,11 @@ def main() -> int:
             print(
                 f"{mode}: keyword_hits={item['total_keyword_hits']} "
                 f"source_hits={item['total_source_hits']} "
-                f"avg_score={item['average_retrieval_score']:.3f} "
+                f"top1={item['top1_source_hit_rate']:.3f} "
+                f"top3={item['top3_source_hit_rate']:.3f} "
+                f"mrr={item['average_mrr']:.3f} "
+                f"avg_latency_ms={item['average_latency_ms']:.3f} "
+                f"p95_latency_ms={item['p95_latency_ms']:.3f} "
                 f"failed={item['failed_cases']}"
             )
         return 0

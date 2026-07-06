@@ -797,6 +797,53 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - `docs/PLANNER_EVALUATION.md`
 - `docs/LLM_PLANNER_EVAL_CASES.md`
 
+### RAG Benchmark / Evaluation
+
+项目包含一个离线 RAG 检索评测体系，不需要 LLM API 调用即可运行。
+
+**Corpus 规模：**
+
+| Batch | Docs | Chunks | 说明 |
+|---|---:|---:|---|
+| V1 | 51 | 341 | 本地项目文档 |
+| V2 | 56 | 352 | V1 + 5 篇精选官方文档摘要 |
+| V3 | 63 | 1292 | V2 + 4 篇 arXiv 论文 PDF + 2 个 OCR 测试夹具 |
+
+**V3 40 条正样本评测（54 条评测案例中的正样本，含 OCR 子集）：**
+
+| 模式 | Top-1 | Top-3 | MRR | 平均耗时 | 备注 |
+|---|---:|---:|---:|---:|---|
+| Vector | 52.5% | 67.5% | 0.596 | 17.5 ms | 仅余弦相似度 ≥ 0.55 |
+| BM25 | 72.5% | 82.5% | 0.771 | 55.8 ms | 强基线，语义理解弱 |
+| Hybrid (RRF) | 60.0% | 82.5% | 0.710 | 73.4 ms | Vector+BM25 融合 |
+| Hybrid+Reranker | 82.5% | 90.0% | 0.863 | 2114.4 ms | CrossEncoder 重排序，效果最好但耗时长 |
+
+**OCR 测试结论：**
+
+- OCR 开启后新增 36 chunks；PDF 解析失败从 2 降至 1
+- 纯扫描 PDF 从所有模式 miss → BM25 rank 1 / Hybrid rank 3 / Reranker rank 5
+- Vector 仍无法检索扫描件。混合 PDF（文字+扫描混合）在所有模式下被 Top-5 漏检
+- **注意**：OCR 正样本仅 2 个，不足以宣称通用准确率
+
+**负样本（15 条知识库外查询）：**
+
+- Vector 正确拒答率 80%（余弦阈值 0.55 过滤），仍有 20% 误召回
+- BM25 正确拒答率 0%（无相似度阈值，任意词匹配均返回结果）
+- Hybrid / Reranker 经 source-pollution fix 后拒答率从 0% 提升至 73.3%
+- 剩余 26.7% 污染来自 Vector 固有误判和极高 BM25 分数
+- BM25 单独使用时 score pollution 目前无法通过简单阈值消除（正/负样本 BM25 分数严重重叠）
+
+```bash
+# 运行完整 V3 评测（含 source-pollution fix）
+python scripts/benchmark_rag_batch.py \
+  --version v3 \
+  --cases eval_cases/rag_v1_cases.json eval_cases/rag_v2_cases.json eval_cases/rag_v3_cases.json \
+  --top-k 5
+```
+
+完整报告：[`reports/RAG_V1_V2_V3_BENCHMARK.md`](reports/RAG_V1_V2_V3_BENCHMARK.md)
+精简指标：[`reports/RAG_V1_V2_V3_METRICS.json`](reports/RAG_V1_V2_V3_METRICS.json)
+
 ## 24. 当前限制
 
 - LLM Planner 仍是可选模式，不是默认。
@@ -807,7 +854,8 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - smoke test 和 evaluation 脚本可能消耗真实 API。
 - 当前还没有部署说明。
 - LLM Planner 规划质量仍需要更多样本验证。
-- RAG 当前没有 reranker，也没有 hybrid search。
+- RAG Reranker 平均耗时 ~2s/query（本地 CrossEncoder），不适合低延迟场景。
+- RAG 负样本处理：BM25 单独使用时 source pollution 为 100%，尚无法通过简单阈值解决。
 - 前端还没有正式截图和 GIF 展示。
 
 ## 25. Roadmap
@@ -815,8 +863,7 @@ python scripts/evaluate_llm_planner.py --case LLM-04
 - 增加更多 LLM Planner evaluation case。
 - 优化 LLM Planner prompt。
 - 统计 fallback rate、tool precision、tool recall。
-- 增加 RAG reranker。
-- 增加 Hybrid Search。
+- 优化 RAG 负样本拒答策略（BM25 term-coverage 过滤、Reranker score 阈值等）。
 - 增加后端持久化 session memory。
 - 增加部署文档。
 - 增加 Demo 截图和 GIF。

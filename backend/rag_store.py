@@ -80,6 +80,9 @@ INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
 SIMILARITY_THRESHOLD = 0.55
+BM25_MIN_SCORE = 1.0
+BM25_STRONG_THRESHOLD = 25.0
+RERANKER_MIN_SCORE = 0.0
 MIN_CHUNK_LENGTH = 30
 HYBRID_VECTOR_WEIGHT = 1.0
 HYBRID_BM25_WEIGHT = 1.15
@@ -220,8 +223,8 @@ def load_documents():
     return documents
 
 
-def build_chunks():
-    documents = load_documents()
+def build_chunks(documents: list[dict] | None = None):
+    documents = load_documents() if documents is None else documents
 
     chunk_size = 500
     overlap = 100
@@ -291,7 +294,7 @@ def load_rag_index():
         return True
 
 
-def rebuild_rag_index():
+def rebuild_rag_index(documents: list[dict] | None = None):
     global chunks
     global index
     global rag_index_error
@@ -300,7 +303,7 @@ def rebuild_rag_index():
 
     print("正在构建 FAISS RAG 索引...")
 
-    chunks = build_chunks()
+    chunks = build_chunks(documents=documents)
     _reset_bm25_index()
 
     if not chunks:
@@ -873,12 +876,15 @@ def _search_hybrid_chunks_with_metadata(
         weights=[HYBRID_VECTOR_WEIGHT, HYBRID_BM25_WEIGHT],
     )
     highest_score = max((float(item["score"]) for item in fused_results), default=None)
+    vector_has_results = bool(vector_results)
+    bm25_top_score = max((float(item.get("bm25_score", 0)) for item in bm25_results), default=0.0)
+    bm25_strong = bm25_top_score >= BM25_STRONG_THRESHOLD
 
     return {
         "chunks": fused_results,
         "highest_score": highest_score,
-        "threshold": None,
-        "passed_threshold": bool(fused_results),
+        "threshold": float(similarity_threshold),
+        "passed_threshold": bool(fused_results) and (vector_has_results or bm25_strong),
         "expanded_query": expanded_question,
         "raw_count": len(fused_results),
         "valid_count": len(fused_results),
@@ -914,8 +920,8 @@ def _search_keyword_chunks_with_metadata(question: str, top_k: int = 3) -> dict:
     return {
         "chunks": results,
         "highest_score": highest_score,
-        "threshold": None,
-        "passed_threshold": bool(results),
+        "threshold": float(BM25_MIN_SCORE),
+        "passed_threshold": bool(results) and highest_score is not None and highest_score >= BM25_MIN_SCORE,
         "expanded_query": expanded_question,
         "raw_count": len(results),
         "valid_count": len(results),
@@ -977,6 +983,11 @@ def search_relevant_chunks(
             (float(item["score"]) for item in metadata["chunks"]),
             default=None,
         )
+
+    if not metadata.get("passed_threshold", True):
+        metadata["chunks"] = []
+        metadata["valid_count"] = 0
+        metadata["highest_score"] = None
 
     if include_metadata:
         return metadata

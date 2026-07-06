@@ -17,3 +17,5 @@ frontend_server.out.log
 data/
 logs/
 models/
+.claude/
+docs/paper_*.pdf
