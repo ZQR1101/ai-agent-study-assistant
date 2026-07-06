@@ -45,7 +45,7 @@ React / Vite Frontend
 
 ## RAG Benchmark / Evaluation
 
-这是本地 Offline Retrieval Benchmark，不调用 LLM API。`Top-1 / Top-3 / MRR` 基于 V3 的 40 个 Positive Cases；`Fallback Success / Source Pollution` 基于 15 个 Out-of-knowledge Negative Cases。
+这是本地 Offline Retrieval Benchmark，不调用 LLM API。Top-1、Top-3 和 MRR 基于 V3 的 40 个 Positive Cases；Fallback Success 与 Source Pollution 基于 15 个 Out-of-knowledge Negative Cases。
 
 ### Corpus
 
@@ -77,7 +77,7 @@ React / Vite Frontend
 
 ### Chunk Quality Filter
 
-| Before | After | Dropped | `low_quality` Flagged | OCR Chunks Retained | Retrieval Metrics |
+| Before | After | Dropped | Flagged `low_quality` | OCR Chunks Retained | Retrieval Metrics |
 |---:|---:|---:|---:|---:|---|
 | 1292 | **1242** | 50 | 16 | **45 / 45** | `No Regression` |
 
@@ -85,10 +85,10 @@ Hard Filter Dropped 50 个噪声 Chunks；另外 16 个 Chunks 仅标记为 `low
 
 ### Reports / Reproduction
 
-- 完整 `Benchmark Report`：[reports/RAG_V1_V2_V3_BENCHMARK.md](reports/RAG_V1_V2_V3_BENCHMARK.md)
-- `Metrics JSON`：[reports/RAG_V1_V2_V3_METRICS.json](reports/RAG_V1_V2_V3_METRICS.json)
-- V3 `Eval Cases`：[eval_cases/rag_v3_cases.json](eval_cases/rag_v3_cases.json)
-- `Benchmark Runner`：[scripts/benchmark_rag_batch.py](scripts/benchmark_rag_batch.py)
+- [Full benchmark report](reports/RAG_V1_V2_V3_BENCHMARK.md)
+- [Machine-readable metrics](reports/RAG_V1_V2_V3_METRICS.json)
+- [V3 evaluation cases](eval_cases/rag_v3_cases.json)
+- [Benchmark runner](scripts/benchmark_rag_batch.py)
 
 ## 工具安全
 
