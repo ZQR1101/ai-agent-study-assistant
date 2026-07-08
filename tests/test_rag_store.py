@@ -64,6 +64,30 @@ class OCRRagStoreTests(unittest.TestCase):
         self.assertTrue(chunks)
         self.assertEqual(chunks[0]["source"], "preparsed.md")
 
+    def test_build_chunks_uses_heading_paragraph_metadata(self):
+        documents = [{
+            "source": "rag_handbook.md",
+            "text": (
+                "# RAG Handbook\n\n"
+                + "## Retrieval Pipeline\n\n"
+                + "Dense retrieval uses vector indexes for semantic matching and candidate recall. " * 2
+                + "\n\n## Evaluation\n\n"
+                + "Offline benchmarks measure source hit rate, MRR, and fallback behavior. " * 2
+            ),
+            "parse_method": "text",
+            "ocr_used": False,
+            "need_ocr": False,
+        }]
+
+        chunks, _ = rag_store.build_chunks(documents=documents)
+
+        self.assertGreaterEqual(len(chunks), 2)
+        self.assertEqual(chunks[0]["document"], "rag_handbook.md")
+        self.assertEqual(chunks[0]["document_title"], "RAG Handbook")
+        self.assertEqual(chunks[0]["title"], "Retrieval Pipeline")
+        self.assertEqual(chunks[0]["section"], "RAG Handbook > Retrieval Pipeline")
+        self.assertEqual(chunks[1]["title"], "Evaluation")
+
     def test_rapidocr_document_text_enters_chunks_and_keyword_search(self):
         parse_result = {
             "text": (

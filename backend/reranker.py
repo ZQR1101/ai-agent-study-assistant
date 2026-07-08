@@ -96,6 +96,18 @@ def get_reranker_settings() -> dict[str, Any]:
     }
 
 
+def _reranker_document_text(chunk: dict) -> str:
+    metadata_parts = [
+        str(chunk.get("document_title") or ""),
+        str(chunk.get("section") or ""),
+        str(chunk.get("title") or ""),
+        " ".join(str(item) for item in chunk.get("headings", []) if str(item).strip()),
+    ]
+    metadata_text = "\n".join(part for part in metadata_parts if part.strip())
+    text = str(chunk.get("text") or "")
+    return f"{metadata_text}\n{text}".strip()
+
+
 def rerank_chunks_with_metadata(
     query: str,
     chunks: list[dict],
@@ -132,7 +144,7 @@ def rerank_chunks_with_metadata(
         return metadata
 
     try:
-        pairs = [(query, str(chunk.get("text") or "")) for chunk in chunks]
+        pairs = [(query, _reranker_document_text(chunk)) for chunk in chunks]
         scores = model.predict(pairs, show_progress_bar=False)
         if len(scores) != len(chunks):
             raise ValueError("Reranker returned an unexpected number of scores")

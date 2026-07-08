@@ -75,6 +75,25 @@ class HybridSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["retrieval"], "bm25")
         self.assertGreater(results[0]["bm25_score"], 0)
 
+    def test_bm25_matches_chunk_metadata(self):
+        rag_store.chunks = [
+            {
+                "source": "backend_notes.md",
+                "document": "backend_notes.md",
+                "document_title": "Backend Notes",
+                "title": "Billing API",
+                "section": "Backend Notes > Billing API",
+                "headings": ["Backend Notes", "Billing API"],
+                "text": "This paragraph explains request validation, persistence, and response handling.",
+            }
+        ]
+
+        results = search_keyword_chunks("Billing API", top_k=1)
+
+        self.assertEqual(results[0]["source"], "backend_notes.md")
+        self.assertEqual(results[0]["title"], "Billing API")
+        self.assertEqual(results[0]["section"], "Backend Notes > Billing API")
+
     def test_bm25_ranks_agent_skill_document_first_for_compound_query(self):
         rag_store.chunks = [
             {

@@ -7,9 +7,9 @@ AI Study Assistant 是一个面向学习场景的 AI 应用，而不是普通的
 ## 核心亮点
 
 - **Unified `/chat` API**：统一承载 Chat、RAG、Agent 与 LangGraph Runtime。
-- **Local RAG**：本地 FAISS/Document Index，支持 `Vector / BM25 / Hybrid RRF / CrossEncoder Reranker`。
+- **Local RAG**：本地 FAISS/Document Index，支持 `Vector / BM25 / Hybrid RRF / CrossEncoder Reranker`，默认启用结构化 Chunk + 元数据增强。
 - **Offline RAG Benchmark**：V1/V2/V3 分阶段构建 Corpus，V3 覆盖 55 Cases；Metrics 和原始结果可复现、可审计。
-- **Retrieval Quality Controls**：修复 Negative-case Source Pollution，并过滤 PDF/OCR 产生的 Low-quality Chunks。
+- **Retrieval Quality Controls**：修复 Negative-case Source Pollution，并过滤 PDF/OCR 产生的 Low-quality Chunks；Query Rewrite 已实测为当前负收益，默认关闭。
 - **Tool Registry Safety**：Tools 按 `read / write / dangerous` 分级，Dangerous Tools 必须显式审批。
 - **Run Observability**：统一查看 `Plan / Trace / Tool Calls / Sources / Latency / Token / Cost / Judge`。
 
@@ -53,16 +53,16 @@ React / Vite Frontend
 |---|---:|---:|---:|---|
 | V1 | 51 | 341 | 20 | 本地项目文档 |
 | V2 | 56 | 352 | 35 | V1 + 5 篇精选官方文档摘要 |
-| V3 | 63 | 1292 | 55 | V2 + arXiv Paper PDFs + OCR Fixtures |
+| V3 | 63 | 1438 | 55 | V2 + arXiv Paper PDFs + OCR Fixtures；结构化 Chunk + 元数据增强 |
 
 ### V3 Positive Cases
 
-| Retrieval Mode | Top-1 | Top-3 | MRR | Avg Latency |
-|---|---:|---:|---:|---:|
-| `Vector` | 52.5% | 67.5% | 0.596 | 17.7 ms |
-| `BM25` | 72.5% | 82.5% | 0.771 | 47.5 ms |
-| `Hybrid` | 60.0% | 82.5% | 0.710 | 73.4 ms |
-| `Hybrid + Reranker` | **82.5%** | **90.0%** | **0.863** | 2114.4 ms |
+| Retrieval Mode | Top-1 | Top-3 | MRR | Avg Latency | P95 Latency |
+|---|---:|---:|---:|---:|---:|
+| `Vector` | 57.5% | 65.0% | 0.617 | 17.0 ms | 20.7 ms |
+| `BM25` | 72.5% | 80.0% | 0.762 | 41.4 ms | 50.5 ms |
+| `Hybrid` | 75.0% | 85.0% | 0.800 | 53.3 ms | 64.3 ms |
+| `Hybrid + Reranker` | **90.0%** | **97.5%** | **0.933** | 1945.7 ms | 2722.0 ms |
 
 ### Source Pollution Fix
 
@@ -79,9 +79,34 @@ React / Vite Frontend
 
 | Before | After | Dropped | Flagged `low_quality` | OCR Chunks Retained | Retrieval Metrics |
 |---:|---:|---:|---:|---:|---|
-| 1292 | **1242** | 50 | 16 | **45 / 45** | `No Regression` |
+| 1500 raw candidates | **1438 indexed** | 62 | 13 | **46** | `Hybrid / Reranker improved` |
 
-Hard Filter Dropped 50 个噪声 Chunks；另外 16 个 Chunks 仅标记为 `low_quality`，未直接删除。全部 45 个 OCR Chunks 均保留，Retrieval Metrics 无 Regression。
+Hard Filter Dropped 62 个噪声 Chunks；另外 13 个 Chunks 仅标记为 `low_quality`，未直接删除。当前重建索引保留 46 个 OCR Chunks，Chunk Quality Filter 正常工作。
+
+### Structured Chunking / Metadata
+
+当前默认启用结构化 Chunk 切分：按 Markdown 标题、章节标题和段落聚合，超长段落再滑窗切分。每个 Chunk 附带 `document / document_title / title / section / headings`，并让这些元数据进入 BM25、Embedding Text 和 Reranker 输入。
+
+| Mode | Before Top-1 | After Top-1 | Before MRR | After MRR | Verdict |
+|---|---:|---:|---:|---:|---|
+| `Hybrid` | 60.0% | **75.0%** | 0.710 | **0.800** | Positive |
+| `Hybrid + Reranker` | 82.5% | **90.0%** | 0.863 | **0.933** | Positive |
+
+结论：结构化 Chunk + 元数据增强对最终 RAG 主路径是正收益，尤其提升 Hybrid 与 Hybrid+Reranker。收益来自更完整的语义边界和标题/章节元数据参与检索，而不是单纯增加 Chunk 数。
+
+### Query Rewrite Ablation
+
+Query Rewrite 能把用户问题交给 LLM 改写成更“检索友好”的形式，但当前全量开启会损伤正样本召回。因此代码保留 `rewrite_query_for_retrieval` 能力，默认 RAG 路径不启用，后续只做条件式启用。
+
+| Hybrid + Reranker | Original Query | Rewritten Query | Delta |
+|---|---:|---:|---:|
+| Top-1 | **90.0%** | 82.5% | -7.5 pts |
+| Top-3 | **97.5%** | 90.0% | -7.5 pts |
+| MRR | **0.933** | 0.875 | -0.058 |
+| Fallback Success | 73.3% | **80.0%** | +6.7 pts |
+| Source Pollution | 26.7% | **20.0%** | -6.7 pts |
+
+Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.9 ms。结论：当前 Rewrite 对负样本更谨慎，但对正样本召回是负收益；默认关闭，待优化为“仅在明显口语化、指代省略或上下文依赖时启用”。
 
 ### Reports / Reproduction
 
@@ -89,6 +114,8 @@ Hard Filter Dropped 50 个噪声 Chunks；另外 16 个 Chunks 仅标记为 `low
 - [Machine-readable metrics](reports/RAG_V1_V2_V3_METRICS.json)
 - [V3 evaluation cases](eval_cases/rag_v3_cases.json)
 - [Benchmark runner](scripts/benchmark_rag_batch.py)
+- Latest local run：`outputs/rag_query_rewrite_opt/v3_query_rewrite_opt_full_retrieval.json`
+- Query rewrite ablation：`outputs/rag_query_rewrite_opt/v3_query_rewrite_eval.json`
 
 ## 工具安全
 
@@ -150,9 +177,10 @@ npm run build
 
 - Benchmark 是本地 Offline Evaluation，不代表生产环境指标或通用准确率。
 - V3 仅包含 40 个 Positive Cases 和 15 个 Negative Cases，样本规模仍有限。
-- Reranker 效果最好，但本地 Avg Latency 约 2.1 秒。
+- Reranker 效果最好，但本地 Avg Latency 约 1.9 秒。
 - OCR-specific Eval Cases 有限，不能据此宣称通用 OCR 准确率提升。
 - BM25-only Source Pollution 仍是 Known Limitation；简单 threshold 无法可靠区分 Positive/Negative Cases。
+- Query Rewrite 当前全量开启会降低正样本召回，因此默认关闭。
 - File-based RunRepository 与可选 SQLite 配置更适合单机原型，尚未面向 Distributed Execution 设计。
 
 ## 后续计划
@@ -160,5 +188,6 @@ npm run build
 - 对 `low_quality` Chunks 做 Down-ranking，而不是只做 Hard Filter。
 - 增加 Context Selection Gate。
 - 增加 History Relevance Filter。
+- 将 Query Rewrite 改成条件式启用：仅处理口语化、指代省略或上下文依赖 Query。
 - 为 BM25 增加 Term Coverage / Entity Matching。
 - 扩充 Positive/Negative Cases 与 PDF/OCR Eval Cases。

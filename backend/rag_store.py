@@ -88,6 +88,12 @@ MIN_CHUNK_LENGTH = 30
 HYBRID_VECTOR_WEIGHT = 1.0
 HYBRID_BM25_WEIGHT = 1.15
 
+_SECTION_HEADING_PATTERN = re.compile(
+    r"^\s*((?:第[一二三四五六七八九十百千万0-9]+[章节篇])|"
+    r"(?:[一二三四五六七八九十]+[、.．])|"
+    r"(?:\d+(?:\.\d+)*[.)、．]))\s+(.{2,100})\s*$"
+)
+
 
 def is_valid_chunk(text: str, min_length: int = MIN_CHUNK_LENGTH) -> bool:
     clean_text = " ".join(str(text or "").split())
@@ -294,6 +300,173 @@ def expand_query(query: str) -> str:
     return f"{normalized_query} {' '.join(unique_expansions)}"
 
 
+def _clean_heading_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    cleaned = cleaned.strip("#").strip()
+    return cleaned[:120]
+
+
+def _heading_from_line(line: str) -> tuple[int, str] | None:
+    stripped = str(line or "").strip()
+    if not stripped:
+        return None
+
+    markdown_match = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", stripped)
+    if markdown_match:
+        return len(markdown_match.group(1)), _clean_heading_text(markdown_match.group(2))
+
+    if len(stripped) > 120 or stripped.endswith(("。", "！", "？", ".", "!", "?")):
+        return None
+
+    section_match = _SECTION_HEADING_PATTERN.match(stripped)
+    if section_match:
+        return 2, _clean_heading_text(f"{section_match.group(1)} {section_match.group(2)}")
+
+    return None
+
+
+def _default_document_title(source: str) -> str:
+    title = Path(str(source or "document")).stem.replace("_", " ").replace("-", " ").strip()
+    return title or str(source or "document")
+
+
+def _document_blocks(text: str, source: str) -> list[dict]:
+    document_title = _default_document_title(source)
+    heading_stack: dict[int, str] = {}
+    paragraph_lines: list[str] = []
+    blocks: list[dict] = []
+
+    def current_metadata() -> dict:
+        ordered_headings = [
+            heading_stack[level]
+            for level in sorted(heading_stack)
+            if heading_stack.get(level)
+        ]
+        section = " > ".join(ordered_headings)
+        return {
+            "document": source,
+            "document_title": document_title,
+            "title": ordered_headings[-1] if ordered_headings else document_title,
+            "section": section or document_title,
+            "headings": ordered_headings,
+        }
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        paragraph = "\n".join(line.strip() for line in paragraph_lines if line.strip()).strip()
+        paragraph_lines = []
+        if not paragraph:
+            return
+        blocks.append({
+            "text": paragraph,
+            **current_metadata(),
+        })
+
+    for raw_line in str(text or "").splitlines():
+        heading = _heading_from_line(raw_line)
+        if heading:
+            flush_paragraph()
+            level, heading_text = heading
+            if heading_text:
+                if level == 1 and document_title == _default_document_title(source):
+                    document_title = heading_text
+                for existing_level in list(heading_stack):
+                    if existing_level >= level:
+                        del heading_stack[existing_level]
+                heading_stack[level] = heading_text
+            continue
+
+        if not raw_line.strip():
+            flush_paragraph()
+            continue
+
+        paragraph_lines.append(raw_line)
+
+    flush_paragraph()
+    if blocks:
+        return blocks
+
+    fallback_text = str(text or "").strip()
+    if not fallback_text:
+        return []
+
+    return [{
+        "text": fallback_text,
+        "document": source,
+        "document_title": document_title,
+        "title": document_title,
+        "section": document_title,
+        "headings": [],
+    }]
+
+
+def _split_long_block(text: str, chunk_size: int, overlap: int) -> list[str]:
+    normalized = str(text or "").strip()
+    if len(normalized) <= chunk_size:
+        return [normalized] if normalized else []
+
+    step = max(chunk_size - overlap, 1)
+    pieces = []
+    for start in range(0, len(normalized), step):
+        piece = normalized[start:start + chunk_size].strip()
+        if piece:
+            pieces.append(piece)
+    return pieces
+
+
+def _same_chunk_scope(left: dict | None, right: dict) -> bool:
+    if not left:
+        return False
+    return (
+        left.get("document") == right.get("document")
+        and left.get("document_title") == right.get("document_title")
+        and left.get("section") == right.get("section")
+        and left.get("title") == right.get("title")
+    )
+
+
+def _chunk_metadata_fields(chunk: dict) -> dict:
+    headings = chunk.get("headings") or []
+    if not isinstance(headings, list):
+        headings = [str(headings)]
+
+    return {
+        "document": chunk.get("document") or chunk.get("source", ""),
+        "document_title": chunk.get("document_title") or _default_document_title(chunk.get("source", "")),
+        "title": chunk.get("title") or chunk.get("document_title") or _default_document_title(chunk.get("source", "")),
+        "section": chunk.get("section") or chunk.get("title") or chunk.get("document_title") or _default_document_title(chunk.get("source", "")),
+        "headings": [str(item) for item in headings if str(item).strip()],
+    }
+
+
+def _chunk_search_text(chunk: dict) -> str:
+    metadata = _chunk_metadata_fields(chunk)
+    source = str(chunk.get("source", ""))
+    metadata_text = " ".join([
+        source,
+        source.replace("_", " "),
+        source.replace("-", " "),
+        str(metadata["document"]),
+        str(metadata["document_title"]),
+        str(metadata["title"]),
+        str(metadata["title"]),
+        str(metadata["section"]),
+        str(metadata["section"]),
+        " ".join(metadata["headings"]),
+    ])
+    return f"{metadata_text} {chunk.get('text', '')}"
+
+
+def _chunk_embedding_text(chunk: dict) -> str:
+    metadata = _chunk_metadata_fields(chunk)
+    return "\n".join([
+        f"文档：{metadata['document_title']}",
+        f"章节：{metadata['section']}",
+        f"标题：{metadata['title']}",
+        f"内容：{chunk.get('text', '')}",
+    ])
+
+
 def load_documents():
     documents = []
 
@@ -342,13 +515,26 @@ def build_chunks(documents: list[dict] | None = None):
         text = doc["text"]
         source = doc["source"]
         chunk_index = 0
+        pending_parts: list[str] = []
+        pending_metadata: dict | None = None
 
-        for i in range(0, len(text), chunk_size - overlap):
-            chunk_text = text[i:i + chunk_size]
-            trimmed = chunk_text.strip()
+        def flush_pending() -> None:
+            nonlocal chunk_index
+            nonlocal pending_parts
+            nonlocal pending_metadata
+
+            if not pending_parts or not pending_metadata:
+                pending_parts = []
+                pending_metadata = None
+                return
+
+            trimmed = "\n\n".join(part.strip() for part in pending_parts if part.strip()).strip()
+            metadata = pending_metadata
+            pending_parts = []
+            pending_metadata = None
 
             if not is_valid_chunk(trimmed):
-                continue
+                return
 
             verdict, reasons = chunk_quality_label(trimmed)
 
@@ -359,12 +545,17 @@ def build_chunks(documents: list[dict] | None = None):
                     "text_preview": trimmed[:80],
                     "reasons": reasons,
                 })
-                continue
+                return
 
             chunk_entry = {
                 "source": source,
                 "text": trimmed,
                 "chunk_index": chunk_index,
+                "document": metadata.get("document", source),
+                "document_title": metadata.get("document_title") or _default_document_title(source),
+                "title": metadata.get("title") or metadata.get("document_title") or _default_document_title(source),
+                "section": metadata.get("section") or metadata.get("title") or metadata.get("document_title") or _default_document_title(source),
+                "headings": metadata.get("headings", []),
                 "parse_method": doc.get("parse_method", "text"),
                 "ocr_used": bool(doc.get("ocr_used", False)),
                 "need_ocr": bool(doc.get("need_ocr", False)),
@@ -381,6 +572,21 @@ def build_chunks(documents: list[dict] | None = None):
 
             new_chunks.append(chunk_entry)
             chunk_index += 1
+
+        for block in _document_blocks(text, source):
+            for block_text in _split_long_block(block["text"], chunk_size, overlap):
+                if (
+                    pending_parts
+                    and _same_chunk_scope(pending_metadata, block)
+                    and len("\n\n".join([*pending_parts, block_text])) <= chunk_size
+                ):
+                    pending_parts.append(block_text)
+                else:
+                    flush_pending()
+                    pending_parts = [block_text]
+                    pending_metadata = block
+
+        flush_pending()
 
     return new_chunks, quality_stats
 
@@ -445,7 +651,7 @@ def rebuild_rag_index(documents: list[dict] | None = None):
         print("知识库为空，未构建索引。")
         return
 
-    chunk_texts = [chunk["text"] for chunk in chunks]
+    chunk_texts = [_chunk_embedding_text(chunk) for chunk in chunks]
 
     faiss = _get_faiss()
     np = _get_numpy()
@@ -653,6 +859,7 @@ def _chunk_id(chunk: dict, position: int) -> str:
 
 def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> dict:
     text = str(chunk.get("text") or "")
+    metadata = _chunk_metadata_fields(chunk)
     return {
         "source": chunk.get("source", ""),
         "score": float(score),
@@ -660,6 +867,11 @@ def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> d
         "text": text,
         "chunk_id": _chunk_id(chunk, position),
         "chunk_index": chunk.get("chunk_index", position),
+        "document": metadata["document"],
+        "document_title": metadata["document_title"],
+        "title": metadata["title"],
+        "section": metadata["section"],
+        "headings": metadata["headings"],
         "retrieval": retrieval,
         "parse_method": chunk.get("parse_method", "text"),
         "ocr_used": bool(chunk.get("ocr_used", False)),
@@ -670,7 +882,15 @@ def _chunk_result(chunk: dict, position: int, score: float, retrieval: str) -> d
 
 
 def _chunks_fingerprint() -> tuple:
-    return tuple((chunk.get("source"), hash(chunk.get("text", ""))) for chunk in chunks)
+    return tuple(
+        (
+            chunk.get("source"),
+            chunk.get("title"),
+            chunk.get("section"),
+            hash(chunk.get("text", "")),
+        )
+        for chunk in chunks
+    )
 
 
 def _reset_bm25_index() -> None:
@@ -722,12 +942,7 @@ def _ensure_keyword_chunks() -> None:
 
 def _build_bm25_index() -> dict:
     documents = [
-        tokenize_for_bm25(
-            f"{chunk.get('source', '')} "
-            f"{str(chunk.get('source', '')).replace('_', ' ')} "
-            f"{str(chunk.get('source', '')).replace('_', ' ')} "
-            f"{chunk.get('text', '')}"
-        )
+        tokenize_for_bm25(_chunk_search_text(chunk))
         for chunk in chunks
     ]
     doc_freq = Counter()

@@ -52,7 +52,12 @@ def learning_workflow(
         )
         passed_threshold = True
     elif use_rag:
-        rag_context = get_rag_context(topic, top_k=top_k, score_threshold=similarity_threshold)
+        rag_context = get_rag_context(
+            topic,
+            top_k=top_k,
+            score_threshold=similarity_threshold,
+            history_context=history_context,
+        )
         sources = rag_context["sources"]
         highest_score = rag_context["max_score"]
         threshold = rag_context["threshold"]
@@ -278,6 +283,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             request.top_k,
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
+            history_context=history_context,
         )
         trace.append(f"RAG query 使用 history：{'是' if history_context else '否'}")
         append_rag_trace(trace, rag_context_for_trace(rag_context, request.top_k))
