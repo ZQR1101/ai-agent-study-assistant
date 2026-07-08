@@ -7,7 +7,7 @@
 - environment：本地 Windows 进程；每种 Mode 先执行 1 次 warm-up query，每个 Case 测量 1 次 Retrieval
 - generation：仅评测 Retrieval，不调用 LLM Answer 或 LLM-as-Judge
 - Top-K：5
-- reports_source：`outputs/rag_corpus_benchmark/*.json`（原始 V1/V2）；`outputs/rag_source_pollution_fix/v3_fix3_retrieval.json`（完成 Source Pollution Fix 的 V3）
+- reports_source：`outputs/rag_corpus_benchmark/*.json`（原始 V1/V2）；`outputs/rag_source_pollution_fix/v3_fix3_retrieval.json`（Source Pollution Fix）；`outputs/rag_query_rewrite_opt/*.json`（结构化 Chunk 与 Query Rewrite Ablation）
 - retrieval_config：见下方 Retrieval 配置
 
 ## Retrieval 配置
@@ -27,14 +27,16 @@
 | OCR Engine | RapidOCR（通过 `backend.ocr_adapter.py`） |
 | OCR Enabled | V3 On：Yes；V3 Off：No |
 | Source Pollution Fix | V3 已启用（Unified Gate：Vector 无结果且 BM25 Top Score < 25.0 时，Hybrid 拒绝返回） |
+| Chunk Strategy | 默认启用结构化 Chunk：按标题、章节、段落聚合；Chunk 元数据进入 BM25、Embedding Text 与 Reranker 输入 |
+| Query Rewrite | 代码保留能力，但默认关闭；全量开启在当前 V3 Benchmark 中损伤正样本召回 |
 
 ## Corpus 与 Index 对比
 
 | Batch | Documents | Chunks | Index Build ms | Parse Failures | OCR Triggered | OCR Used | Cases（正/负） |
-|---|---|---|---:|---:|---:|---:|---:|---:|
+|---|---:|---:|---:|---:|---:|---:|---:|
 | V1 | 51 | 341 | 17927.051 | 1 | 2 | 2 | 20（16/4） |
 | V2 | 56 | 352 | 17710.692 | 1 | 2 | 2 | 35（26/9） |
-| V3 | 63 | 1292 | 23055.662 | 1 | 4 | 4 | 55（40/15） |
+| V3 | 63 | 1438 | 20933.168 | 1 | 4 | 4 | 55（40/15） |
 
 V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档摘要。V3 在 V2 基础上增加 4 篇原始研究论文 PDF、2 个从真实论文页面生成的 OCR Fixtures，以及 1 份 Provenance Manifest。
 
@@ -43,7 +45,7 @@ V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档�
 ## Retrieval 指标对比
 
 | Batch | Mode | Top-1 | Top-3 | MRR | Avg ms | P95 ms | Fallback Success | Source Pollution |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+|---|---|---:|---:|---:|---:|---:|---:|---:|
 | V1 | `Vector` | 31.2% | 43.8% | 0.380 | 18.626 | 22.530 | 100.0% | 0.0% |
 | V1 | `BM25` | 75.0% | 93.8% | 0.833 | 14.591 | 16.716 | 0.0% | 100.0% |
 | V1 | `Hybrid` | 68.8% | 81.2% | 0.768 | 29.086 | 32.551 | 0.0% | 100.0% |
@@ -52,10 +54,10 @@ V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档�
 | V2 | `BM25` | 80.8% | 96.2% | 0.872 | 14.358 | 18.289 | 0.0% | 100.0% |
 | V2 | `Hybrid` | 69.2% | 84.6% | 0.796 | 29.738 | 36.328 | 0.0% | 100.0% |
 | V2 | `Hybrid+Reranker` | 84.6% | 92.3% | 0.886 | 2246.045 | 2584.587 | 0.0% | 100.0% |
-| V3 | `Vector` | 52.5% | 67.5% | 0.596 | 17.490 | 19.730 | 80.0% | 20.0% |
-| V3 | `BM25` | 72.5% | 82.5% | 0.771 | 55.821 | 62.946 | 0.0% | 100.0% |
-| V3 | `Hybrid` | 60.0% | 82.5% | 0.710 | 73.402 | 83.939 | 73.3% | 26.7% |
-| V3 | `Hybrid+Reranker` | 82.5% | 90.0% | 0.863 | 2114.387 | 2472.041 | 73.3% | 26.7% |
+| V3 | `Vector` | 57.5% | 65.0% | 0.617 | 18.070 | 22.608 | 86.7% | 13.3% |
+| V3 | `BM25` | 72.5% | 80.0% | 0.762 | 40.796 | 50.500 | 0.0% | 100.0% |
+| V3 | `Hybrid` | 75.0% | 85.0% | 0.800 | 52.658 | 64.289 | 73.3% | 26.7% |
+| V3 | `Hybrid+Reranker` | 90.0% | 97.5% | 0.933 | 1882.940 | 2721.975 | 73.3% | 26.7% |
 
 > **V1/V2 与 V3 负样本指标说明**：V1/V2 使用修复前的原始代码，没有针对 BM25/Hybrid/Reranker 的 Source Pollution Gate；V3 使用下节描述的修复版本。该 Fix 位于 Retrieval Layer，重新运行 V1/V2 时同样会生效；这里保留原始 V1/V2 数据作为对照。
 
@@ -91,6 +93,43 @@ V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档�
 
 将 `BM25_STRONG_THRESHOLD` 提高到 34 以上可以过滤 Django Case，但会增加误拒绝 Legitimate Positive Query 的风险，尤其是 BM25 Score 较高而 Vector Match 较弱的 Query。当前数值是有意选择的 Trade-off。
 
+## Structured Chunking / Metadata（V3）
+
+**方案**：将固定窗口切分改为结构化切分。文档先按 Markdown 标题、章节标题和段落形成语义块；超长块再使用滑窗切分。每个 Chunk 附带 `document / document_title / title / section / headings`，检索时不只匹配正文，也匹配这些元数据。
+
+**进入检索链路的位置**：
+
+1. BM25：标题、章节、文档名与正文一起进入词项索引。
+2. Vector：新建索引时将 `文档 / 章节 / 标题 / 内容` 拼成 Embedding Text。
+3. Reranker：CrossEncoder 的 document side 同样包含标题和章节元数据。
+
+**结果**：
+
+| Mode | Before Top-1 | After Top-1 | Before Top-3 | After Top-3 | Before MRR | After MRR |
+|---|---:|---:|---:|---:|---:|---:|
+| `Hybrid` | 60.0% | 75.0% | 82.5% | 85.0% | 0.710 | 0.800 |
+| `Hybrid+Reranker` | 82.5% | 90.0% | 90.0% | 97.5% | 0.863 | 0.933 |
+
+结论：结构化 Chunk + 元数据增强对最终 RAG 主路径是正收益。它的收益来自更完整的语义边界和标题/章节元数据参与检索，不是单纯增加 Chunk 数。
+
+## Query Rewrite Ablation（V3）
+
+**方案**：在检索前调用 LLM，将用户问题改写成更适合检索的一行 Query，目标是去掉口语、补全指代、保留专有名词。该能力已保留在代码中，但默认 RAG 路径不启用。
+
+**全量开启结果**（Hybrid+Reranker，55 cases）：
+
+| Metric | Original Query | Rewritten Query | Delta |
+|---|---:|---:|---:|
+| Top-1（40 正样本） | 90.0% | 82.5% | -7.5 pts |
+| Top-3（40 正样本） | 97.5% | 90.0% | -7.5 pts |
+| MRR（40 正样本） | 0.933 | 0.875 | -0.058 |
+| Fallback Success（15 负样本） | 73.3% | 80.0% | +6.7 pts |
+| Source Pollution（15 负样本） | 26.7% | 20.0% | -6.7 pts |
+
+Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.936 ms。逐例对比中，50 条不变，1 条负样本改善，4 条正样本变差。
+
+结论：当前 Query Rewrite 全量开启对负样本更谨慎，但对正样本召回是负收益，因此默认关闭。后续优化方向是条件式启用：只处理明显口语化、指代省略或上下文依赖 Query。
+
 ## V3 PDF Parse 结果
 
 | Source | Parse Method | Characters | Need OCR | OCR Used |
@@ -106,7 +145,7 @@ V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档�
 
 | Setting | Chunks | Parse Failures | OCR Triggered | OCR Used |
 |---|---:|---:|---:|---:|
-| OCR On | 1292 | 1 | 4 | 4 |
+| OCR On | 1438 | 1 | 4 | 4 |
 | OCR Off | 1256 | 2 | 4 | 0 |
 
 ### OCR 专项正样本（n=2）
@@ -133,28 +172,8 @@ V1 包含本地项目文档。V2 在 V1 基础上增加 5 篇精选官方文档�
 
 ## 结论
 
-1. 在最终 40 条正样本上，`Hybrid+Reranker` 达到 Top-1 82.5%、Top-3 90.0%、MRR 0.863。与 Hybrid 相比，MRR 提升 0.153，但 Avg Latency 增加 28.8 倍（73.4 ms → 2114.4 ms）。Source Pollution Fix 未影响 Reranker 的 Top-1 和 MRR。
-2. `BM25` 仍是较强 Baseline：Top-1 72.5%、Top-3 82.5%、MRR 0.771；在当前 Corpus 上优于未使用 Reranker 的 Hybrid（MRR 0.710）。
-3. OCR On 增加 36 个 Chunks，并将 Parse Failures 从 2 降至 1。纯扫描 Fixture 在 BM25 中变为 Rank 1，在 Hybrid 中为 Rank 3，在 Hybrid+Reranker 中为 Rank 5；Vector 仍然 Miss。所有 Mode 都未在 Top-5 检索到 Mixed-PDF Marker，原因是 OCR 将 Marker 连接成了一个 Token。
-4. 完成 Source Pollution Fix 后，Hybrid 与 Reranker 的 Fallback Success 从 0% 提升至 73.3%，Source Pollution 从 100% 降至 26.7%。剩余 Pollution 来自 Vector 固有的 20% False-positive Rate（3/4 Cases）以及 1 个异常高分 BM25 Case。BM25-only 仍无法通过简单 Threshold 可靠修复，因为正负样本的 BM25 Score 严重重叠。
-
-## 可用于简历的谨慎 STAR 表述
-
-- 分三个可追踪阶段扩展本地 AI Study Assistant Knowledge Base：Documents 从 51 增至 63，Indexed Chunks 从 341 增至 1292；数据包含项目笔记、精选官方文档和 4 篇 arXiv Papers。
-- 构建 55-Case Offline Retrieval Benchmark（40 Positive / 15 Negative），覆盖 Fact Lookup、Concept Explanation、Acronyms、中英混合 Query、OCR 和 Out-of-knowledge Query。
-- 对比 Vector、BM25、Hybrid RRF 与 CrossEncoder Reranker；最终本地实验中，Reranking 将 Hybrid MRR 从 0.710 提升至 0.863，Top-1 从 60.0% 提升至 82.5%。
-- 量化 Reranking Trade-off：同一台机器和同一组 Cases 上，Avg Retrieval Latency 从 Hybrid 的 73.4 ms 增加到 Hybrid+Reranker 的 2114.4 ms。
-- 增加 Native、Scanned 与 Mixed PDF Parse 检查；OCR 恢复 36 个额外 Chunks，并让纯扫描 PDF Source 在 BM25 中从 Miss 变为 Rank 1。
-- 定位并部分修复 Source Pollution：通过要求 Vector Signal 或 Strong BM25 Evidence 的 Unified Gate，将 Hybrid/Reranker Pollution 从 100% 降至 26.7%。
-- 保留 Source URLs、Collection Timestamps、SHA-256、Per-document Parse Methods 与 JSON Metrics，使 Benchmark Claims 可复现、可审计。
-
-## 不应过度表述的结果
-
-- 不要宣称通用 OCR Accuracy：OCR 专项正样本只有 2 条，并且使用的是 2 个派生 Fixtures。
-- 不要宣称 Production Latency 或 Throughput：每个 Query 仅在一台本地 Windows 机器上测量 1 次，没有并发测试，也没有重复实验的 Confidence Interval。
-- 不要把当前 Ranking Winner 泛化到其他 Corpus：最终正样本只有 40 条，且研究论文主题只有 4 个。
-- 不要把 V1/V2/V3 的 Index Build Time 当作严格的 Scaling Curve：V3 Runner 复用了 Parsed Documents，以避免重复 OCR。
-- 不要从本次实验宣称 Answer Correctness：本报告只评测 Source Ranking，没有调用 LLM Answer Generator、Human Annotator 或 LLM-as-Judge。
-- 15 条负样本只能视为 Diagnostic Signal，不能视为经过校准的生产环境 Out-of-domain Distribution。
-- 不要宣称 BM25 Source Pollution 已解决：当前 Simple-threshold Strategy 下，BM25 Mode 仍为 100% Pollution；Fix 仅通过 Vector Gate Component 作用于 Hybrid 和 Reranker。
-- 不要宣称 V1/V2 的负样本指标与 V3 一致：V1/V2 数据采集于 Fix 之前，BM25/Hybrid/Reranker 仍显示 100% Source Pollution。
+1. 在最终 40 条正样本上，结构化 Chunk + 元数据增强后，`Hybrid+Reranker` 达到 Top-1 90.0%、Top-3 97.5%、MRR 0.933；`Hybrid` 达到 Top-1 75.0%、Top-3 85.0%、MRR 0.800。
+2. 结构化 Chunk 对最终 RAG 主路径是正收益：`Hybrid+Reranker` 相比原 V3 Top-1 提升 7.5 pts，Top-3 提升 7.5 pts，MRR 提升 0.070。
+3. Query Rewrite 当前全量开启是负收益：正样本 Top-1 从 90.0% 降至 82.5%，MRR 从 0.933 降至 0.875；虽然负样本 Fallback Success 从 73.3% 提升至 80.0%，但不适合作为默认策略。
+4. OCR On 保留 46 个 OCR Chunks，并将 Parse Failures 从 OCR Off 的 2 降至 1。纯扫描 Fixture 在 BM25 中变为 Rank 1，在 Hybrid 中为 Rank 3，在 Hybrid+Reranker 中为 Rank 5；Vector 仍然 Miss。
+5. 完成 Source Pollution Fix 后，Hybrid 与 Reranker 的 Fallback Success 为 73.3%，Source Pollution 为 26.7%。BM25-only 仍无法通过简单 Threshold 可靠修复，因为正负样本的 BM25 Score 严重重叠。
