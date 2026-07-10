@@ -60,7 +60,7 @@ React / Vite Frontend
 | Retrieval Mode | Top-1 | Top-3 | MRR | Avg Latency | P95 Latency |
 |---|---:|---:|---:|---:|---:|
 | `Vector` | 57.5% | 65.0% | 0.617 | 17.0 ms | 20.7 ms |
-| `BM25` | 72.5% | 80.0% | 0.762 | 41.4 ms | 50.5 ms |
+| `BM25` | 75.0% | 87.5% | 0.812 | 41.4 ms | 50.5 ms |
 | `Hybrid` | 75.0% | 85.0% | 0.800 | 53.3 ms | 64.3 ms |
 | `Hybrid + Reranker` | **90.0%** | **97.5%** | **0.933** | 1945.7 ms | 2722.0 ms |
 
@@ -106,11 +106,50 @@ Query Rewrite 能把用户问题交给 LLM 改写成更“检索友好”的形�
 | Fallback Success | 73.3% | **80.0%** | +6.7 pts |
 | Source Pollution | 26.7% | **20.0%** | -6.7 pts |
 
-Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.9 ms。结论：当前 Rewrite 对负样本更谨慎，但对正样本召回是负收益；默认关闭，待优化为“仅在明显口语化、指代省略或上下文依赖时启用”。
+Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.9 ms。结论：当前 Rewrite 对负样本更谨慎，但对正样本召回是负收益；默认关闭，待优化为”仅在明显口语化、指代省略或上下文依赖时启用”。
+
+### BM25 Term Coverage / Entity Gate
+
+BM25 路径新增 Term Coverage 与 Entity Matching Gate，用于过滤 BM25 的假阳性候选。对每条候选分别计算：
+
+- `bm25_term_coverage`：命中 BM25 词项 / Query 词项
+- `bm25_entity_match_count`：命中实体词项数量
+- `bm25_entity_term_coverage`：命中实体词项 / Query 实体词项
+
+过滤规则：若 Query 含实体词（缩写、英文术语、API 路径、文件名、数字等），至少一个实体必须命中且实体覆盖率达标；若无实体词，候选必须通过最低词项覆盖率门槛。目标是对 “Kubernetes HPA” 匹配到通用中文项目文档这类假阳性做精准拦截。
+
+Benchmark 在 359 Docs / 2579 Chunks 的当前工作区索引上运行，对比关闭/开启 Gate 两组实验（40 Positive + 15 Negative Cases，top_k=5）：
+
+#### With BM25 Gate（当前默认）
+
+| Mode | Top-1 | Top-3 | MRR | Fallback Success | Source Pollution |
+|---|---:|---:|---:|---:|---:|
+| `BM25` | 75.0% | 87.5% | 0.812 | 40.0% | 60.0% |
+| `Hybrid` | 72.5% | 85.0% | 0.799 | 80.0% | 20.0% |
+| `Hybrid+Reranker` | **90.0%** | **97.5%** | **0.938** | 80.0% | 20.0% |
+
+#### Delta（Gate 开启 vs 关闭）
+
+| Mode | Top-1 | Top-3 | MRR | Fallback | Pollution |
+|---|---:|---:|---:|---:|---:|
+| `BM25` | +2.5 pts | +7.5 pts | +0.050 | +40.0 pts | **-40.0 pts** |
+| `Hybrid` | -2.5 pts | 0.0 pts | -0.001 | +13.3 pts | -13.3 pts |
+| `Hybrid+Reranker` | 0.0 pts | 0.0 pts | +0.005 | +13.3 pts | -13.3 pts |
+
+#### Source Pollution 修复详情
+
+| Mode | 已修复 | 仍残留 |
+|---|---|---|
+| `BM25` | 6 例（blockchain, ios, kubernetes, celery, cv, graph_neural_network） | 9 例 |
+| `Hybrid` | 2 例（kubernetes, prometheus） | 3 例（django, graph_neural_network, quantum） |
+| `Hybrid+Reranker` | 2 例（kubernetes, prometheus） | 3 例（django, graph_neural_network, quantum） |
+
+**结论**：BM25 Gate 整体为正收益。BM25-only Source Pollution 从 100.0% 降至 60.0%，同时 Top-1 / Top-3 / MRR 均提升。Hybrid+Reranker 保持 Top-1 和 Top-3 不变，MRR 微增，Source Pollution 从 33.3% 降至 20.0%。残留污染案例指向语义相邻但超出知识范围的实体，下一步应加强多实体 Query 的实体覆盖率要求，并维护高价值领域别名 Allowlist 以避免过度过滤正样本。
 
 ### Reports / Reproduction
 
 - [Full benchmark report](reports/RAG_V1_V2_V3_BENCHMARK.md)
+- [BM25 Term/Entity Gate report](reports/RAG_BM25_ENTITY_GATE_REPORT.md)
 - [Machine-readable metrics](reports/RAG_V1_V2_V3_METRICS.json)
 - [V3 evaluation cases](eval_cases/rag_v3_cases.json)
 - [Benchmark runner](scripts/benchmark_rag_batch.py)
@@ -122,6 +161,16 @@ Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latenc
 Tool Registry 按 `read / write / dangerous` 分类。Dangerous Tool 必须经过独立的 requester / approver 凭据确认；一次性 confirmation token 与 tool name、arguments 和 requester 绑定，arguments 变化或 token 复用都会被拒绝。所有调用状态、耗时、参数摘要和审批事件写入 append-only JSONL audit log，并关联到对应 Run。
 
 Agent 遇到删除、清空、重置或重建操作时不会直接执行，而是创建持久化的 Pending Action，并将 Run 标记为 `awaiting_action`。对话内确认卡片会展示影响范围、精确参数、可撤销性和过期时间；用户可批准或拒绝。批准后后端仍通过原有一次性 confirmation token 执行，拒绝、过期、失败和重复提交都会被记录或拦截。默认 Pending Action 保存在 `data/pending_actions`，有效期为 300 秒，可通过 `PENDING_ACTIONS_DIR` 和 `PENDING_ACTION_TTL_SECONDS` 调整。
+
+默认情况下，`TOOL_APPROVAL_KEY` 与 `TOOL_APPROVER_KEY` 都需要 32 位以上且互不相同。本地开发如果嫌长 key 在 Swagger / Dev Tool Debugger 里复制麻烦，可以在 `.env` 打开：
+
+```env
+ENABLE_INSECURE_DEV_TOOL_KEYS=true
+TOOL_APPROVAL_KEY=dev-req1
+TOOL_APPROVER_KEY=dev-app1
+```
+
+这个开关只适合本机开发；共享、测试、生产环境请保持关闭。
 
 ## 运行可观测性
 
@@ -181,7 +230,7 @@ npm run build
 - V3 仅包含 40 个 Positive Cases 和 15 个 Negative Cases，样本规模仍有限。
 - Reranker 效果最好，但本地 Avg Latency 约 1.9 秒。
 - OCR-specific Eval Cases 有限，不能据此宣称通用 OCR 准确率提升。
-- BM25-only Source Pollution 仍是 Known Limitation；简单 threshold 无法可靠区分 Positive/Negative Cases。
+- BM25-only Source Pollution 经 Term/Entity Gate 已从 100.0% 降至 60.0%，但仍残留在语义相邻但超出知识范围的实体上，如 quantum / django / graph_neural_network。
 - Query Rewrite 当前全量开启会降低正样本召回，因此默认关闭。
 - File-based RunRepository 与可选 SQLite 配置更适合单机原型，尚未面向 Distributed Execution 设计。
 
@@ -191,5 +240,5 @@ npm run build
 - 增加 Context Selection Gate。
 - 增加 History Relevance Filter。
 - 将 Query Rewrite 改成条件式启用：仅处理口语化、指代省略或上下文依赖 Query。
-- 为 BM25 增加 Term Coverage / Entity Matching。
+- BM25 Term Coverage / Entity Gate 已实现，后续加强多实体 Query 覆盖率与领域别名 Allowlist。
 - 扩充 Positive/Negative Cases 与 PDF/OCR Eval Cases。
