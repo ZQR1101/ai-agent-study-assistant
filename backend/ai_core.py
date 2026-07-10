@@ -124,6 +124,7 @@ def _plan_steps_for_response(plan: dict | None) -> list[dict]:
             "tool": str(step.get("tool", "")),
             "input": str(step.get("input", "")),
             "reason": step.get("reason"),
+            **({"arguments": step.get("arguments")} if step.get("arguments") else {}),
         }
         for step in plan["steps"]
         if isinstance(step, dict)
@@ -275,6 +276,7 @@ def run_chat_request(request: ChatRequest) -> dict:
     rag_context = None
     plan = []
     flashcards = []
+    pending_actions = []
     runtime_info = {}
 
     if use_rag and not agent_handles_rag:
@@ -434,12 +436,14 @@ def run_chat_request(request: ChatRequest) -> dict:
             reranker_enabled=request.reranker_enabled,
             history_context=history_context,
             run_id=request.run_id,
+            session_id=request.session_id,
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
         flashcards = agent_result.get("flashcards", [])
         runtime_info = agent_result.get("runtime_info", {})
+        pending_actions = agent_result.get("pending_actions", [])
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -455,12 +459,14 @@ def run_chat_request(request: ChatRequest) -> dict:
             reranker_enabled=request.reranker_enabled,
             history_context=history_context,
             run_id=request.run_id,
+            session_id=request.session_id,
         )
         answer = agent_result["answer"]
         sources = agent_result.get("sources", [])
         plan = _plan_steps_for_response(agent_result.get("plan"))
         flashcards = agent_result.get("flashcards", [])
         runtime_info = agent_result.get("runtime_info", {})
+        pending_actions = agent_result.get("pending_actions", [])
         fallback_used = fallback_used or agent_result.get("fallback_used", False)
         trace.extend(agent_result["trace"])
 
@@ -475,4 +481,5 @@ def run_chat_request(request: ChatRequest) -> dict:
         "plan": plan,
         "flashcards": flashcards,
         "runtime_info": attach_usage_to_runtime_info(runtime_info, custom_llm),
+        "pending_actions": pending_actions,
     }

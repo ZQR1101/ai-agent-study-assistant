@@ -637,7 +637,6 @@ class ToolsTests(unittest.TestCase):
             "reset_saved_items",
             "reset_rag_index",
             "rebuild_rag_index",
-            "run_code_sandbox",
             "delete_run",
         }
 

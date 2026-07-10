@@ -190,6 +190,12 @@ def serialize_chunk(chunk: dict, rank: int) -> dict:
         "rerank_rank",
         "reranker_used",
         "chunk_id",
+        "bm25_term_coverage",
+        "bm25_matched_term_count",
+        "bm25_term_count",
+        "bm25_entity_match_count",
+        "bm25_entity_term_count",
+        "bm25_entity_term_coverage",
     ):
         value = chunk.get(key)
         if value is not None:

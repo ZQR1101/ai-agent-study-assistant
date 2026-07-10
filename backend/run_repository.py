@@ -12,7 +12,15 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
-RunStatus = Literal["created", "running", "completed", "partial", "failed", "deleted"]
+RunStatus = Literal[
+    "created",
+    "running",
+    "awaiting_action",
+    "completed",
+    "partial",
+    "failed",
+    "deleted",
+]
 
 
 def _utc_now() -> str:

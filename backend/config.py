@@ -68,6 +68,7 @@ class AppConfig:
     reranker_model: str
     reranker_top_n: int
     cors_allowed_origins: tuple[str, ...]
+    enable_insecure_dev_tool_keys: bool
     tool_approval_key: str | None
     tool_approver_key: str | None
     max_upload_size_bytes: int
@@ -157,9 +158,13 @@ def read_cors_allowed_origins() -> tuple[str, ...]:
     return origins
 
 
-def read_tool_secret(name: str) -> str | None:
+def read_tool_secret(name: str, *, allow_insecure_dev_key: bool | None = None) -> str | None:
     value = (os.getenv(name) or "").strip()
-    if not value or len(value) < 32 or value.lower() in TOOL_SECRET_PLACEHOLDERS:
+    if allow_insecure_dev_key is None:
+        allow_insecure_dev_key = read_bool_env("ENABLE_INSECURE_DEV_TOOL_KEYS", False)
+
+    minimum_length = 8 if allow_insecure_dev_key else 32
+    if not value or len(value) < minimum_length or value.lower() in TOOL_SECRET_PLACEHOLDERS:
         return None
     return value
 
@@ -178,6 +183,10 @@ def get_embedding_model_settings() -> tuple[str, bool]:
 def get_config() -> AppConfig:
     api_key, api_key_source = read_api_key()
     embedding_model, embedding_model_local_only = get_embedding_model_settings()
+    enable_insecure_dev_tool_keys = read_bool_env(
+        "ENABLE_INSECURE_DEV_TOOL_KEYS",
+        False,
+    )
     return AppConfig(
         project_root=PROJECT_ROOT,
         docs_path=PROJECT_ROOT / "docs",
@@ -195,8 +204,15 @@ def get_config() -> AppConfig:
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
         cors_allowed_origins=read_cors_allowed_origins(),
-        tool_approval_key=read_tool_secret("TOOL_APPROVAL_KEY"),
-        tool_approver_key=read_tool_secret("TOOL_APPROVER_KEY"),
+        enable_insecure_dev_tool_keys=enable_insecure_dev_tool_keys,
+        tool_approval_key=read_tool_secret(
+            "TOOL_APPROVAL_KEY",
+            allow_insecure_dev_key=enable_insecure_dev_tool_keys,
+        ),
+        tool_approver_key=read_tool_secret(
+            "TOOL_APPROVER_KEY",
+            allow_insecure_dev_key=enable_insecure_dev_tool_keys,
+        ),
         max_upload_size_bytes=read_positive_int_env(
             "MAX_UPLOAD_SIZE_BYTES", 10 * 1024 * 1024
         ),
