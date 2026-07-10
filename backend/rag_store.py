@@ -87,6 +87,9 @@ RERANKER_MIN_SCORE = 0.0
 MIN_CHUNK_LENGTH = 30
 HYBRID_VECTOR_WEIGHT = 1.0
 HYBRID_BM25_WEIGHT = 1.15
+BM25_MIN_TERM_COVERAGE = 0.25
+BM25_MIN_ENTITY_TERM_COVERAGE = 0.20
+BM25_MIN_ENTITY_MATCHES = 1
 
 _SECTION_HEADING_PATTERN = re.compile(
     r"^\s*((?:第[一二三四五六七八九十百千万0-9]+[章节篇])|"
@@ -474,12 +477,17 @@ def load_documents():
         DOCS_PATH.mkdir(exist_ok=True)
         return documents
 
-    for file_path in DOCS_PATH.iterdir():
+    allowed_suffixes = {".txt", ".md", ".pdf"}
+    for file_path in sorted(DOCS_PATH.rglob("*")):
         if not file_path.is_file():
             continue
         suffix = file_path.suffix.lower()
+        relative_path = file_path.relative_to(DOCS_PATH)
 
-        if suffix in {".txt", ".md", ".pdf"}:
+        if relative_path.parts and relative_path.parts[0] == "raw":
+            continue
+
+        if suffix in allowed_suffixes:
             try:
                 parse_result = extract_text_from_document(file_path)
             except Exception as exc:
@@ -488,7 +496,7 @@ def load_documents():
                     corrupted_pdf=suffix == ".pdf",
                 )
             documents.append({
-                "source": file_path.name,
+                "source": relative_path.as_posix(),
                 "text": parse_result["text"],
                 "parse_method": parse_result["method"],
                 "ocr_used": parse_result["ocr_used"],
@@ -806,6 +814,10 @@ _BM25_ASCII_ALIASES = {
     "skills": ("skill",),
 }
 
+_BM25_ENTITY_PATTERN = re.compile(
+    r"/[A-Za-z0-9_./-]+|[A-Za-z0-9_][A-Za-z0-9_./-]*|\d+(?:\.\d+)*"
+)
+
 
 def _append_ascii_bm25_token(tokens: list[str], token: str) -> None:
     if not token:
@@ -846,6 +858,89 @@ def tokenize_for_bm25(text: str) -> list[str]:
             _append_ascii_bm25_token(tokens, part)
 
     return [token for token in tokens if token]
+
+
+def _unique_bm25_terms(terms: list[str]) -> list[str]:
+    unique_terms = []
+    seen = set()
+    for term in terms:
+        normalized = str(term or "").strip()
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_terms.append(normalized)
+    return unique_terms
+
+
+def extract_bm25_entity_terms(query: str) -> list[str]:
+    entity_terms = []
+    seen = set()
+    for raw_entity in _BM25_ENTITY_PATTERN.findall(str(query or "")):
+        entity_tokens = tokenize_for_bm25(raw_entity)
+        for token in entity_tokens:
+            if len(token) < 2:
+                continue
+            key = token.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            entity_terms.append(token)
+    return entity_terms
+
+
+def _bm25_match_diagnostics(
+    query_terms: list[str],
+    entity_terms: list[str],
+    bm25_index: dict,
+    doc_position: int,
+) -> dict:
+    term_counts = bm25_index["term_counts"][doc_position]
+    unique_terms = _unique_bm25_terms(query_terms)
+    matched_terms = [
+        term
+        for term in unique_terms
+        if term_counts.get(term, 0) > 0 or term_counts.get(term.casefold(), 0) > 0
+    ]
+    unique_entity_terms = _unique_bm25_terms(entity_terms)
+    matched_entity_terms = [
+        term
+        for term in unique_entity_terms
+        if term_counts.get(term, 0) > 0 or term_counts.get(term.casefold(), 0) > 0
+    ]
+    term_count = len(unique_terms)
+    entity_count = len(unique_entity_terms)
+    return {
+        "term_count": term_count,
+        "matched_term_count": len(matched_terms),
+        "term_coverage": len(matched_terms) / term_count if term_count else 0.0,
+        "entity_term_count": entity_count,
+        "entity_match_count": len(matched_entity_terms),
+        "entity_term_coverage": len(matched_entity_terms) / entity_count if entity_count else None,
+        "matched_terms": matched_terms,
+        "entity_terms": unique_entity_terms,
+        "matched_entity_terms": matched_entity_terms,
+    }
+
+
+def _passes_bm25_match_gate(diagnostics: dict) -> bool:
+    entity_term_count = int(diagnostics.get("entity_term_count") or 0)
+    entity_match_count = int(diagnostics.get("entity_match_count") or 0)
+    term_coverage = float(diagnostics.get("term_coverage") or 0.0)
+    entity_term_coverage = diagnostics.get("entity_term_coverage")
+
+    if entity_term_count:
+        return (
+            entity_match_count >= BM25_MIN_ENTITY_MATCHES
+            and (
+                entity_term_coverage is None
+                or float(entity_term_coverage) >= BM25_MIN_ENTITY_TERM_COVERAGE
+            )
+        )
+
+    return term_coverage >= BM25_MIN_TERM_COVERAGE
 
 
 def _chunk_id(chunk: dict, position: int) -> str:
@@ -1010,6 +1105,7 @@ def search_keyword_chunks(query: str, top_k: int = 10) -> list[dict]:
     query_terms = tokenize_for_bm25(query)
     if not query_terms:
         return []
+    entity_terms = extract_bm25_entity_terms(query)
 
     bm25_index = _get_bm25_index()
     results = []
@@ -1021,9 +1117,25 @@ def search_keyword_chunks(query: str, top_k: int = 10) -> list[dict]:
         score = _bm25_score(query_terms, bm25_index, position)
         if score <= 0:
             continue
+        diagnostics = _bm25_match_diagnostics(query_terms, entity_terms, bm25_index, position)
+        if not _passes_bm25_match_gate(diagnostics):
+            continue
 
         item = _chunk_result(chunk, position, score, "bm25")
         item["bm25_score"] = float(score)
+        item["bm25_term_coverage"] = round(float(diagnostics["term_coverage"]), 4)
+        item["bm25_matched_term_count"] = diagnostics["matched_term_count"]
+        item["bm25_term_count"] = diagnostics["term_count"]
+        item["bm25_entity_match_count"] = diagnostics["entity_match_count"]
+        item["bm25_entity_term_count"] = diagnostics["entity_term_count"]
+        if diagnostics["entity_term_coverage"] is not None:
+            item["bm25_entity_term_coverage"] = round(
+                float(diagnostics["entity_term_coverage"]),
+                4,
+            )
+        item["bm25_matched_terms"] = diagnostics["matched_terms"][:20]
+        item["bm25_entity_terms"] = diagnostics["entity_terms"][:20]
+        item["bm25_matched_entity_terms"] = diagnostics["matched_entity_terms"][:20]
         results.append(item)
 
     results.sort(key=lambda item: item["bm25_score"], reverse=True)

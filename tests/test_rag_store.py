@@ -34,6 +34,42 @@ class OCRRagStoreTests(unittest.TestCase):
         self.assertFalse(chunks[0]["ocr_used"])
         self.assertFalse(chunks[0]["need_ocr"])
 
+    def test_load_documents_recurses_and_skips_raw_corpus_files(self):
+        parse_result = {
+            "text": "Loaded document content for recursive knowledge base scanning.",
+            "method": "text",
+            "ocr_used": False,
+            "need_ocr": False,
+            "text_char_count": 61,
+            "warnings": [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docs_path = Path(tmpdir)
+            (docs_path / "root.md").write_text("root", encoding="utf-8")
+            nested = docs_path / "nested"
+            nested.mkdir()
+            (nested / "guide.txt").write_text("nested", encoding="utf-8")
+            (nested / "ignored.jsonl").write_text("{}", encoding="utf-8")
+            raw = docs_path / "raw"
+            raw.mkdir()
+            (raw / "corpus.jsonl").write_text("answer leakage", encoding="utf-8")
+            (raw / "queries.tsv").write_text("query leakage", encoding="utf-8")
+
+            with (
+                patch.object(rag_store, "DOCS_PATH", docs_path),
+                patch(
+                    "backend.rag_store.extract_text_from_document",
+                    return_value=parse_result,
+                ) as extract,
+            ):
+                documents = rag_store.load_documents()
+
+        self.assertEqual(
+            [document["source"] for document in documents],
+            ["nested/guide.txt", "root.md"],
+        )
+        self.assertEqual(extract.call_count, 2)
+
     def test_ocr_metadata_is_copied_to_chunks(self):
         document = {
             "source": "scan.pdf",

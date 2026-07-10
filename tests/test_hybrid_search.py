@@ -94,6 +94,32 @@ class HybridSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["title"], "Billing API")
         self.assertEqual(results[0]["section"], "Backend Notes > Billing API")
 
+    def test_bm25_filters_weak_match_when_query_entities_are_missing(self):
+        rag_store.chunks = [
+            {
+                "source": "deployment.md",
+                "text": "项目部署配置说明包含运行环境、服务启动、日志记录、监控指标和故障排查流程。",
+            }
+        ]
+
+        results = search_keyword_chunks("这个项目的 Kubernetes HPA 最小副本数是多少？", top_k=1)
+
+        self.assertEqual(results, [])
+
+    def test_bm25_keeps_match_when_query_entity_is_present(self):
+        rag_store.chunks = [
+            {
+                "source": "kubernetes.md",
+                "text": "Kubernetes HPA 配置记录了最小副本数、最大副本数、CPU 指标和自动扩缩容策略。",
+            }
+        ]
+
+        results = search_keyword_chunks("这个项目的 Kubernetes HPA 最小副本数是多少？", top_k=1)
+
+        self.assertEqual(results[0]["source"], "kubernetes.md")
+        self.assertGreaterEqual(results[0]["bm25_entity_match_count"], 1)
+        self.assertGreater(results[0]["bm25_term_coverage"], 0)
+
     def test_bm25_ranks_agent_skill_document_first_for_compound_query(self):
         rag_store.chunks = [
             {

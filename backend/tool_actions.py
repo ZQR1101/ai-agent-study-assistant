@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import os
-import subprocess
-import sys
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -171,88 +167,3 @@ def reset_rag_index(**_: Any) -> dict:
                 path.unlink()
     rag_store._reset_bm25_index()
     return {"answer": "RAG index reset", "reset": True}
-
-
-_BLOCKED_AST_NODES = (
-    ast.Import,
-    ast.ImportFrom,
-    ast.Global,
-    ast.Nonlocal,
-    ast.With,
-    ast.AsyncWith,
-)
-_BLOCKED_CALLS = {
-    "__import__",
-    "breakpoint",
-    "compile",
-    "delattr",
-    "dir",
-    "eval",
-    "exec",
-    "getattr",
-    "globals",
-    "input",
-    "locals",
-    "memoryview",
-    "open",
-    "setattr",
-    "type",
-    "vars",
-}
-
-
-def _validate_sandbox_code(code: str) -> None:
-    tree = ast.parse(code, mode="exec")
-    for node in ast.walk(tree):
-        if isinstance(node, _BLOCKED_AST_NODES):
-            raise ValueError(f"Sandbox code cannot use {type(node).__name__}")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in _BLOCKED_CALLS:
-                raise ValueError(f"Sandbox code cannot call {node.func.id}")
-        if isinstance(node, ast.Name) and node.id.startswith("__"):
-            raise ValueError("Sandbox code cannot access dunder names")
-        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-            raise ValueError("Sandbox code cannot access dunder attributes")
-
-
-def run_code_sandbox(
-    step_input: str = "",
-    *,
-    code: str = "",
-    timeout_seconds: int = 3,
-    **_: Any,
-) -> dict:
-    source = str(code or step_input)
-    if not source.strip():
-        raise ValueError("Python code cannot be empty")
-    if len(source) > 20_000:
-        raise ValueError("Python code exceeds the 20 KB limit")
-    _validate_sandbox_code(source)
-    timeout = max(1, min(int(timeout_seconds), 10))
-    environment = {"PYTHONIOENCODING": "utf-8", "PYTHONHASHSEED": "0"}
-    with tempfile.TemporaryDirectory(prefix="study-sandbox-") as directory:
-        try:
-            completed = subprocess.run(
-                [sys.executable, "-I", "-S", "-c", source],
-                cwd=directory,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "answer": "Code execution timed out",
-                "stdout": (exc.stdout or "")[-20_000:],
-                "stderr": (exc.stderr or "")[-20_000:],
-                "exit_code": None,
-                "timed_out": True,
-            }
-    return {
-        "answer": "Code execution finished",
-        "stdout": completed.stdout[-20_000:],
-        "stderr": completed.stderr[-20_000:],
-        "exit_code": completed.returncode,
-        "timed_out": False,
-    }

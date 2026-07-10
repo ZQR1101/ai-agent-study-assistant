@@ -3135,11 +3135,6 @@ body {
     box-shadow: 0 0 0 3px rgba(28, 122, 71, 0.12);
 }
 
-.run-status-dot.awaiting_action {
-    background: var(--secondary);
-    box-shadow: 0 0 0 4px var(--secondary-soft);
-}
-
 .run-status-dot.partial {
     background: var(--warn-fg);
     box-shadow: 0 0 0 3px rgba(138, 90, 18, 0.12);
@@ -3529,6 +3524,217 @@ body {
     min-height: 215px;
 }
 
+@media (max-width: 680px) {
+    .answer-flashcard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.audit-status {
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 700;
+    justify-self: start;
+    padding: 3px 6px;
+}
+
+.audit-status.succeeded {
+    background: var(--ok-bg);
+    color: var(--ok-fg);
+}
+
+.audit-status.started {
+    background: #e7eefc;
+    color: #2f5aa8;
+}
+
+.audit-status.confirmation_required,
+.audit-status.confirmation_rejected {
+    background: var(--warn-bg);
+    color: var(--warn-fg);
+}
+
+.audit-status.failed,
+.audit-status.unknown_tool {
+    background: var(--err-bg);
+    color: var(--err-fg);
+}
+
+.run-status-dot.awaiting_action {
+    background: var(--secondary);
+    box-shadow: 0 0 0 4px var(--secondary-soft);
+}
+
+.debugger-layout {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    margin-top: 18px;
+}
+
+.debugger-tool-list,
+.debugger-panel,
+.debugger-result {
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-soft);
+}
+
+.debugger-tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: calc(100vh - 220px);
+    overflow: auto;
+    padding: 14px;
+}
+
+.debugger-tool-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    cursor: pointer;
+    display: grid;
+    gap: 5px;
+    padding: 10px;
+    text-align: left;
+}
+
+.debugger-tool-item:hover,
+.debugger-tool-item.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.debugger-tool-item strong {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.debugger-tool-item em {
+    color: var(--warn-fg);
+    font-size: 11px;
+    font-style: normal;
+}
+
+.tool-category {
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 800;
+    justify-self: start;
+    padding: 3px 7px;
+    text-transform: uppercase;
+}
+
+.tool-category.read {
+    background: #e7eefc;
+    color: #2f5aa8;
+}
+
+.tool-category.write {
+    background: var(--ok-bg);
+    color: var(--ok-fg);
+}
+
+.tool-category.dangerous,
+.metadata-chip.danger {
+    background: var(--err-bg);
+    color: var(--err-fg);
+}
+
+.debugger-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+}
+
+.debugger-selected-header {
+    align-items: flex-start;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.debugger-selected-header h3 {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    margin: 0;
+}
+
+.debugger-selected-header p {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 20px;
+    margin-top: 6px;
+}
+
+.debugger-field {
+    display: grid;
+    gap: 7px;
+}
+
+.debugger-field span {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.debugger-field input,
+.debugger-field textarea {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font: 13px/1.5 var(--font-mono);
+    padding: 10px 12px;
+}
+
+.debugger-field textarea {
+    min-height: 220px;
+    resize: vertical;
+}
+
+.debugger-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.debugger-status,
+.debugger-danger-note {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 20px;
+}
+
+.debugger-result {
+    padding: 12px;
+}
+
+.debugger-result strong {
+    color: var(--text);
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.debugger-result pre {
+    background: #111827;
+    border-radius: var(--r-sm);
+    color: #d1fae5;
+    font: 12px/1.6 var(--font-mono);
+    margin: 0;
+    max-height: 360px;
+    overflow: auto;
+    padding: 12px;
+    white-space: pre-wrap;
+}
+
 .pending-actions {
     display: grid;
     gap: 12px;
@@ -3683,42 +3889,6 @@ body {
 }
 
 @media (max-width: 680px) {
-    .answer-flashcard-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-.audit-status {
-    border-radius: 999px;
-    font-size: 9px;
-    font-weight: 700;
-    justify-self: start;
-    padding: 3px 6px;
-}
-
-.audit-status.succeeded {
-    background: var(--ok-bg);
-    color: var(--ok-fg);
-}
-
-.audit-status.started {
-    background: #e7eefc;
-    color: #2f5aa8;
-}
-
-.audit-status.confirmation_required,
-.audit-status.confirmation_rejected {
-    background: var(--warn-bg);
-    color: var(--warn-fg);
-}
-
-.audit-status.failed,
-.audit-status.unknown_tool {
-    background: var(--err-bg);
-    color: var(--err-fg);
-}
-
-@media (max-width: 680px) {
     .chat-topbar,
     .chat-thread,
     .composer-bar {
@@ -3750,6 +3920,14 @@ body {
     .message-audit-event time {
         display: none;
     }
+
+    .debugger-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .pending-action-card dl {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* 窄桌面仍保留历史会话入口，仅收起右侧结果检查器。 */
@@ -3765,11 +3943,5 @@ body {
 
     .inspector-panel {
         display: none;
-    }
-}
-
-@media (max-width: 680px) {
-    .pending-action-card dl {
-        grid-template-columns: 1fr;
     }
 }

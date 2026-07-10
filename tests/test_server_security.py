@@ -91,19 +91,26 @@ class ServerSecurityTests(unittest.TestCase):
             "http://127.0.0.1:5500",
         )
 
-    def test_cors_does_not_allow_browser_approver_credentials(self):
+    def test_cors_allows_tool_approval_headers_for_trusted_frontend(self):
         response = self.client.options(
             "/tools/delete_run/approvals/request-id",
             headers={
                 "Origin": "http://127.0.0.1:5500",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "X-Tool-Approver-Key",
+                "Access-Control-Request-Headers": (
+                    "X-Tool-Approval-Key, X-Tool-Approver-Key"
+                ),
             },
         )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get("access-control-allow-origin"),
+            "http://127.0.0.1:5500",
+        )
         allowed_headers = response.headers.get("access-control-allow-headers", "").lower()
-        self.assertNotIn("x-tool-approver-key", allowed_headers)
+        self.assertIn("x-tool-approval-key", allowed_headers)
+        self.assertIn("x-tool-approver-key", allowed_headers)
 
     def test_cors_allows_upload_csrf_header_for_trusted_frontend(self):
         response = self.client.options(
@@ -138,6 +145,27 @@ class ServerSecurityTests(unittest.TestCase):
         strong_secret = "a-strong-random-tool-secret-value-123456"
         with patch.dict(os.environ, {"TOOL_APPROVAL_KEY": strong_secret}):
             self.assertEqual(read_tool_secret("TOOL_APPROVAL_KEY"), strong_secret)
+
+    def test_tool_secrets_allow_short_keys_only_with_dev_escape_hatch(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_INSECURE_DEV_TOOL_KEYS": "true",
+                "TOOL_APPROVAL_KEY": "dev-req1",
+                "TOOL_APPROVER_KEY": "dev-app1",
+            },
+        ):
+            self.assertEqual(read_tool_secret("TOOL_APPROVAL_KEY"), "dev-req1")
+            self.assertEqual(read_tool_secret("TOOL_APPROVER_KEY"), "dev-app1")
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_INSECURE_DEV_TOOL_KEYS": "true",
+                "TOOL_APPROVAL_KEY": "tiny",
+            },
+        ):
+            self.assertIsNone(read_tool_secret("TOOL_APPROVAL_KEY"))
 
     def test_image_proxy_revalidates_redirect_target(self):
         redirect_response = _FakeImageResponse(

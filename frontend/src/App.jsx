@@ -43,6 +43,21 @@ const EMPTY_INSIGHTS = {
   judge_evaluation: null,
 }
 
+const TOOL_ARGUMENT_TEMPLATES = {
+  save_note: { title: "学习笔记", content: "要保存的笔记内容", tags: [] },
+  save_flashcards: {
+    title: "卡片集",
+    flashcards: [{ front: "问题", back: "答案", tags: [], difficulty: "easy" }],
+  },
+  save_quiz: { title: "练习题", questions: [] },
+  delete_saved_item: { collection: "notes", item_id: "saved-item-id" },
+  delete_run: { target_run_id: "run-id" },
+  delete_knowledge_file: { filename: "example.pdf" },
+  reset_saved_items: { collection: "notes" },
+  reset_rag_index: {},
+  rebuild_rag_index: {},
+}
+
 function createSessionId() {
   if (window.crypto?.randomUUID) {
     return window.crypto.randomUUID()
@@ -577,6 +592,17 @@ function RailIcon({ name }) {
     )
   }
 
+  if (name === "tools") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m14.5 5 4.5 4.5-9.5 9.5H5v-4.5L14.5 5Z" />
+        <path d="m13 6.5 4.5 4.5" />
+        <path d="M19 5h-3" />
+        <path d="M19 5v3" />
+      </svg>
+    )
+  }
+
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6.5 4.5h11A1.5 1.5 0 0 1 19 6v16l-7-3-7 3V6a1.5 1.5 0 0 1 1.5-1.5Z" />
@@ -604,6 +630,7 @@ function IconRail({ activeView, onViewChange }) {
     ["study", "workspace", "学习工作台"],
     ["knowledge", "knowledge", "知识库"],
     ["cards", "cards", "复习卡片"],
+    ["tools", "tools", "Dev Tool Debugger"],
   ]
 
   return (
@@ -897,8 +924,8 @@ function RunSummaryPanel({ response }) {
   }
   const totalTokens = summary.token_usage?.total_tokens
   const statusLabel = {
-    awaiting_action: "等待操作确认",
     succeeded: "运行成功",
+    awaiting_action: "等待操作确认",
     partial: "部分完成",
     failed: "运行失败",
     deleted: "已软删除",
@@ -1354,6 +1381,285 @@ function PendingActionsBlock({ actions, onActionChange }) {
       {actions.map((action) => (
         <PendingActionCard initialAction={action} key={action.id} onActionChange={onActionChange} />
       ))}
+    </section>
+  )
+}
+
+function getToolArgumentsTemplate(toolName) {
+  return JSON.stringify(TOOL_ARGUMENT_TEMPLATES[toolName] || {}, null, 2)
+}
+
+async function readJsonResponse(response) {
+  try {
+    return await response.json()
+  } catch {
+    return { detail: await response.text() }
+  }
+}
+
+function DevToolDebugger() {
+  const [tools, setTools] = useState([])
+  const [loadingTools, setLoadingTools] = useState(false)
+  const [selectedToolName, setSelectedToolName] = useState("")
+  const [argumentsText, setArgumentsText] = useState("{}")
+  const [actor, setActor] = useState("dev-tool-debugger")
+  const [running, setRunning] = useState(false)
+  const [status, setStatus] = useState("")
+  const [result, setResult] = useState(null)
+
+  const selectedTool = tools.find((tool) => tool.name === selectedToolName)
+  const dangerousTools = tools.filter((tool) => tool.category === "dangerous")
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTools() {
+      setLoadingTools(true)
+      setStatus("")
+      try {
+        const response = await fetch(`${API_BASE_URL}/tools`)
+        if (!response.ok) {
+          throw new Error(`工具列表加载失败：${response.status}`)
+        }
+        const data = await response.json()
+        const nextTools = Array.isArray(data.tools) ? data.tools : []
+        if (cancelled) {
+          return
+        }
+        setTools(nextTools)
+        setSelectedToolName((current) => current || nextTools[0]?.name || "")
+        if (!selectedToolName && nextTools[0]?.name) {
+          setArgumentsText(getToolArgumentsTemplate(nextTools[0].name))
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(error.message)
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingTools(false)
+        }
+      }
+    }
+
+    loadTools()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function selectTool(toolName) {
+    setSelectedToolName(toolName)
+    setArgumentsText(getToolArgumentsTemplate(toolName))
+    setResult(null)
+    setStatus("")
+  }
+
+  async function invokeTool({ confirmationToken = null, requesterKey = "" } = {}) {
+    const headers = { "Content-Type": "application/json" }
+    if (requesterKey) {
+      headers["X-Tool-Approval-Key"] = requesterKey
+    }
+    return fetch(`${API_BASE_URL}/tools/${encodeURIComponent(selectedToolName)}/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        arguments: JSON.parse(argumentsText || "{}"),
+        actor: actor || "dev-tool-debugger",
+        ...(confirmationToken ? { confirmation_token: confirmationToken } : {}),
+      }),
+    })
+  }
+
+  async function approveTool(approvalRequestId, approverKey) {
+    return fetch(
+      `${API_BASE_URL}/tools/${encodeURIComponent(selectedToolName)}/approvals/${encodeURIComponent(approvalRequestId)}`,
+      {
+        method: "POST",
+        headers: { "X-Tool-Approver-Key": approverKey },
+      },
+    )
+  }
+
+  async function runTool() {
+    if (!selectedToolName) {
+      return
+    }
+
+    let parsedArguments
+    try {
+      parsedArguments = JSON.parse(argumentsText || "{}")
+      if (!parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) {
+        throw new Error("arguments 必须是 JSON object")
+      }
+    } catch (error) {
+      setStatus(`Arguments JSON 无效：${error.message}`)
+      return
+    }
+
+    setRunning(true)
+    setResult(null)
+    setStatus(selectedTool?.requires_confirmation ? "危险工具：等待输入密钥..." : "正在调用工具...")
+
+    try {
+      let requesterKey = ""
+      if (selectedTool?.requires_confirmation) {
+        requesterKey = window.prompt("请输入 requester key（X-Tool-Approval-Key）", "")
+        if (!requesterKey) {
+          setStatus("已取消：未输入 requester key")
+          return
+        }
+      }
+
+      const firstResponse = await invokeTool({ requesterKey })
+      const firstPayload = await readJsonResponse(firstResponse)
+
+      if (firstResponse.ok) {
+        setResult({ status: firstResponse.status, body: firstPayload })
+        setStatus("工具调用完成")
+        return
+      }
+
+      const confirmation = firstPayload?.detail
+      if (
+        !selectedTool?.requires_confirmation
+        || firstResponse.status !== 409
+        || confirmation?.error !== "confirmation_required"
+        || !confirmation?.approval_request_id
+      ) {
+        setResult({ status: firstResponse.status, body: firstPayload })
+        setStatus(`工具调用失败：${firstResponse.status}`)
+        return
+      }
+
+      setStatus("已创建审批请求，等待输入 approver key...")
+      const approverKey = window.prompt("请输入 approver key（X-Tool-Approver-Key）", "")
+      if (!approverKey) {
+        setResult({ status: firstResponse.status, body: firstPayload })
+        setStatus("已取消：未输入 approver key")
+        return
+      }
+
+      const approvalResponse = await approveTool(confirmation.approval_request_id, approverKey)
+      const approvalPayload = await readJsonResponse(approvalResponse)
+      if (!approvalResponse.ok || !approvalPayload?.confirmation_token) {
+        setResult({ status: approvalResponse.status, body: approvalPayload })
+        setStatus(`审批失败：${approvalResponse.status}`)
+        return
+      }
+
+      setStatus("审批成功，正在带 confirmation_token 重试...")
+      const confirmedResponse = await invokeTool({
+        confirmationToken: approvalPayload.confirmation_token,
+        requesterKey,
+      })
+      const confirmedPayload = await readJsonResponse(confirmedResponse)
+      setResult({ status: confirmedResponse.status, body: confirmedPayload })
+      setStatus(confirmedResponse.ok ? "危险工具已确认并执行完成" : `确认后执行失败：${confirmedResponse.status}`)
+    } catch (error) {
+      setStatus(`工具调用异常：${error.message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <section className="workspace-page content-page active dev-tool-debugger" aria-label="Dev Tool Debugger">
+      <header className="workspace-header">
+        <div>
+          <p className="eyebrow">Developer Tools</p>
+          <h2>Dev Tool Debugger</h2>
+        </div>
+        <span className="metadata-chip warm">危险工具自动确认</span>
+      </header>
+
+      <p className="workspace-copy">
+        这里用于调试 Tool Registry。危险工具会弹窗要求输入 requester / approver 两个密钥，然后自动完成申请审批、换 token、重试执行；密钥不会保存到浏览器。
+      </p>
+
+      <div className="debugger-layout">
+        <aside className="debugger-tool-list">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Tools</p>
+              <h3>工具列表</h3>
+            </div>
+          </div>
+          {loadingTools ? <EmptyState title="正在加载工具" text="读取 /tools..." /> : null}
+          {tools.map((tool) => (
+            <button
+              className={`debugger-tool-item${tool.name === selectedToolName ? " active" : ""}`}
+              key={tool.name}
+              type="button"
+              onClick={() => selectTool(tool.name)}
+            >
+              <strong>{tool.name}</strong>
+              <span className={`tool-category ${tool.category}`}>{tool.category}</span>
+              {tool.requires_confirmation ? <em>需要确认</em> : null}
+            </button>
+          ))}
+        </aside>
+
+        <section className="debugger-panel">
+          {selectedTool ? (
+            <>
+              <div className="debugger-selected-header">
+                <div>
+                  <p className="eyebrow">{selectedTool.category}</p>
+                  <h3>{selectedTool.name}</h3>
+                  <p>{selectedTool.description}</p>
+                </div>
+                {selectedTool.requires_confirmation ? <span className="metadata-chip danger">Dangerous</span> : null}
+              </div>
+
+              <label className="debugger-field">
+                <span>Actor</span>
+                <input value={actor} onChange={(event) => setActor(event.target.value)} />
+              </label>
+
+              <label className="debugger-field">
+                <span>Arguments JSON</span>
+                <textarea
+                  rows="10"
+                  spellCheck="false"
+                  value={argumentsText}
+                  onChange={(event) => setArgumentsText(event.target.value)}
+                />
+              </label>
+
+              <div className="debugger-actions">
+                <button className="primary-button" type="button" onClick={runTool} disabled={running}>
+                  {running ? "执行中..." : selectedTool.requires_confirmation ? "执行危险工具" : "执行工具"}
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setArgumentsText(getToolArgumentsTemplate(selectedToolName))}
+                  disabled={running}
+                >
+                  重置参数模板
+                </button>
+              </div>
+
+              {status ? <p className="debugger-status">{status}</p> : null}
+              {result ? (
+                <article className="debugger-result">
+                  <strong>HTTP {result.status}</strong>
+                  <pre>{JSON.stringify(result.body, null, 2)}</pre>
+                </article>
+              ) : null}
+            </>
+          ) : (
+            <EmptyState title="没有可用工具" text="后端 /tools 没有返回工具列表。" />
+          )}
+        </section>
+      </div>
+
+      {dangerousTools.length > 0 ? (
+        <p className="debugger-danger-note">
+          当前危险工具：{dangerousTools.map((tool) => tool.name).join("、")}
+        </p>
+      ) : null}
     </section>
   )
 }
@@ -2809,6 +3115,7 @@ export default function App() {
             }}
           />
         ) : null}
+        {activeView === "tools" ? <DevToolDebugger /> : null}
       </section>
 
       {activeView === "study" ? (
