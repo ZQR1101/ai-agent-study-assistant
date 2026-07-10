@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+from typing import Any, Callable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="outputs/rag_corpus_benchmark")
     parser.add_argument("--without-reranker", action="store_true")
     parser.add_argument("--build-only", action="store_true")
+    parser.add_argument(
+        "--query-rewrite-mode",
+        choices=("off", "conditional", "always"),
+        default="off",
+        help="Query rewrite policy; use always for the full rewrite benchmark.",
+    )
     args = parser.parse_args()
     if args.top_k < 1:
         parser.error("--top-k must be at least 1")
@@ -113,12 +120,132 @@ def rebuild_and_measure(version: str) -> dict:
     return metrics
 
 
-def warm_up(cases: list[dict], modes: list[str], top_k: int) -> dict[str, float]:
+def build_query_rewrite_search(
+    mode: str,
+) -> Callable[..., Any] | None:
+    if mode == "off":
+        return None
+
+    from backend.config import get_config
+    from backend.llm_service import build_llm
+    from backend.rag_service import (
+        _fuse_query_search_results,
+        _query_rewrite_decision,
+        rewrite_query_for_retrieval,
+    )
+    from backend.rag_store import search_relevant_chunks
+
+    config = get_config()
+    rewrite_llm = build_llm(model=config.model, temperature=0.0)
+    rewrite_cache: dict[str, dict] = {}
+    rewrite_stats = {"api_call_count": 0}
+
+    def cached_rewrite(question: str) -> dict:
+        if question in rewrite_cache:
+            return rewrite_cache[question]
+
+        decision = _query_rewrite_decision(question, None, mode)
+        attempted = bool(decision["enabled"])
+        if attempted:
+            rewrite_stats["api_call_count"] += 1
+        rewrite = rewrite_query_for_retrieval(
+            question,
+            custom_llm=rewrite_llm if attempted else None,
+        )
+        reason = decision["reason"]
+        if rewrite["error"]:
+            reason = "rewrite_error"
+        elif rewrite["used"]:
+            reason = "rewritten"
+        elif attempted:
+            reason = "rewrite_unchanged"
+        cached = {
+            "decision": decision,
+            "rewrite": rewrite,
+            "attempted": attempted,
+            "reason": reason,
+        }
+        rewrite_cache[question] = cached
+        return cached
+
+    def search(
+        question: str,
+        top_k: int = 3,
+        similarity_threshold: float = 0.55,
+        include_metadata: bool = False,
+        retrieval_mode: str = "vector",
+        candidate_k: int | None = None,
+        reranker_enabled: bool = False,
+        reranker_top_n: int | None = None,
+        **_kwargs,
+    ):
+        rewrite_cache_hit = question in rewrite_cache
+        cached = cached_rewrite(question)
+        rewrite = cached["rewrite"]
+        search_kwargs = {
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+            "include_metadata": True,
+            "retrieval_mode": retrieval_mode,
+            "candidate_k": candidate_k,
+            "reranker_enabled": reranker_enabled,
+            "reranker_top_n": reranker_top_n,
+        }
+        original_result = search_relevant_chunks(
+            question,
+            **search_kwargs,
+        )
+        if rewrite["used"]:
+            rewritten_result = search_relevant_chunks(
+                rewrite["query"],
+                **search_kwargs,
+            )
+            metadata = _fuse_query_search_results(
+                original_result,
+                rewritten_result,
+                top_k,
+            )
+        else:
+            metadata = {
+                **original_result,
+                "query_fusion_used": False,
+            }
+
+        metadata.update({
+            "original_query": question,
+            "retrieval_query": rewrite["query"],
+            "retrieval_queries": (
+                [question, rewrite["query"]] if rewrite["used"] else [question]
+            ),
+            "query_rewrite_mode": cached["decision"]["mode"],
+            "query_rewrite_attempted": cached["attempted"],
+            "query_rewrite_used": rewrite["used"],
+            "query_rewrite_error": rewrite["error"],
+            "query_rewrite_reason": cached["reason"],
+            "query_rewrite_latency_ms": rewrite["latency_ms"],
+            "query_rewrite_latency_included": bool(
+                cached["attempted"] and not rewrite_cache_hit
+            ),
+        })
+        chunks = metadata.get("chunks", [])
+        return metadata if include_metadata else chunks
+
+    search.rewrite_cache = rewrite_cache
+    search.rewrite_stats = rewrite_stats
+    return search
+
+
+def warm_up(
+    cases: list[dict],
+    modes: list[str],
+    top_k: int,
+    search_fn: Callable[..., Any] | None = None,
+) -> dict[str, float]:
     case = next((item for item in cases if not item.get("is_negative")), cases[0])
     timings = {}
     for mode in modes:
         started_at = perf_counter()
-        run_retrieval(case, mode, top_k)
+        run_retrieval(case, mode, top_k, search_fn=search_fn)
         timings[mode] = round((perf_counter() - started_at) * 1000, 3)
     return timings
 
@@ -156,13 +283,21 @@ def main() -> int:
             f"ocr_triggered={index_metrics['ocr_trigger_count']} ocr_used={index_metrics['ocr_used_count']}"
         )
         return 0
-    warmup_latency_ms = warm_up(cases, modes, args.top_k)
-    report = evaluate_cases(cases, modes, args.top_k)
+    search_fn = build_query_rewrite_search(args.query_rewrite_mode)
+    warmup_latency_ms = warm_up(cases, modes, args.top_k, search_fn=search_fn)
+    report = evaluate_cases(cases, modes, args.top_k, search_fn=search_fn)
     report["summary"].update({
         "version": version,
         "cases_files": [str(Path(path)) for path in args.cases],
         "warmup_latency_ms": warmup_latency_ms,
         "index_metrics": index_metrics,
+        "query_rewrite_mode": args.query_rewrite_mode,
+        "query_rewrite_unique_query_count": len(
+            getattr(search_fn, "rewrite_cache", {})
+        ) if search_fn else 0,
+        "query_rewrite_api_call_count": int(
+            getattr(search_fn, "rewrite_stats", {}).get("api_call_count", 0)
+        ) if search_fn else 0,
     })
 
     json_path = write_json_report(report, output_dir / f"{version}_retrieval.json")

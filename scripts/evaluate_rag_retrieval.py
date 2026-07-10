@@ -335,10 +335,31 @@ def run_retrieval(
             "reranker_model",
             "reranker_top_n",
             "reranker_error",
+            "query_rewrite_mode",
+            "query_rewrite_attempted",
+            "query_rewrite_used",
+            "query_rewrite_error",
+            "query_rewrite_reason",
+            "query_rewrite_latency_ms",
+            "query_rewrite_latency_included",
+            "query_fusion_used",
         ):
             if key in metadata:
                 result[key] = metadata.get(key)
-        result["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
+        measured_latency_ms = round((perf_counter() - started_at) * 1000, 3)
+        if "query_rewrite_latency_included" in result:
+            rewrite_latency_ms = float(result.get("query_rewrite_latency_ms") or 0.0)
+            rewrite_was_measured = bool(result.get("query_rewrite_latency_included"))
+            retrieval_latency_ms = max(
+                0.0,
+                measured_latency_ms - rewrite_latency_ms
+                if rewrite_was_measured
+                else measured_latency_ms,
+            )
+            result["retrieval_only_latency_ms"] = round(retrieval_latency_ms, 3)
+            result["latency_ms"] = round(retrieval_latency_ms + rewrite_latency_ms, 3)
+        else:
+            result["latency_ms"] = measured_latency_ms
         return result
     except Exception as error:
         result = failed_result(mode, top_k, error)
@@ -440,6 +461,17 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
         top_k_hits = sum(int(metrics.get("top_k_source_hit", 0)) for metrics in ranking_metrics)
         fallback_successes = sum(bool(result.get("fallback_success")) for result in negative_results)
         pollution_cases = sum(bool(result.get("source_pollution")) for result in negative_results)
+        rewrite_latencies = [
+            float(result.get("query_rewrite_latency_ms", 0.0))
+            for result in results
+            if result.get("query_rewrite_attempted")
+        ]
+        rewrite_attempts = sum(
+            bool(result.get("query_rewrite_attempted")) for result in results
+        )
+        rewrite_successes = sum(
+            bool(result.get("query_rewrite_used")) for result in results
+        )
         summary[mode] = {
             "total_keyword_hits": total_keyword_hits,
             "total_source_hits": total_source_hits,
@@ -473,6 +505,24 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             "fallback_success_rate": round(fallback_successes / negative_count, 4) if negative_count else None,
             "source_pollution_count": pollution_cases,
             "source_pollution_rate": round(pollution_cases / negative_count, 4) if negative_count else None,
+            "query_rewrite_attempt_count": rewrite_attempts,
+            "query_rewrite_success_count": rewrite_successes,
+            "query_rewrite_success_rate": round(
+                rewrite_successes / rewrite_attempts,
+                4,
+            ) if rewrite_attempts else None,
+            "query_rewrite_fallback_count": sum(
+                bool(result.get("query_rewrite_attempted"))
+                and not bool(result.get("query_rewrite_used"))
+                for result in results
+            ),
+            "average_query_rewrite_latency_ms": round(
+                sum(rewrite_latencies) / len(rewrite_latencies),
+                3,
+            ) if rewrite_latencies else 0.0,
+            "query_fusion_used_count": sum(
+                bool(result.get("query_fusion_used")) for result in results
+            ),
         }
     return summary
 
@@ -619,6 +669,28 @@ def render_markdown(report: dict) -> str:
             f"{item['successful_cases']} | {item['failed_cases']} | "
             f"{item.get('reranker_used_cases', 0)} |"
         )
+
+    if any(
+        report["mode_summary"][mode].get("query_rewrite_attempt_count", 0)
+        for mode in summary["modes"]
+    ):
+        lines.extend([
+            "",
+            "## Query Rewrite Diagnostics",
+            "",
+            "| Mode | Attempts | Success | Success Rate | Fallback | Avg Rewrite Latency ms | Query Fusion Used |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for mode in summary["modes"]:
+            item = report["mode_summary"][mode]
+            lines.append(
+                f"| {mode} | {item.get('query_rewrite_attempt_count', 0)} | "
+                f"{item.get('query_rewrite_success_count', 0)} | "
+                f"{_md_metric(item.get('query_rewrite_success_rate'))} | "
+                f"{item.get('query_rewrite_fallback_count', 0)} | "
+                f"{_md_metric(item.get('average_query_rewrite_latency_ms', 0.0))} | "
+                f"{item.get('query_fusion_used_count', 0)} |"
+            )
 
     diagnostics = report.get("hybrid_reranker_diagnostics")
     if diagnostics is None and "hybrid" in summary["modes"] and RERANKER_MODE in summary["modes"]:

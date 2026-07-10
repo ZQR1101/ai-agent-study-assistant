@@ -352,6 +352,8 @@ def _run_rag_tool(
         rag_query,
         top_k=top_k,
         retrieval_mode=retrieval_mode,
+        query_rewrite_llm=active_llm,
+        history_context=history_context,
         **rag_kwargs,
     )
     rag_sources = rag_context.get("sources", [])
@@ -366,10 +368,16 @@ def _run_rag_tool(
         "reranker_model": rag_context.get("reranker_model"),
         "reranker_top_n": rag_context.get("reranker_top_n"),
         "reranker_error": rag_context.get("reranker_error"),
+        "query_rewrite_mode": rag_context.get("query_rewrite_mode", "off"),
+        "query_rewrite_attempted": rag_context.get("query_rewrite_attempted", False),
+        "query_rewrite_used": rag_context.get("query_rewrite_used", False),
+        "query_rewrite_reason": rag_context.get("query_rewrite_reason"),
+        "query_rewrite_latency_ms": rag_context.get("query_rewrite_latency_ms", 0),
+        "query_fusion_used": rag_context.get("query_fusion_used", False),
     }
     trace = [
         f"RAG query：{step_input}",
-        "RAG query 使用 history：否",
+        f"RAG query 使用 history：{'是' if rag_context.get('query_rewrite_attempted') else '否'}",
         f"RAG answer 使用 history：{'是' if history_context else '否'}",
         f"RAG retrieval_mode：{retrieval_info['retrieval_mode']}",
         f"RAG candidate_k：{retrieval_info['candidate_k']}",

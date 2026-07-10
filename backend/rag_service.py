@@ -1,8 +1,30 @@
+import re
+from time import perf_counter
+
+from backend.config import QUERY_REWRITE_MODES, get_config
 from backend.history_utils import truncate_text
 from backend.llm_service import chat
 from backend.rag_store import SIMILARITY_THRESHOLD, search_relevant_chunks
 
 SOURCE_SNIPPET_LENGTH = 400
+QUERY_FUSION_K = 60
+
+_QUERY_REWRITE_FOLLOW_UP_PATTERN = re.compile(
+    r"(?:它|这个|那个|上述|前面|刚才|其中|这两者|他们|她们|这些|那些|"
+    r"该(?:方法|模型|接口|算法|功能|配置|文档|章节|项目))"
+)
+_QUERY_REWRITE_STRONG_ANCHOR_PATTERN = re.compile(
+    r"/[A-Za-z0-9_./-]+|[A-Za-z][A-Za-z0-9_.-]*|\d+(?:\.\d+)*"
+)
+_QUERY_REWRITE_EXACT_VALUE_PATTERN = re.compile(
+    r"(?:[/\\][A-Za-z0-9_.\-/\\]+|"
+    r"(?<![A-Za-z0-9_])v?\d+(?:\.\d+)+(?![A-Za-z0-9_])|"
+    r"(?<![A-Za-z0-9_])[A-Z]{2,}-?\d{2,}(?![A-Za-z0-9_])|"
+    r"(?<![A-Za-z0-9_])[A-Za-z0-9_-]+\."
+    r"(?:py|js|jsx|ts|tsx|java|go|rs|md|txt|json|ya?ml|toml|ini|pdf)"
+    r"(?![A-Za-z0-9_]))",
+    re.IGNORECASE,
+)
 
 NO_RAG_ANSWER = "知识库中没有找到与该问题相关的内容。你可以上传相关资料，或切换到普通聊天模式。"
 RAG_FALLBACK_PREFIX = "知识库中没有找到相关内容，以下内容未使用知识库，仅基于模型通用知识生成。"
@@ -48,18 +70,143 @@ def _clean_rewritten_query(text: str) -> str:
     return cleaned[:300].strip()
 
 
+def should_rewrite_query(question: str, history_context: str | None) -> bool:
+    query = " ".join(str(question or "").split()).strip()
+    if not query or not str(history_context or "").strip():
+        return False
+    if len(query) > 30 or not _QUERY_REWRITE_FOLLOW_UP_PATTERN.search(query):
+        return False
+    if _QUERY_REWRITE_EXACT_VALUE_PATTERN.search(query):
+        return False
+
+    anchors = {
+        value.casefold()
+        for value in _QUERY_REWRITE_STRONG_ANCHOR_PATTERN.findall(query)
+        if value.strip()
+    }
+    return len(anchors) <= 1
+
+
+def _query_rewrite_decision(
+    question: str,
+    history_context: str | None,
+    mode: str,
+) -> dict:
+    normalized_mode = str(mode or "off").strip().lower()
+    if normalized_mode not in QUERY_REWRITE_MODES:
+        normalized_mode = "off"
+    if normalized_mode == "off":
+        return {"mode": normalized_mode, "enabled": False, "reason": "mode_off"}
+    if normalized_mode == "always":
+        return {"mode": normalized_mode, "enabled": True, "reason": "mode_always"}
+    if not str(history_context or "").strip():
+        return {"mode": normalized_mode, "enabled": False, "reason": "missing_history"}
+    if should_rewrite_query(question, history_context):
+        return {"mode": normalized_mode, "enabled": True, "reason": "context_follow_up"}
+    return {"mode": normalized_mode, "enabled": False, "reason": "query_self_contained"}
+
+
+def _query_result_key(chunk: dict, position: int):
+    if chunk.get("chunk_id"):
+        return chunk["chunk_id"]
+    source_text_key = (chunk.get("source"), chunk.get("text"))
+    if any(source_text_key):
+        return source_text_key
+    return ("position", position)
+
+
+def _merge_search_errors(*errors) -> str | None:
+    messages = list(dict.fromkeys(str(error) for error in errors if error))
+    return "; ".join(messages) if messages else None
+
+
+def _fuse_query_search_results(
+    original_result: dict,
+    rewritten_result: dict,
+    top_k: int,
+) -> dict:
+    fused = {}
+    for query_name, search_result in (
+        ("original", original_result),
+        ("rewritten", rewritten_result),
+    ):
+        for rank, chunk in enumerate(search_result.get("chunks", []), start=1):
+            key = _query_result_key(chunk, rank)
+            if key not in fused:
+                fused[key] = {
+                    **chunk,
+                    "query_fusion_score": 0.0,
+                }
+            fused[key]["query_fusion_score"] += 1.0 / (QUERY_FUSION_K + rank)
+            fused[key][f"{query_name}_query_rank"] = rank
+
+    all_chunks = list(fused.values())
+    all_chunks.sort(key=lambda item: item["query_fusion_score"], reverse=True)
+    chunks = all_chunks[:top_k]
+    passed_threshold = bool(
+        original_result.get("passed_threshold")
+        or rewritten_result.get("passed_threshold")
+    )
+    if not passed_threshold:
+        chunks = []
+
+    merged = {
+        **original_result,
+        "chunks": chunks,
+        "highest_score": max(
+            (float(item.get("score", 0.0)) for item in chunks),
+            default=None,
+        ),
+        "passed_threshold": passed_threshold and bool(chunks),
+        "raw_count": len(all_chunks),
+        "valid_count": len(chunks),
+        "discarded_invalid_count": int(original_result.get("discarded_invalid_count", 0))
+        + int(rewritten_result.get("discarded_invalid_count", 0)),
+        "error": _merge_search_errors(
+            original_result.get("error"),
+            rewritten_result.get("error"),
+        ),
+        "candidate_k": max(
+            int(original_result.get("candidate_k") or 0),
+            int(rewritten_result.get("candidate_k") or 0),
+        ) or None,
+        "vector_candidates": int(original_result.get("vector_candidates", 0))
+        + int(rewritten_result.get("vector_candidates", 0)),
+        "bm25_candidates": int(original_result.get("bm25_candidates", 0))
+        + int(rewritten_result.get("bm25_candidates", 0)),
+        "reranker_used": bool(
+            original_result.get("reranker_used")
+            or rewritten_result.get("reranker_used")
+        ),
+        "reranker_error": _merge_search_errors(
+            original_result.get("reranker_error"),
+            rewritten_result.get("reranker_error"),
+        ),
+        "original_expanded_query": original_result.get("expanded_query"),
+        "rewrite_expanded_query": rewritten_result.get("expanded_query"),
+        "query_fusion_used": True,
+    }
+    return merged
+
+
 def rewrite_query_for_retrieval(
     question: str,
     custom_llm=None,
     history_context: str | None = None,
 ) -> dict:
+    started_at = perf_counter()
+
+    def result(query: str, used: bool, error: str | None) -> dict:
+        return {
+            "query": query,
+            "used": used,
+            "error": error,
+            "latency_ms": round((perf_counter() - started_at) * 1000, 3),
+        }
+
     original_query = " ".join(str(question or "").split()).strip()
     if not original_query or custom_llm is None:
-        return {
-            "query": original_query,
-            "used": False,
-            "error": None,
-        }
+        return result(original_query, False, None)
 
     prompt = QUERY_REWRITE_PROMPT.format(
         history_context=(history_context or "无").strip() or "无",
@@ -68,24 +215,12 @@ def rewrite_query_for_retrieval(
     try:
         rewritten = _clean_rewritten_query(_response_text(custom_llm.invoke(prompt)))
     except Exception as exc:
-        return {
-            "query": original_query,
-            "used": False,
-            "error": str(exc),
-        }
+        return result(original_query, False, str(exc))
 
     if not rewritten:
-        return {
-            "query": original_query,
-            "used": False,
-            "error": "empty rewritten query",
-        }
+        return result(original_query, False, "empty rewritten query")
 
-    return {
-        "query": rewritten,
-        "used": rewritten != original_query,
-        "error": None,
-    }
+    return result(rewritten, rewritten != original_query, None)
 
 
 def get_rag_context(
@@ -98,23 +233,48 @@ def get_rag_context(
     reranker_top_n: int | None = None,
     query_rewrite_llm=None,
     history_context: str | None = None,
+    query_rewrite_mode: str | None = None,
 ) -> dict:
+    configured_mode = query_rewrite_mode or get_config().query_rewrite_mode
+    rewrite_decision = _query_rewrite_decision(
+        question,
+        history_context,
+        configured_mode,
+    )
     query_rewrite = rewrite_query_for_retrieval(
         question,
-        custom_llm=query_rewrite_llm,
+        custom_llm=query_rewrite_llm if rewrite_decision["enabled"] else None,
         history_context=history_context,
     )
     retrieval_query = query_rewrite["query"]
-    search_result = search_relevant_chunks(
-        retrieval_query,
-        top_k=top_k,
-        similarity_threshold=score_threshold,
-        include_metadata=True,
-        retrieval_mode=retrieval_mode,
-        candidate_k=candidate_k,
-        reranker_enabled=reranker_enabled,
-        reranker_top_n=reranker_top_n,
+    search_kwargs = {
+        "top_k": top_k,
+        "similarity_threshold": score_threshold,
+        "include_metadata": True,
+        "retrieval_mode": retrieval_mode,
+        "candidate_k": candidate_k,
+        "reranker_enabled": reranker_enabled,
+        "reranker_top_n": reranker_top_n,
+    }
+    original_search_result = search_relevant_chunks(
+        question,
+        **search_kwargs,
     )
+    if query_rewrite["used"]:
+        rewritten_search_result = search_relevant_chunks(
+            retrieval_query,
+            **search_kwargs,
+        )
+        search_result = _fuse_query_search_results(
+            original_search_result,
+            rewritten_search_result,
+            top_k,
+        )
+    else:
+        search_result = {
+            **original_search_result,
+            "query_fusion_used": False,
+        }
     chunks = search_result["chunks"]
     max_score = search_result["highest_score"]
     expanded_query = search_result.get("expanded_query", question)
@@ -131,12 +291,38 @@ def get_rag_context(
         "reranker_top_n": search_result.get("reranker_top_n"),
         "reranker_error": search_result.get("reranker_error"),
     }
+    rewrite_reason = rewrite_decision["reason"]
+    if rewrite_decision["enabled"] and query_rewrite_llm is None:
+        rewrite_reason = "llm_unavailable"
+    elif query_rewrite["error"]:
+        rewrite_reason = "rewrite_error"
+    elif query_rewrite["used"]:
+        rewrite_reason = "rewritten"
+    elif rewrite_decision["enabled"]:
+        rewrite_reason = "rewrite_unchanged"
+    rewrite_info = {
+        "original_query": question,
+        "retrieval_query": retrieval_query,
+        "retrieval_queries": (
+            [question, retrieval_query] if query_rewrite["used"] else [question]
+        ),
+        "query_rewrite_mode": rewrite_decision["mode"],
+        "query_rewrite_attempted": bool(
+            rewrite_decision["enabled"] and query_rewrite_llm is not None
+        ),
+        "query_rewrite_used": query_rewrite["used"],
+        "query_rewrite_error": query_rewrite["error"],
+        "query_rewrite_reason": rewrite_reason,
+        "query_rewrite_latency_ms": query_rewrite["latency_ms"],
+        "query_fusion_used": search_result.get("query_fusion_used", False),
+    }
 
     if not chunks or not passed_threshold:
         return {
             "found": False,
             "context": "",
             "sources": [],
+            "retrieved_chunks": [],
             "max_score": max_score,
             "threshold": result_threshold,
             "expanded_query": expanded_query,
@@ -144,10 +330,7 @@ def get_rag_context(
             "valid_count": valid_count,
             "discarded_invalid_count": discarded_invalid_count,
             "error": error,
-            "original_query": question,
-            "retrieval_query": retrieval_query,
-            "query_rewrite_used": query_rewrite["used"],
-            "query_rewrite_error": query_rewrite["error"],
+            **rewrite_info,
             "retrieval_mode": search_result.get("retrieval_mode", retrieval_mode),
             "candidate_k": search_result.get("candidate_k"),
             "vector_candidates": search_result.get("vector_candidates", 0),
@@ -191,6 +374,9 @@ def get_rag_context(
             "rerank_score",
             "rerank_rank",
             "reranker_used",
+            "query_fusion_score",
+            "original_query_rank",
+            "rewritten_query_rank",
         ):
             if chunk.get(key) is not None:
                 source_payload[key] = chunk[key]
@@ -200,6 +386,7 @@ def get_rag_context(
         "found": True,
         "context": "\n\n---\n\n".join(context_parts),
         "sources": source_chunks,
+        "retrieved_chunks": chunks,
         "max_score": max_score,
         "threshold": result_threshold,
         "expanded_query": expanded_query,
@@ -207,10 +394,7 @@ def get_rag_context(
         "valid_count": valid_count,
         "discarded_invalid_count": discarded_invalid_count,
         "error": error,
-        "original_query": question,
-        "retrieval_query": retrieval_query,
-        "query_rewrite_used": query_rewrite["used"],
-        "query_rewrite_error": query_rewrite["error"],
+        **rewrite_info,
         "retrieval_mode": search_result.get("retrieval_mode", retrieval_mode),
         "candidate_k": search_result.get("candidate_k"),
         "vector_candidates": search_result.get("vector_candidates", 0),
@@ -228,6 +412,7 @@ def rag_answer_with_sources(
     retrieval_mode: str = "vector",
     reranker_enabled: bool = False,
     reranker_top_n: int | None = None,
+    history_context: str | None = None,
 ) -> dict:
     rag_context = get_rag_context(
         question,
@@ -236,6 +421,8 @@ def rag_answer_with_sources(
         retrieval_mode=retrieval_mode,
         reranker_enabled=reranker_enabled,
         reranker_top_n=reranker_top_n,
+        query_rewrite_llm=custom_llm,
+        history_context=history_context,
     )
 
     if not rag_context["found"]:
@@ -274,6 +461,7 @@ def rag_answer(
     retrieval_mode: str = "vector",
     reranker_enabled: bool = False,
     reranker_top_n: int | None = None,
+    history_context: str | None = None,
 ) -> str:
     result = rag_answer_with_sources(
         question,
@@ -283,6 +471,7 @@ def rag_answer(
         retrieval_mode=retrieval_mode,
         reranker_enabled=reranker_enabled,
         reranker_top_n=reranker_top_n,
+        history_context=history_context,
     )
     source_text = "\n".join([
         f"- {source.get('source')} ({format_score(source.get('score'))})"
@@ -314,6 +503,10 @@ def append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
     trace.append(f"RAG retrieval_query：{rag_context.get('retrieval_query')}")
     trace.append(f"RAG expanded_query：{rag_context.get('expanded_query')}")
     trace.append(f"RAG query_rewrite_used：{'是' if rag_context.get('query_rewrite_used') else '否'}")
+    trace.append(f"RAG query_rewrite_mode：{rag_context.get('query_rewrite_mode', 'off')}")
+    trace.append(f"RAG query_rewrite_reason：{rag_context.get('query_rewrite_reason')}")
+    trace.append(f"RAG query_rewrite_latency_ms：{rag_context.get('query_rewrite_latency_ms', 0)}")
+    trace.append(f"RAG query_fusion_used：{'是' if rag_context.get('query_fusion_used') else '否'}")
     if rag_context.get("query_rewrite_error"):
         trace.append(f"RAG query_rewrite_error：{rag_context.get('query_rewrite_error')}")
     trace.append(f"RAG max_score：{format_score(rag_context.get('max_score'))}")

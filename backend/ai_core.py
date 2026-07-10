@@ -56,6 +56,7 @@ def learning_workflow(
             topic,
             top_k=top_k,
             score_threshold=similarity_threshold,
+            query_rewrite_llm=active_llm,
             history_context=history_context,
         )
         sources = rag_context["sources"]
@@ -242,11 +243,6 @@ def run_chat_request(request: ChatRequest) -> dict:
     agent_handles_rag = request.mode == "auto" and request.use_agent
     history_messages = normalize_history(request.history)
     history_context = format_history(history_messages)
-    rag_question = (
-        f"历史对话：\n{history_context}\n\n当前问题：{request.message}"
-        if history_context
-        else request.message
-    )
     trace = [
         "收到用户请求",
         f"mode：{request.mode}",
@@ -281,13 +277,17 @@ def run_chat_request(request: ChatRequest) -> dict:
 
     if use_rag and not agent_handles_rag:
         rag_context = get_rag_context(
-            rag_question,
+            request.message,
             request.top_k,
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
+            query_rewrite_llm=custom_llm,
             history_context=history_context,
         )
-        trace.append(f"RAG query 使用 history：{'是' if history_context else '否'}")
+        trace.append(
+            f"RAG query 使用 history："
+            f"{'是' if rag_context.get('query_rewrite_attempted') else '否'}"
+        )
         append_rag_trace(trace, rag_context_for_trace(rag_context, request.top_k))
         runtime_info.update({
             "retrieval_mode": rag_context.get("retrieval_mode", request.retrieval_mode),
@@ -300,6 +300,12 @@ def run_chat_request(request: ChatRequest) -> dict:
             "reranker_model": rag_context.get("reranker_model"),
             "reranker_top_n": rag_context.get("reranker_top_n"),
             "reranker_error": rag_context.get("reranker_error"),
+            "query_rewrite_mode": rag_context.get("query_rewrite_mode", "off"),
+            "query_rewrite_attempted": rag_context.get("query_rewrite_attempted", False),
+            "query_rewrite_used": rag_context.get("query_rewrite_used", False),
+            "query_rewrite_reason": rag_context.get("query_rewrite_reason"),
+            "query_rewrite_latency_ms": rag_context.get("query_rewrite_latency_ms", 0),
+            "query_fusion_used": rag_context.get("query_fusion_used", False),
         })
     elif use_rag and agent_handles_rag:
         trace.append(f"外层 RAG 检索：跳过，交给 Agent rag tool 执行（retrieval_mode={request.retrieval_mode}）")

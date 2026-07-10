@@ -652,6 +652,7 @@ class ToolsTests(unittest.TestCase):
 
     def test_rag_tool_keeps_history_out_of_retrieval_query(self):
         history_context = "用户：百度 OCR 是什么？\n助手：百度 OCR 是文字识别服务。"
+        custom_llm = object()
         rag_context = {
             "sources": [],
             "retrieval_mode": "hybrid",
@@ -675,7 +676,7 @@ class ToolsTests(unittest.TestCase):
         ):
             tools_module._run_rag_tool(
                 "什么是 skills",
-                custom_llm=object(),
+                custom_llm=custom_llm,
                 top_k=5,
                 shared_context={
                     "history_context": history_context,
@@ -687,6 +688,8 @@ class ToolsTests(unittest.TestCase):
             "什么是 skills",
             top_k=5,
             retrieval_mode="hybrid",
+            query_rewrite_llm=custom_llm,
+            history_context=history_context,
         )
         self.assertEqual(mock_chat.call_args.kwargs["history_context"], history_context)
 
@@ -780,6 +783,16 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ocr_min_text_chars, 80)
         self.assertEqual(config.ocr_render_dpi, 200)
         self.assertEqual(config.ocr_max_pages, 20)
+
+    def test_query_rewrite_mode_defaults_to_off(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(get_config().query_rewrite_mode, "off")
+
+    def test_query_rewrite_mode_accepts_conditional_and_rejects_unknown(self):
+        with patch.dict(os.environ, {"QUERY_REWRITE_MODE": "conditional"}, clear=True):
+            self.assertEqual(get_config().query_rewrite_mode, "conditional")
+        with patch.dict(os.environ, {"QUERY_REWRITE_MODE": "invalid"}, clear=True):
+            self.assertEqual(get_config().query_rewrite_mode, "off")
 
 
 class RagIndexStatusTests(unittest.TestCase):

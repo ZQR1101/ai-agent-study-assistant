@@ -96,9 +96,47 @@ Hard Filter Dropped 62 个噪声 Chunks；另外 13 个 Chunks 仅标记为 `low
 
 ### Query Rewrite Ablation
 
-Query Rewrite 能把用户问题交给 LLM 改写成更“检索友好”的形式，但当前全量开启会损伤正样本召回。因此代码保留 `rewrite_query_for_retrieval` 能力，默认 RAG 路径不启用，后续只做条件式启用。
+Query Rewrite 能把用户问题交给 LLM 改写成更“检索友好”的形式，但此前全量替换原 Query 会损伤正样本召回。当前支持 `off / conditional / always` 三种模式，默认 `off`；`conditional` 仅用于生产灰度，只对“有历史对话、包含指代、问题较短且缺少强检索锚点”的上下文追问启用。含路径、版本号、错误码或多个英文实体的 Query 不会触发条件改写。
 
-| Hybrid + Reranker | Original Query | Rewritten Query | Delta |
+```env
+# off（默认）/ conditional（生产灰度）/ always（benchmark）
+QUERY_REWRITE_MODE=off
+```
+
+改写触发后不会再用改写 Query 覆盖原 Query，而是分别检索原 Query 和改写 Query，再用 RRF 合并候选。这样既保留原问题中的精确实体，也允许补全指代后的 Query 带回新增候选。Trace / Runtime Info 会记录 `query_rewrite_mode / attempted / used / reason / latency_ms / query_fusion_used`，可直接用于条件命中率、fallback 和延迟统计。
+
+全量 rewrite benchmark 可在原批量入口追加 `--query-rewrite-mode always`；不传该参数时保持原始 `off` 基线。批量入口会让每个唯一 Query 只调用一次 rewrite API，四种检索模式复用同一改写结果和真实 latency。报告会附带实际 API 调用数、rewrite attempt / success / fallback count、平均 rewrite latency 和 query fusion 次数。
+
+#### Conditional vs Always（当前双查询 RRF）
+
+当前 40 条正样本 + 15 条负样本均为单轮问题，不含 `history_context`，因此 `conditional` 正确跳过全部 55 条 Query。该结果可以验证独立 Query 不会被误改写，但不能证明条件式改写对多轮指代追问的收益。
+
+| Hybrid + Reranker | Conditional | Always | Always Delta |
+|---|---:|---:|---:|
+| Top-1 | **90.0%** | **90.0%** | 0.0 pts |
+| Top-3 | **97.5%** | **97.5%** | 0.0 pts |
+| MRR | **0.938** | 0.933 | -0.005 |
+| Fallback Success | **80.0%** | **80.0%** | 0.0 pts |
+| Source Pollution | **20.0%** | **20.0%** | 0.0 pts |
+| Avg End-to-end Latency | **1628.6 ms** | 8867.6 ms | +7239.0 ms |
+| P95 End-to-end Latency | **3121.3 ms** | 17616.4 ms | +14495.1 ms |
+
+| Rewrite Metric | Conditional | Always |
+|---|---:|---:|
+| Attempts / Successes | 0 / 0 | 55 / 55 |
+| Success Rate | N/A | 100.0% |
+| Fallback Count | 0 | 0 |
+| Actual API Calls | 0 | 55 |
+| Avg Rewrite Latency | 0.0 ms | 5607.6 ms |
+| P95 Rewrite Latency | 0.0 ms | 13622.2 ms |
+
+结论：原 Query + 改写 Query 的 RRF 融合消除了旧版“仅使用改写 Query”造成的大幅召回回归，Always 的最终 Top-1 / Top-3 保持在 90.0% / 97.5%；但它没有改善最终主路径的命中率、fallback 或 source pollution，MRR 还下降 0.005，并将平均端到端延迟从 1.63 秒提高到 8.87 秒。因此生产默认继续使用 `off`；补充带历史上下文的多轮 benchmark 后再判断 `conditional` 是否值得开启，`always` 仅保留用于消融实验。
+
+#### 历史 Rewrite-only Ablation
+
+旧实验直接用改写 Query 替换原 Query，未执行双查询融合：
+
+| Hybrid + Reranker | Original Query | Rewrite-only | Delta |
 |---|---:|---:|---:|
 | Top-1 | **90.0%** | 82.5% | -7.5 pts |
 | Top-3 | **97.5%** | 90.0% | -7.5 pts |
@@ -106,7 +144,7 @@ Query Rewrite 能把用户问题交给 LLM 改写成更“检索友好”的形�
 | Fallback Success | 73.3% | **80.0%** | +6.7 pts |
 | Source Pollution | 26.7% | **20.0%** | -6.7 pts |
 
-Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.9 ms。结论：当前 Rewrite 对负样本更谨慎，但对正样本召回是负收益；默认关闭，待优化为”仅在明显口语化、指代省略或上下文依赖时启用”。
+旧实验的 Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latency 为 3850.9 ms。该结果仅作为历史对照，不代表当前双查询 RRF 实现。
 
 ### BM25 Term Coverage / Entity Gate
 
@@ -150,6 +188,7 @@ Benchmark 在 359 Docs / 2579 Chunks 的当前工作区索引上运行，对比�
 
 - [Full benchmark report](reports/RAG_V1_V2_V3_BENCHMARK.md)
 - [BM25 Term/Entity Gate report](reports/RAG_BM25_ENTITY_GATE_REPORT.md)
+- [Query Rewrite Conditional vs Always report](reports/RAG_QUERY_REWRITE_CONDITIONAL_ALWAYS_REPORT.md)
 - [Machine-readable metrics](reports/RAG_V1_V2_V3_METRICS.json)
 - [V3 evaluation cases](eval_cases/rag_v3_cases.json)
 - [Benchmark runner](scripts/benchmark_rag_batch.py)

@@ -12,6 +12,7 @@ DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_BASE_URL = DEEPSEEK_BASE_URL
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBEDDING_MODEL_PATH = PROJECT_ROOT / "models" / DEFAULT_EMBEDDING_MODEL
+QUERY_REWRITE_MODES = {"off", "conditional", "always"}
 CORS_DEFAULT_ORIGINS = (
     "http://127.0.0.1:5500",
     "http://localhost:5500",
@@ -67,6 +68,7 @@ class AppConfig:
     enable_reranker: bool
     reranker_model: str
     reranker_top_n: int
+    query_rewrite_mode: str
     cors_allowed_origins: tuple[str, ...]
     enable_insecure_dev_tool_keys: bool
     tool_approval_key: str | None
@@ -141,6 +143,11 @@ def read_positive_int_env(name: str, default: int) -> int:
         return default
 
 
+def read_query_rewrite_mode() -> str:
+    mode = (os.getenv("QUERY_REWRITE_MODE", "off").strip().lower() or "off")
+    return mode if mode in QUERY_REWRITE_MODES else "off"
+
+
 def read_cors_allowed_origins() -> tuple[str, ...]:
     raw_value = os.getenv("CORS_ALLOWED_ORIGINS")
     if raw_value is None:
@@ -203,6 +210,7 @@ def get_config() -> AppConfig:
         enable_reranker=read_bool_env("ENABLE_RERANKER", False),
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
+        query_rewrite_mode=read_query_rewrite_mode(),
         cors_allowed_origins=read_cors_allowed_origins(),
         enable_insecure_dev_tool_keys=enable_insecure_dev_tool_keys,
         tool_approval_key=read_tool_secret(

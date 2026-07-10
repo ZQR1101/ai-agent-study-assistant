@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.evaluate_rag_retrieval import (
@@ -17,6 +18,7 @@ from scripts.evaluate_rag_retrieval import (
     write_json_report,
     write_markdown_report,
 )
+from scripts.benchmark_rag_batch import build_query_rewrite_search
 
 
 def sample_case(case_id: str = "case-1") -> dict:
@@ -42,6 +44,53 @@ def sample_chunks() -> list[dict]:
 
 
 class RagRetrievalEvaluationTests(unittest.TestCase):
+    def test_benchmark_reuses_one_rewrite_across_retrieval_modes(self):
+        class FakeRewriteLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def invoke(self, _prompt):
+                self.calls += 1
+                return SimpleNamespace(content="Alpha database")
+
+        fake_llm = FakeRewriteLLM()
+        search_result = {
+            "chunks": sample_chunks(),
+            "highest_score": 0.9,
+            "threshold": 0.55,
+            "passed_threshold": True,
+            "expanded_query": "Alpha",
+            "raw_count": 1,
+            "valid_count": 1,
+            "discarded_invalid_count": 0,
+            "error": None,
+            "retrieval_mode": "hybrid",
+            "candidate_k": 5,
+            "vector_candidates": 1,
+            "bm25_candidates": 1,
+            "hybrid_used": True,
+            "reranker_enabled": False,
+            "reranker_used": False,
+            "reranker_model": None,
+            "reranker_top_n": None,
+            "reranker_error": None,
+        }
+
+        with (
+            patch("backend.llm_service.build_llm", return_value=fake_llm),
+            patch("backend.rag_store.search_relevant_chunks", return_value=search_result),
+        ):
+            search = build_query_rewrite_search("always")
+            first = search("What is Alpha?", retrieval_mode="vector", include_metadata=True)
+            second = search("What is Alpha?", retrieval_mode="hybrid", include_metadata=True)
+
+        self.assertEqual(fake_llm.calls, 1)
+        self.assertEqual(search.rewrite_stats["api_call_count"], 1)
+        self.assertEqual(len(search.rewrite_cache), 1)
+        self.assertTrue(first["query_rewrite_latency_included"])
+        self.assertFalse(second["query_rewrite_latency_included"])
+
+
     def test_load_cases_reads_valid_json(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "cases.json"
@@ -289,6 +338,49 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(summary["source_pollution_rate"], 0.5)
         self.assertEqual(summary["average_latency_ms"], 20.0)
         self.assertEqual(summary["p95_latency_ms"], 30.0)
+
+    def test_query_rewrite_metrics_are_aggregated_and_rendered(self):
+        cases = []
+        for used, latency in ((True, 120.0), (False, 80.0)):
+            cases.append({
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {},
+                        "query_rewrite_attempted": True,
+                        "query_rewrite_used": used,
+                        "query_rewrite_latency_ms": latency,
+                        "query_fusion_used": used,
+                    }
+                }
+            })
+
+        mode_summary = build_mode_summary(cases, ["hybrid"])
+        summary = mode_summary["hybrid"]
+        self.assertEqual(summary["query_rewrite_attempt_count"], 2)
+        self.assertEqual(summary["query_rewrite_success_count"], 1)
+        self.assertEqual(summary["query_rewrite_success_rate"], 0.5)
+        self.assertEqual(summary["query_rewrite_fallback_count"], 1)
+        self.assertEqual(summary["average_query_rewrite_latency_ms"], 100.0)
+
+        report = {
+            "summary": {
+                "case_count": 0,
+                "positive_case_count": 0,
+                "negative_case_count": 0,
+                "modes": ["hybrid"],
+                "top_k": 5,
+                "with_answer": False,
+                "with_judge": False,
+                "with_reranker": False,
+            },
+            "mode_summary": mode_summary,
+            "cases": [],
+        }
+        self.assertIn("## Query Rewrite Diagnostics", render_markdown(report))
 
     def test_json_report_can_be_written(self):
         report = {
