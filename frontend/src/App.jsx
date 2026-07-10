@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 const API_BASE_URL = "http://127.0.0.1:8000"
 const HISTORY_LIMIT = 6
@@ -236,6 +236,7 @@ function getResponseSnapshot(data) {
     judge_evaluation: data.judge_evaluation || null,
     run_summary: data.run_summary && typeof data.run_summary === "object" ? data.run_summary : {},
     run_details: data.run_details && typeof data.run_details === "object" ? data.run_details : {},
+    pending_actions: Array.isArray(data.pending_actions) ? data.pending_actions : [],
   }
 }
 
@@ -712,29 +713,58 @@ function Sidebar({
 
 function ChatMessage({ message }) {
   const isAssistant = message.role === "assistant"
+  const [liveResponse, setLiveResponse] = useState(message.response || null)
+
+  useEffect(() => {
+    setLiveResponse(message.response || null)
+  }, [message.response])
+
+  const handleActionChange = useCallback((updatedAction) => {
+    setLiveResponse((current) => {
+      if (!current) {
+        return current
+      }
+      const terminalStatus = {
+        executed: "succeeded",
+        rejected: "succeeded",
+        expired: "partial",
+        failed: "failed",
+      }[updatedAction.status]
+      return {
+        ...current,
+        pending_actions: (current.pending_actions || []).map((action) => (
+          action.id === updatedAction.id ? updatedAction : action
+        )),
+        run_summary: terminalStatus
+          ? { ...(current.run_summary || {}), status: terminalStatus }
+          : current.run_summary,
+      }
+    })
+  }, [])
 
   return (
     <article className={isAssistant ? "ai-message" : "user-message"}>
-      <div className={isAssistant && message.response ? "response-meta" : "message-meta"}>
-        {isAssistant && message.response ? (
+      <div className={isAssistant && liveResponse ? "response-meta" : "message-meta"}>
+        {isAssistant && liveResponse ? (
           <>
-            {getExecutionModeLabel(message.response.mode) ? <span>{getExecutionModeLabel(message.response.mode)}</span> : null}
-            <span>模式：{MODE_LABELS[message.response.mode] || message.response.mode || "auto"}</span>
-            <span>模型：{message.response.model || "默认模型"}</span>
+            {getExecutionModeLabel(liveResponse.mode) ? <span>{getExecutionModeLabel(liveResponse.mode)}</span> : null}
+            <span>模式：{MODE_LABELS[liveResponse.mode] || liveResponse.mode || "auto"}</span>
+            <span>模型：{liveResponse.model || "默认模型"}</span>
           </>
         ) : (
           <span>{isAssistant ? "助手" : "你"}</span>
         )}
       </div>
-      {isAssistant && message.response ? (
+      {isAssistant && liveResponse ? (
         <>
-          <AnswerBlock response={message.response} />
-          <AnswerArtifacts response={message.response} />
+          <AnswerBlock response={liveResponse} />
+          <PendingActionsBlock actions={liveResponse.pending_actions} onActionChange={handleActionChange} />
+          <AnswerArtifacts response={liveResponse} />
         </>
       ) : (
         <div>{compactText(message.content)}</div>
       )}
-      {isAssistant ? <RunSummaryPanel response={message.response || { mode: "history" }} /> : null}
+      {isAssistant ? <RunSummaryPanel response={liveResponse || { mode: "history" }} /> : null}
     </article>
   )
 }
@@ -867,6 +897,7 @@ function RunSummaryPanel({ response }) {
   }
   const totalTokens = summary.token_usage?.total_tokens
   const statusLabel = {
+    awaiting_action: "等待操作确认",
     succeeded: "运行成功",
     partial: "部分完成",
     failed: "运行失败",
@@ -1185,6 +1216,145 @@ function KnowledgeViewer({ viewer }) {
         <pre className="knowledge-text-preview">{viewer.content}</pre>
       </article>
     </div>
+  )
+}
+
+const PENDING_ACTION_STATUS_LABELS = {
+  pending: "等待确认",
+  approved: "已批准",
+  executing: "执行中",
+  executed: "已执行",
+  rejected: "已拒绝",
+  expired: "已过期",
+  failed: "执行失败",
+}
+
+async function readPendingActionResponse(response) {
+  try {
+    return await response.json()
+  } catch {
+    return { detail: await response.text() }
+  }
+}
+
+function PendingActionCard({ initialAction, onActionChange }) {
+  const [action, setAction] = useState(initialAction)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    if (!initialAction?.id || initialAction.status !== "pending") {
+      return undefined
+    }
+    const controller = new AbortController()
+    fetch(`${API_BASE_URL}/pending-actions/${encodeURIComponent(initialAction.id)}`, {
+      signal: controller.signal,
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((latest) => {
+        if (latest) {
+          setAction(latest)
+          onActionChange?.(latest)
+        }
+      })
+      .catch((fetchError) => {
+        if (fetchError.name !== "AbortError") {
+          console.warn("Failed to refresh pending action", fetchError)
+        }
+      })
+    return () => controller.abort()
+  }, [initialAction?.id, initialAction?.status, onActionChange])
+
+  async function decide(decision) {
+    setBusy(true)
+    setError("")
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/pending-actions/${encodeURIComponent(action.id)}/${decision}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Requested-With": "AI-Study-Assistant",
+          },
+          body: JSON.stringify({}),
+        },
+      )
+      const payload = await readPendingActionResponse(response)
+      if (!response.ok) {
+        throw new Error(payload.detail || `操作处理失败：${response.status}`)
+      }
+      const updatedAction = payload.action || action
+      setAction(updatedAction)
+      onActionChange?.(updatedAction)
+    } catch (decisionError) {
+      setError(decisionError.message || "操作处理失败")
+      try {
+        const latest = await fetch(`${API_BASE_URL}/pending-actions/${encodeURIComponent(action.id)}`)
+        if (latest.ok) {
+          const refreshedAction = await latest.json()
+          setAction(refreshedAction)
+          onActionChange?.(refreshedAction)
+        }
+      } catch {
+        // Keep the original card state when the refresh also fails.
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const status = action?.status || "pending"
+  const canDecide = status === "pending" && !busy
+
+  return (
+    <article className={`pending-action-card status-${status}`}>
+      <header>
+        <div>
+          <span className="pending-action-eyebrow">待确认操作 · 高风险</span>
+          <h4>{action.summary || action.tool_name}</h4>
+        </div>
+        <span className={`pending-action-status ${status}`}>
+          {busy ? "处理中" : PENDING_ACTION_STATUS_LABELS[status] || status}
+        </span>
+      </header>
+      <p>{action.impact || "此操作需要你的明确确认。"}</p>
+      <dl>
+        <div><dt>工具</dt><dd>{action.tool_name}</dd></div>
+        <div><dt>可撤销</dt><dd>{action.reversible ? "是" : "否"}</dd></div>
+        <div><dt>有效期至</dt><dd>{action.expires_at ? new Date(action.expires_at).toLocaleString() : "—"}</dd></div>
+      </dl>
+      <details>
+        <summary>查看执行参数</summary>
+        <pre>{JSON.stringify(action.arguments || {}, null, 2)}</pre>
+      </details>
+      {action.result?.answer ? <p className="pending-action-result">{action.result.answer}</p> : null}
+      {action.error ? <p className="pending-action-error">{action.error}</p> : null}
+      {error ? <p className="pending-action-error">{error}</p> : null}
+      {status === "pending" ? (
+        <div className="pending-action-buttons">
+          <button type="button" className="danger-button" disabled={!canDecide} onClick={() => decide("approve")}>
+            {busy ? "处理中…" : "确认执行"}
+          </button>
+          <button type="button" className="ghost-button" disabled={!canDecide} onClick={() => decide("reject")}>
+            拒绝
+          </button>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function PendingActionsBlock({ actions, onActionChange }) {
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return null
+  }
+  return (
+    <section className="pending-actions" aria-label="待确认操作">
+      {actions.map((action) => (
+        <PendingActionCard initialAction={action} key={action.id} onActionChange={onActionChange} />
+      ))}
+    </section>
   )
 }
 

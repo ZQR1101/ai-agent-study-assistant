@@ -3135,6 +3135,11 @@ body {
     box-shadow: 0 0 0 3px rgba(28, 122, 71, 0.12);
 }
 
+.run-status-dot.awaiting_action {
+    background: var(--secondary);
+    box-shadow: 0 0 0 4px var(--secondary-soft);
+}
+
 .run-status-dot.partial {
     background: var(--warn-fg);
     box-shadow: 0 0 0 3px rgba(138, 90, 18, 0.12);
@@ -3524,6 +3529,159 @@ body {
     min-height: 215px;
 }
 
+.pending-actions {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.pending-action-card {
+    background: color-mix(in srgb, var(--secondary-soft) 56%, var(--surface-lowest));
+    border: 1px solid color-mix(in srgb, var(--error) 34%, var(--outline));
+    border-radius: 18px;
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+}
+
+.pending-action-card.status-executed,
+.pending-action-card.status-rejected {
+    background: var(--surface-lowest);
+    border-color: var(--outline);
+}
+
+.pending-action-card > header {
+    align-items: flex-start;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.pending-action-card h4 {
+    color: var(--ink);
+    font-size: 16px;
+    margin: 3px 0 0;
+}
+
+.pending-action-card > p {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 20px;
+    margin: 0;
+}
+
+.pending-action-eyebrow {
+    color: var(--error);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.pending-action-status {
+    background: var(--secondary-soft);
+    border-radius: 999px;
+    color: var(--secondary);
+    flex: none;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 5px 9px;
+}
+
+.pending-action-status.executed {
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.pending-action-status.rejected,
+.pending-action-status.expired,
+.pending-action-status.failed {
+    background: var(--surface);
+    color: var(--muted);
+}
+
+.pending-action-card dl {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 0;
+}
+
+.pending-action-card dl > div {
+    display: grid;
+    gap: 3px;
+}
+
+.pending-action-card dt {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.pending-action-card dd {
+    color: var(--ink);
+    font: 11px/1.4 var(--font-mono);
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.pending-action-card details {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.pending-action-card details summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.pending-action-card pre {
+    background: #111827;
+    border-radius: 12px;
+    color: #d1fae5;
+    font: 11px/1.55 var(--font-mono);
+    margin: 8px 0 0;
+    max-height: 180px;
+    overflow: auto;
+    padding: 10px;
+    white-space: pre-wrap;
+}
+
+.pending-action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+}
+
+.danger-button {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    color: var(--error);
+    cursor: pointer;
+    font-weight: 800;
+    padding: 9px 14px;
+}
+
+.danger-button:hover {
+    background: rgba(186, 26, 26, 0.08);
+}
+
+.danger-button:disabled {
+    cursor: wait;
+    opacity: .55;
+}
+
+.pending-action-card .pending-action-result {
+    color: var(--primary);
+    font-weight: 700;
+}
+
+.pending-action-card .pending-action-error {
+    color: var(--error);
+    font-weight: 700;
+}
+
 @media (max-width: 680px) {
     .answer-flashcard-grid {
         grid-template-columns: 1fr;
@@ -3607,5 +3765,11 @@ body {
 
     .inspector-panel {
         display: none;
+    }
+}
+
+@media (max-width: 680px) {
+    .pending-action-card dl {
+        grid-template-columns: 1fr;
     }
 }

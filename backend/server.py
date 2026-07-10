@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import socket
+from datetime import datetime, timezone
 from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.parse import ParseResult, quote, urljoin, urlparse
@@ -29,6 +30,10 @@ from backend.judge_service import is_judge_persistence_enabled, is_llm_judge_ena
 from backend.schemas import ChatRequest, ChatResponse, JudgeFeedbackRequest
 from backend.run_metadata import build_run_metadata
 from backend.run_repository import Run, get_run_repository
+from backend.pending_actions import (
+    PendingAction,
+    get_pending_action_repository,
+)
 from backend.pdf_validation import (
     PDFPageLimitExceeded,
     PDFValidationError,
@@ -153,6 +158,10 @@ class ToolInvokeRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     confirmation_token: str | None = None
     actor: str = "api"
+
+
+class PendingActionDecisionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
 
 
 def _resolve_public_image_url(url: str) -> tuple[ParseResult, tuple[str, ...]] | None:
@@ -620,6 +629,225 @@ def get_run_api(run_id: str):
     return _run_payload(run)
 
 
+def _pending_action_payload(action: PendingAction) -> dict:
+    if hasattr(action, "model_dump"):
+        return action.model_dump(mode="json")
+    return action.dict()
+
+
+def _require_in_app_action_request(x_requested_with: str | None) -> None:
+    if x_requested_with != "AI-Study-Assistant":
+        raise HTTPException(status_code=403, detail="Pending action request source denied")
+
+
+def _finalize_action_run(
+    action: PendingAction,
+    *,
+    status: Literal["completed", "partial", "failed"],
+    event_status: str,
+    result: dict | None = None,
+    error: str | None = None,
+) -> None:
+    run_repository = get_run_repository()
+    run = run_repository.get_run(action.run_id)
+    if run is None or run.status != "awaiting_action":
+        return
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": "pending_action",
+        "action_id": action.id,
+        "tool": action.tool_name,
+        "status": event_status,
+        "actor": "user",
+        "run_id": action.run_id,
+    }
+    try:
+        run_repository.append_audit(action.run_id, event)
+        run_repository.finish_run(
+            action.run_id,
+            status=status,
+            output={
+                "pending_actions": [_pending_action_payload(action)],
+                **({"pending_action_result": result} if result is not None else {}),
+            },
+            error=error,
+        )
+    except (KeyError, ValueError):
+        logger.warning("Unable to finalize Run %s for Pending Action %s", action.run_id, action.id)
+
+
+@app.get("/pending-actions", tags=["Tools"])
+def list_pending_actions_api(
+    status: str | None = None,
+    run_id: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+):
+    actions = get_pending_action_repository().list(
+        status=status,
+        run_id=run_id,
+        limit=limit,
+    )
+    for action in actions:
+        if action.status == "expired":
+            _finalize_action_run(action, status="partial", event_status="expired")
+    return {
+        "actions": [_pending_action_payload(action) for action in actions],
+        "count": len(actions),
+    }
+
+
+@app.get("/pending-actions/{action_id}", tags=["Tools"])
+def get_pending_action_api(action_id: str):
+    try:
+        action = get_pending_action_repository().get(action_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if action is None:
+        raise HTTPException(status_code=404, detail="Pending action not found")
+    if action.status == "expired":
+        _finalize_action_run(action, status="partial", event_status="expired")
+    return _pending_action_payload(action)
+
+
+@app.post("/pending-actions/{action_id}/approve", tags=["Tools"])
+def approve_pending_action_api(
+    action_id: str,
+    request: PendingActionDecisionRequest,
+    x_requested_with: str | None = Header(default=None, alias="X-Requested-With"),
+):
+    _require_in_app_action_request(x_requested_with)
+    repository = get_pending_action_repository()
+    try:
+        action = repository.get(action_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if action is None:
+        raise HTTPException(status_code=404, detail="Pending action not found")
+    if action.status == "expired":
+        _finalize_action_run(action, status="partial", event_status="expired")
+        raise HTTPException(status_code=409, detail="Pending action expired")
+    if action.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Pending action is already {action.status}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        action = repository.transition(
+            action.id,
+            expected={"pending"},
+            status="approved",
+            decision_reason=request.reason,
+            decided_at=now,
+        )
+        action = repository.transition(
+            action.id,
+            expected={"approved"},
+            status="executing",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    spec = TOOL_REGISTRY.get(action.tool_name)
+    if spec is None or not spec.requires_confirmation or spec.category.value != "dangerous":
+        failed = repository.transition(
+            action.id,
+            expected={"executing"},
+            status="failed",
+            error="Pending action tool is no longer available as a dangerous tool",
+            executed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _finalize_action_run(
+            failed,
+            status="failed",
+            event_status="failed",
+            error=failed.error,
+        )
+        raise HTTPException(status_code=409, detail=failed.error)
+
+    subject = f"pending-action:{action.id}"
+    try:
+        try:
+            TOOL_REGISTRY.execute(
+                action.tool_name,
+                actor=subject,
+                confirmation_subject=subject,
+                **action.arguments,
+            )
+        except ToolConfirmationRequired as confirmation:
+            token = TOOL_REGISTRY.approve_confirmation(
+                confirmation.request_id,
+                action.tool_name,
+                approver="user:pending-action-card",
+            )
+        else:
+            raise RuntimeError("Dangerous tool executed without confirmation")
+
+        result = TOOL_REGISTRY.execute(
+            action.tool_name,
+            actor=subject,
+            confirmation_subject=subject,
+            confirmation_token=token,
+            **action.arguments,
+        )
+    except Exception as exc:
+        failed = repository.transition(
+            action.id,
+            expected={"executing"},
+            status="failed",
+            error=str(exc),
+            executed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _finalize_action_run(
+            failed,
+            status="failed",
+            event_status="failed",
+            error=str(exc),
+        )
+        raise HTTPException(status_code=422, detail=f"Pending action execution failed: {exc}") from exc
+
+    executed = repository.transition(
+        action.id,
+        expected={"executing"},
+        status="executed",
+        result=result,
+        executed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _finalize_action_run(
+        executed,
+        status="completed",
+        event_status="executed",
+        result=result,
+    )
+    return {"action": _pending_action_payload(executed), "result": result}
+
+
+@app.post("/pending-actions/{action_id}/reject", tags=["Tools"])
+def reject_pending_action_api(
+    action_id: str,
+    request: PendingActionDecisionRequest,
+    x_requested_with: str | None = Header(default=None, alias="X-Requested-With"),
+):
+    _require_in_app_action_request(x_requested_with)
+    repository = get_pending_action_repository()
+    try:
+        rejected = repository.transition(
+            action_id,
+            expected={"pending"},
+            status="rejected",
+            decision_reason=request.reason,
+            decided_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Pending action not found") from exc
+    except ValueError as exc:
+        action = repository.get(action_id)
+        if action and action.status == "expired":
+            _finalize_action_run(action, status="partial", event_status="expired")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    _finalize_action_run(rejected, status="completed", event_status="rejected")
+    return {"action": _pending_action_payload(rejected)}
+
+
 @app.get("/rag/status", tags=["Knowledge Base"])
 def rag_status_api():
     from backend.rag_warmup import get_rag_warmup_status
@@ -691,7 +919,11 @@ def chat_api(request: ChatRequest):
     result["run_id"] = run_id
 
     # --- LLM-as-Judge evaluation ---
-    if is_llm_judge_enabled() and result.get("answer"):
+    if (
+        is_llm_judge_enabled()
+        and result.get("answer")
+        and not result.get("pending_actions")
+    ):
         try:
             evaluation = judge_answer(
                 request.message,
@@ -753,6 +985,8 @@ def chat_api(request: ChatRequest):
     )
     result["run_summary"] = run_summary
     result["run_details"] = run_details
+    if result.get("pending_actions"):
+        result["run_summary"] = {**run_summary, "status": "awaiting_action"}
 
     # --- DB history: save messages and the complete assistant response ---
     if is_db_history_enabled() and session_id:
@@ -786,20 +1020,30 @@ def chat_api(request: ChatRequest):
                 "sources": result.get("sources", []),
                 "flashcards": result.get("flashcards", []),
                 "trace": result.get("trace", []),
+                "pending_actions": result.get("pending_actions", []),
             },
             metadata={"run_summary": result.get("run_summary", {})},
         )
-        finish_status = _finish_status_from_summary(
-            run_id,
-            run_summary.get("status"),
-        )
         response_payload = ChatResponse.model_validate(result).model_dump(mode="json")
-        run_repository.finish_run(
-            run_id,
-            status=finish_status,
-            output=response_payload,
-            error=result.get("runtime_info", {}).get("error"),
-        )
+        if result.get("pending_actions"):
+            run_repository.update_run(
+                run_id,
+                status="awaiting_action",
+                output=response_payload,
+                error=None,
+                finished_at=None,
+            )
+        else:
+            finish_status = _finish_status_from_summary(
+                run_id,
+                run_summary.get("status"),
+            )
+            run_repository.finish_run(
+                run_id,
+                status=finish_status,
+                output=response_payload,
+                error=result.get("runtime_info", {}).get("error"),
+            )
     except Exception as exc:
         logger.warning("Failed to finalize run %s: %s", run_id, exc)
         runtime_info = dict(result.get("runtime_info", {}))

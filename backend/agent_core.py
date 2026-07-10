@@ -13,6 +13,12 @@ from backend.llm_service import (
     track_llm_usage,
 )
 from backend.schemas import AgentPlan
+from backend.pending_actions import (
+    SUPPORTED_PENDING_ACTION_TOOLS,
+    get_pending_action_repository,
+    normalize_action_arguments,
+)
+from backend.tool_registry import ToolCategory
 from backend.tools import TOOL_REGISTRY, _is_valid_agent_context
 
 
@@ -52,22 +58,34 @@ def _validate_agent_plan(data: dict) -> dict:
     return _model_to_dict(plan)
 
 
-def _tool_descriptions_for_prompt() -> str:
-    specs = (
+def _proposable_tool_specs():
+    safe_specs = (
         TOOL_REGISTRY.agent_specs()
         if hasattr(TOOL_REGISTRY, "agent_specs")
-        else TOOL_REGISTRY.values()
+        else list(TOOL_REGISTRY.values())
     )
+    dangerous_specs = [
+        spec
+        for spec in TOOL_REGISTRY.values()
+        if (
+            spec.category is ToolCategory.DANGEROUS
+            and spec.name in SUPPORTED_PENDING_ACTION_TOOLS
+        )
+    ]
+    seen = {spec.name for spec in safe_specs}
+    return [*safe_specs, *[spec for spec in dangerous_specs if spec.name not in seen]]
+
+
+def _tool_descriptions_for_prompt() -> str:
     return "\n".join(
         f"- {tool.name}：{tool.description}"
-        for tool in specs
+        + ("（只创建待确认操作，不会立即执行）" if tool.category is ToolCategory.DANGEROUS else "")
+        for tool in _proposable_tool_specs()
     )
 
 
 def _tool_names_for_prompt() -> str:
-    if hasattr(TOOL_REGISTRY, "agent_specs"):
-        return "|".join(tool.name for tool in TOOL_REGISTRY.agent_specs())
-    return "|".join(TOOL_REGISTRY.keys())
+    return "|".join(tool.name for tool in _proposable_tool_specs())
 
 
 _LEGACY_STUDY_TOOLS = {"explain", "summarize", "quiz", "flashcard"}
@@ -89,8 +107,34 @@ def _registry_has_tool(name: str) -> bool:
 
 def _fallback_agent_plan(user_input: str, reason: str = "planner json parse failed") -> dict:
     lowered = user_input.lower()
+    arguments = {}
 
-    if any(word in lowered for word in ["flashcard", "卡片", "记忆卡", "抽认卡"]):
+    if (
+        any(word in lowered for word in ["删除知识库", "删除文件", "delete knowledge", "delete file"])
+        and re.search(r"\.(?:md|txt|pdf)\b", lowered)
+    ):
+        tool = "delete_knowledge_file"
+        try:
+            arguments = normalize_action_arguments(tool, {}, user_input)
+        except ValueError:
+            arguments = {}
+    elif any(word in lowered for word in ["删除 run", "delete run", "删除运行记录"]):
+        tool = "delete_run"
+        try:
+            arguments = normalize_action_arguments(tool, {}, user_input)
+        except ValueError:
+            arguments = {}
+    elif any(word in lowered for word in ["重建索引", "rebuild index", "rebuild rag"]):
+        tool = "rebuild_rag_index"
+    elif any(word in lowered for word in ["重置索引", "清空索引", "reset index", "reset rag"]):
+        tool = "reset_rag_index"
+    elif any(word in lowered for word in ["清空笔记", "清空卡片", "清空题库", "清空练习", "reset saved"]):
+        tool = "reset_saved_items"
+        try:
+            arguments = normalize_action_arguments(tool, {}, user_input)
+        except ValueError:
+            arguments = {}
+    elif any(word in lowered for word in ["flashcard", "卡片", "记忆卡", "抽认卡"]):
         tool = "flashcard"
     elif any(word in lowered for word in ["quiz", "题", "练习", "测试"]):
         tool = "quiz"
@@ -114,6 +158,7 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
                 "tool": tool,
                 "input": user_input,
                 "reason": "使用本地规则生成的 fallback 单步计划。",
+                **({"arguments": arguments} if arguments else {}),
             }
         ],
     }
@@ -141,13 +186,21 @@ AgentPlan schema：
     {{
       "tool": "{_tool_names_for_prompt()}",
       "input": "传给工具的输入，非空字符串",
-      "reason": "为什么使用这个工具"
+      "reason": "为什么使用这个工具",
+      "arguments": {{"仅危险工具需要": "填写精确结构化参数；普通工具使用空对象"}}
     }}
   ],
   "fallback": false
 }}
 
-工具名只能是：{', '.join(TOOL_REGISTRY.keys())}。
+工具名只能是：{', '.join(tool.name for tool in _proposable_tool_specs())}。
+危险工具只能在用户明确要求删除、清空、重置或重建时使用。不要根据暗示推断危险操作。
+危险工具参数要求：
+- delete_saved_item: {{"collection": "notes|flashcards|quizzes", "item_id": "..."}}
+- delete_run: {{"target_run_id": "..."}}
+- delete_knowledge_file: {{"filename": "..."}}
+- reset_saved_items: {{"collection": "notes|flashcards|quizzes"}}，省略 collection 表示全部
+- reset_rag_index / rebuild_rag_index: {{}}
 
 示例 1：
 用户输入：什么是 RAG
@@ -289,6 +342,7 @@ JSON 必须符合 AgentPlan schema。
 def _execute_agent_tool(
     tool: str,
     tool_input: str,
+    tool_arguments: dict | None = None,
     custom_llm=None,
     top_k: int = 3,
     shared_context: dict | None = None,
@@ -315,6 +369,51 @@ def _execute_agent_tool(
         result["tool_description"] = fallback_tool.description
         result["tool_success"] = True
         return result
+
+    if tool_spec.category is ToolCategory.DANGEROUS:
+        run_id = str((shared_context or {}).get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError("Dangerous tool proposals require a persisted Run")
+        try:
+            arguments = normalize_action_arguments(
+                registry_tool,
+                tool_arguments,
+                tool_input,
+            )
+        except ValueError as exc:
+            return {
+                "answer": str(exc),
+                "trace": [f"Pending Action 未创建：{exc}"],
+                "sources": [],
+                "flashcards": [],
+                "tool_name": tool_spec.name,
+                "tool_description": tool_spec.description,
+                "tool_success": False,
+                "error": str(exc),
+            }
+
+        action = get_pending_action_repository().create(
+            run_id=run_id,
+            session_id=(shared_context or {}).get("session_id"),
+            tool_name=registry_tool,
+            arguments=arguments,
+            request_message=(shared_context or {}).get("original_input", tool_input),
+        )
+        action_payload = (
+            action.model_dump(mode="json")
+            if hasattr(action, "model_dump")
+            else action.dict()
+        )
+        return {
+            "answer": f"我已准备好“{action.summary}”，但尚未执行。请检查下方待确认操作。",
+            "trace": [f"Pending Action 已创建：{action.id}"],
+            "sources": [],
+            "flashcards": [],
+            "pending_action": action_payload,
+            "tool_name": tool_spec.name,
+            "tool_description": tool_spec.description,
+            "tool_success": True,
+        }
 
     arguments = {
         "step_input": tool_input,
@@ -345,6 +444,7 @@ def run_agent(
     reranker_enabled: bool = False,
     history_context: str | None = None,
     run_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
@@ -397,6 +497,7 @@ def run_agent(
     step_outputs = []
     all_sources = []
     all_flashcards = []
+    pending_actions = []
     fallback_used = False
     retrieval_summary = {
         "retrieval_mode": retrieval_mode,
@@ -427,6 +528,7 @@ def run_agent(
         tool_calls[0].update(planner_usage_delta)
     shared_context = {
         "run_id": run_id,
+        "session_id": session_id,
         "original_input": user_input,
         "history_context": history_context or "",
         "retrieval_mode": retrieval_mode,
@@ -450,6 +552,7 @@ def run_agent(
         result = _execute_agent_tool(
             tool,
             tool_input,
+            tool_arguments=step.get("arguments"),
             custom_llm=active_llm,
             top_k=top_k,
             shared_context=shared_context,
@@ -493,6 +596,9 @@ def run_agent(
             retrieval_summary.update(result["retrieval_info"])
         tool_calls.append(tool_call)
 
+        if result.get("pending_action"):
+            pending_actions.append(result["pending_action"])
+
         if tool == "rag" and _is_valid_agent_context(result.get("context")):
             shared_context["rag_context"] = result["context"]
             shared_context["sources"] = result_sources
@@ -505,6 +611,9 @@ def run_agent(
         shared_context["last_output"] = result_answer
         step_outputs.append(f"步骤 {index}（{tool}）：\n{result_answer}")
         trace.append(f"Agent Step {index} done：输出长度 {len(result_answer)}")
+        if result.get("pending_action"):
+            trace.append("Agent execution paused：等待用户确认操作")
+            break
 
     answer = "\n\n".join(step_outputs) if step_outputs else chat(
         user_input,
@@ -529,8 +638,10 @@ def run_agent(
             "planner_fallback": bool(plan.get("fallback")),
             "planner_error": plan.get("fallback_reason") or None,
             "error": None,
+            "awaiting_action": bool(pending_actions),
             **retrieval_summary,
         }, active_llm),
+        "pending_actions": pending_actions,
     }
 
 

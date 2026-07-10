@@ -10,7 +10,7 @@ AI Study Assistant 是一个面向学习场景的 AI 应用，而不是普通的
 - **Local RAG**：本地 FAISS/Document Index，支持 `Vector / BM25 / Hybrid RRF / CrossEncoder Reranker`，默认启用结构化 Chunk + 元数据增强。
 - **Offline RAG Benchmark**：V1/V2/V3 分阶段构建 Corpus，V3 覆盖 55 Cases；Metrics 和原始结果可复现、可审计。
 - **Retrieval Quality Controls**：修复 Negative-case Source Pollution，并过滤 PDF/OCR 产生的 Low-quality Chunks；Query Rewrite 已实测为当前负收益，默认关闭。
-- **Tool Registry Safety**：Tools 按 `read / write / dangerous` 分级，Dangerous Tools 必须显式审批。
+- **Tool Registry Safety**：Tools 按 `read / write / dangerous` 分级；Agent 对危险操作只创建持久化 Pending Action，必须由用户在对话中显式批准。
 - **Run Observability**：统一查看 `Plan / Trace / Tool Calls / Sources / Latency / Token / Cost / Judge`。
 
 ## 功能截图
@@ -120,6 +120,8 @@ Rewrite 调用成功率为 100.0%，Fallback Count 为 0，平均 Rewrite Latenc
 ## 工具安全
 
 Tool Registry 按 `read / write / dangerous` 分类。Dangerous Tool 必须经过独立的 requester / approver 凭据确认；一次性 confirmation token 与 tool name、arguments 和 requester 绑定，arguments 变化或 token 复用都会被拒绝。所有调用状态、耗时、参数摘要和审批事件写入 append-only JSONL audit log，并关联到对应 Run。
+
+Agent 遇到删除、清空、重置或重建操作时不会直接执行，而是创建持久化的 Pending Action，并将 Run 标记为 `awaiting_action`。对话内确认卡片会展示影响范围、精确参数、可撤销性和过期时间；用户可批准或拒绝。批准后后端仍通过原有一次性 confirmation token 执行，拒绝、过期、失败和重复提交都会被记录或拦截。默认 Pending Action 保存在 `data/pending_actions`，有效期为 300 秒，可通过 `PENDING_ACTIONS_DIR` 和 `PENDING_ACTION_TTL_SECONDS` 调整。
 
 ## 运行可观测性
 

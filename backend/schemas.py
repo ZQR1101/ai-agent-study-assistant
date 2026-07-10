@@ -17,6 +17,12 @@ AgentToolName = Literal[
     "summarize",
     "quiz",
     "flashcard",
+    "delete_saved_item",
+    "delete_run",
+    "delete_knowledge_file",
+    "reset_saved_items",
+    "reset_rag_index",
+    "rebuild_rag_index",
 ]
 PlannerMode = Literal["rule", "llm"]
 RetrievalMode = Literal["vector", "bm25", "hybrid"]
@@ -59,6 +65,7 @@ class AgentPlanStep(BaseModel):
     tool: AgentToolName
     input: str = Field(..., min_length=1)
     reason: str | None = None
+    arguments: dict = Field(default_factory=dict)
 
 
 class AgentPlan(BaseModel):
@@ -131,6 +138,7 @@ class ChatResponse(BaseModel):
     judge_evaluation: JudgeEvaluationResult | None = None
     run_summary: dict = Field(default_factory=dict)
     run_details: dict = Field(default_factory=dict)
+    pending_actions: list[dict] = Field(default_factory=list)
 
 
 class SessionSummary(BaseModel):
