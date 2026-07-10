@@ -740,33 +740,33 @@ function Sidebar({
 
 function ChatMessage({ message }) {
   const isAssistant = message.role === "assistant"
-  const [liveResponse, setLiveResponse] = useState(message.response || null)
+  const baseResponse = message.response || null
+  const [actionOverrides, setActionOverrides] = useState({})
 
-  useEffect(() => {
-    setLiveResponse(message.response || null)
-  }, [message.response])
+  // Derive liveResponse from prop + local overrides so approvals/rejections
+  // survive parent re-renders (e.g. conversation restore) that pass a fresh
+  // message.response object whose pending_actions are still "pending".
+  const liveResponse = useMemo(() => {
+    if (!baseResponse) return null
+    const overrideKeys = Object.keys(actionOverrides)
+    if (overrideKeys.length === 0) return baseResponse
+    const updatedActions = (baseResponse.pending_actions || []).map((a) => actionOverrides[a.id] || a)
+    const terminalSet = new Set(["executed", "rejected", "expired", "failed"])
+    const allResolved = updatedActions.length > 0 && updatedActions.every((a) => terminalSet.has(a.status))
+    const runStatus = allResolved
+      ? (updatedActions.some((a) => a.status === "failed") ? "failed" : "succeeded")
+      : baseResponse.run_summary?.status
+    return {
+      ...baseResponse,
+      pending_actions: updatedActions,
+      run_summary: allResolved
+        ? { ...(baseResponse.run_summary || {}), status: runStatus }
+        : baseResponse.run_summary,
+    }
+  }, [baseResponse, actionOverrides])
 
   const handleActionChange = useCallback((updatedAction) => {
-    setLiveResponse((current) => {
-      if (!current) {
-        return current
-      }
-      const terminalStatus = {
-        executed: "succeeded",
-        rejected: "succeeded",
-        expired: "partial",
-        failed: "failed",
-      }[updatedAction.status]
-      return {
-        ...current,
-        pending_actions: (current.pending_actions || []).map((action) => (
-          action.id === updatedAction.id ? updatedAction : action
-        )),
-        run_summary: terminalStatus
-          ? { ...(current.run_summary || {}), status: terminalStatus }
-          : current.run_summary,
-      }
-    })
+    setActionOverrides((prev) => ({ ...prev, [updatedAction.id]: updatedAction }))
   }, [])
 
   return (
@@ -1268,6 +1268,17 @@ function PendingActionCard({ initialAction, onActionChange }) {
   const [action, setAction] = useState(initialAction)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+
+  // Sync from prop when the parent signals a terminal status (e.g. after
+  // conversation restore or a cross-component override). This keeps the
+  // card in sync without discarding local decisions made via decide().
+  useEffect(() => {
+    if (!initialAction) return
+    const terminalStatuses = new Set(["executed", "rejected", "expired", "failed"])
+    if (terminalStatuses.has(initialAction.status)) {
+      setAction((prev) => (prev.status !== initialAction.status ? initialAction : prev))
+    }
+  }, [initialAction])
 
   useEffect(() => {
     if (!initialAction?.id || initialAction.status !== "pending") {
