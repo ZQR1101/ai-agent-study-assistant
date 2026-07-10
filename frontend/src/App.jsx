@@ -740,33 +740,45 @@ function Sidebar({
 
 function ChatMessage({ message }) {
   const isAssistant = message.role === "assistant"
-  const baseResponse = message.response || null
-  const [actionOverrides, setActionOverrides] = useState({})
+  const [liveResponse, setLiveResponse] = useState(message.response || null)
+  const pendingOverridesRef = useRef({})
 
-  // Derive liveResponse from prop + local overrides so approvals/rejections
-  // survive parent re-renders (e.g. conversation restore) that pass a fresh
-  // message.response object whose pending_actions are still "pending".
-  const liveResponse = useMemo(() => {
-    if (!baseResponse) return null
-    const overrideKeys = Object.keys(actionOverrides)
-    if (overrideKeys.length === 0) return baseResponse
-    const updatedActions = (baseResponse.pending_actions || []).map((a) => actionOverrides[a.id] || a)
-    const terminalSet = new Set(["executed", "rejected", "expired", "failed"])
-    const allResolved = updatedActions.length > 0 && updatedActions.every((a) => terminalSet.has(a.status))
-    const runStatus = allResolved
-      ? (updatedActions.some((a) => a.status === "failed") ? "failed" : "succeeded")
-      : baseResponse.run_summary?.status
-    return {
-      ...baseResponse,
-      pending_actions: updatedActions,
-      run_summary: allResolved
-        ? { ...(baseResponse.run_summary || {}), status: runStatus }
-        : baseResponse.run_summary,
-    }
-  }, [baseResponse, actionOverrides])
+  // Sync liveResponse when message.response changes (e.g. conversation restore),
+  // but preserve any locally-approved/rejected pending actions via the ref.
+  useEffect(() => {
+    setLiveResponse((prev) => {
+      if (!message.response) return null
+      if (!prev) return message.response
+      const overrides = pendingOverridesRef.current
+      const overrideIds = Object.keys(overrides)
+      if (overrideIds.length === 0) return message.response
+      return {
+        ...message.response,
+        pending_actions: (message.response.pending_actions || []).map((a) => overrides[a.id] || a),
+      }
+    })
+  }, [message.response])
 
   const handleActionChange = useCallback((updatedAction) => {
-    setActionOverrides((prev) => ({ ...prev, [updatedAction.id]: updatedAction }))
+    pendingOverridesRef.current[updatedAction.id] = updatedAction
+    setLiveResponse((current) => {
+      if (!current) return current
+      const terminalStatus = {
+        executed: "succeeded",
+        rejected: "succeeded",
+        expired: "partial",
+        failed: "failed",
+      }[updatedAction.status]
+      return {
+        ...current,
+        pending_actions: (current.pending_actions || []).map((action) => (
+          action.id === updatedAction.id ? updatedAction : action
+        )),
+        run_summary: terminalStatus
+          ? { ...(current.run_summary || {}), status: terminalStatus }
+          : current.run_summary,
+      }
+    })
   }, [])
 
   return (
