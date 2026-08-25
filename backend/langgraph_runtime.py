@@ -690,13 +690,26 @@ def _normalize_tool_result(tool_name: str, result: dict, success: bool, descript
     }
 
 
+def _canonical_registry_invocation(
+    tool_name: str,
+    operation: str | None = None,
+) -> tuple[str, str | None]:
+    if tool_name == "rag":
+        return "rag_search", operation
+    if tool_name in STUDY_OPERATIONS:
+        return "study", operation or tool_name
+    return tool_name, operation
+
+
 def _run_registry_tool_raw(
     tool_name: str,
     step_input: str,
     state: LangGraphAgentState,
     operation: str | None = None,
+    generate_answer: bool | None = None,
 ) -> dict:
-    tool_spec = TOOL_REGISTRY.get(tool_name)
+    registry_tool_name, operation = _canonical_registry_invocation(tool_name, operation)
+    tool_spec = TOOL_REGISTRY.get(registry_tool_name)
 
     if tool_spec is None:
         return _normalize_tool_result(
@@ -715,12 +728,15 @@ def _run_registry_tool_raw(
             "top_k": state.get("top_k", 3),
             "shared_context": _build_shared_context(state),
         }
-        if tool_name == "rag_search":
-            arguments["generate_answer"] = False
-        if tool_name == "study":
+        if registry_tool_name == "rag_search":
+            if generate_answer is None and tool_name == "rag":
+                generate_answer = False
+            if generate_answer is not None:
+                arguments["generate_answer"] = generate_answer
+        if registry_tool_name == "study":
             arguments["operation"] = operation or "explain"
         raw_result = (
-            TOOL_REGISTRY.execute(tool_name, actor="langgraph", **arguments)
+            TOOL_REGISTRY.execute(registry_tool_name, actor="langgraph", **arguments)
             if hasattr(TOOL_REGISTRY, "execute")
             else tool_spec.run(**arguments)
         )
@@ -746,10 +762,17 @@ def run_registry_tool_for_state(
     step_input: str,
     state: LangGraphAgentState,
     operation: str | None = None,
+    generate_answer: bool | None = None,
 ) -> LangGraphAgentState:
     usage_started_at = get_llm_usage_record_count(state.get("custom_llm"))
     tool_started_at = perf_counter()
-    result = _run_registry_tool_raw(tool_name, step_input, state, operation=operation)
+    result = _run_registry_tool_raw(
+        tool_name,
+        step_input,
+        state,
+        operation=operation,
+        generate_answer=generate_answer,
+    )
     latency_ms = _elapsed_ms(tool_started_at)
     result["latency_ms"] = latency_ms
     usage_delta = summarize_llm_usage_since(state.get("custom_llm"), usage_started_at)
@@ -919,7 +942,12 @@ def rag_search_node(state: LangGraphAgentState) -> LangGraphAgentState:
         "trace": _append_trace(state, f"rag_search: input={query}"),
         "graph_path": _append_graph_path(state, "rag_search"),
     }
-    return run_registry_tool_for_state("rag_search", query, state_with_trace)
+    return run_registry_tool_for_state(
+        "rag_search",
+        query,
+        state_with_trace,
+        generate_answer=False,
+    )
 
 
 def route_after_rag_search(state: LangGraphAgentState) -> str:

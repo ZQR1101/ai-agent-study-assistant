@@ -34,14 +34,28 @@ def build_demo_graph():
     return build_langgraph_workflow()
 
 
-def run_registry_tool(tool_name: str, step_input: str, state: LangGraphDemoState, custom_llm=None, top_k: int = 3) -> dict:
+def run_registry_tool(
+    tool_name: str,
+    step_input: str,
+    state: LangGraphDemoState,
+    custom_llm=None,
+    top_k: int = 3,
+    operation: str | None = None,
+    generate_answer: bool | None = None,
+) -> dict:
     _sync_registry_for_compat()
     runtime_state = {
         **state,
         "custom_llm": custom_llm,
         "top_k": top_k,
     }
-    return runtime._run_registry_tool_raw(tool_name, step_input, runtime_state)
+    return runtime._run_registry_tool_raw(
+        tool_name,
+        step_input,
+        runtime_state,
+        operation=operation,
+        generate_answer=generate_answer,
+    )
 
 
 def run_langgraph_demo(message: str, custom_llm=None, top_k: int = 3) -> dict:

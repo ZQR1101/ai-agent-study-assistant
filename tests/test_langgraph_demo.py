@@ -660,6 +660,37 @@ class LangGraphDemoTests(unittest.TestCase):
         self.assertFalse(result["tool_success"])
         self.assertIn("Unknown tool", result["error"])
 
+    def test_run_registry_tool_maps_legacy_names_to_v2_tools(self):
+        import backend.langgraph_demo as demo
+
+        fake_registry = make_fake_registry()
+
+        with patch.object(demo, "TOOL_REGISTRY", fake_registry):
+            explain_result = demo.run_registry_tool("explain", "RAG", {"message": "RAG"})
+            quiz_result = demo.run_registry_tool("quiz", "RAG", {"message": "RAG"})
+            rag_result = demo.run_registry_tool("rag", "RAG", {"message": "RAG"})
+
+        self.assertTrue(explain_result["tool_success"])
+        self.assertTrue(quiz_result["tool_success"])
+        self.assertTrue(rag_result["tool_success"])
+        self.assertEqual(len(study_calls(fake_registry, "explain")), 1)
+        self.assertEqual(len(study_calls(fake_registry, "quiz")), 1)
+        self.assertEqual(len(fake_registry["rag_search"].calls), 1)
+        self.assertEqual(study_calls(fake_registry, "explain")[0]["operation"], "explain")
+        self.assertFalse(fake_registry["rag_search"].calls[0]["generate_answer"])
+
+    def test_direct_rag_search_keeps_answer_generation_enabled(self):
+        import backend.langgraph_demo as demo
+
+        fake_registry = make_fake_registry()
+
+        with patch.object(demo, "TOOL_REGISTRY", fake_registry):
+            result = demo.run_registry_tool("rag_search", "RAG", {"message": "RAG"})
+
+        self.assertTrue(result["tool_success"])
+        self.assertEqual(len(fake_registry["rag_search"].calls), 1)
+        self.assertTrue(fake_registry["rag_search"].calls[0]["generate_answer"])
+
     def test_trace_contains_registry_tool_metadata(self):
         result, _ = self._run_with_fake_registry("knowledge base explain agentic rag")
 
