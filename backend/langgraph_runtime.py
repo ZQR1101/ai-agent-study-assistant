@@ -241,41 +241,73 @@ def detect_intent(message: str, use_rag_requested: bool = False) -> dict:
     }
 
 
+STUDY_OPERATIONS = ("summarize", "explain", "flashcard", "quiz")
+STUDY_EARLY_OPERATIONS = ("summarize", "explain")
+STUDY_LATE_OPERATIONS = ("flashcard", "quiz")
+_STUDY_OPERATION_REASONS = {
+    "summarize": "User requested a concise summary.",
+    "explain": "User requested an explanation.",
+    "flashcard": "User requested memory cards.",
+    "quiz": "User requested practice questions.",
+}
+
+
+def _study_step(message: str, operation: str, reason: str | None = None) -> dict:
+    return {
+        "tool": "study",
+        "input": message,
+        "reason": reason or _STUDY_OPERATION_REASONS.get(operation, "Study the topic."),
+        "arguments": {"operation": operation},
+    }
+
+
 def _plan_from_intent(message: str, intent: dict) -> list[dict]:
     steps: list[dict] = []
 
-    def add_step(tool: str, reason: str) -> None:
-        if any(step["tool"] == tool for step in steps):
+    def add_step(tool: str, reason: str, operation: str | None = None) -> None:
+        key = (tool, operation)
+        if any(
+            (step["tool"], (step.get("arguments") or {}).get("operation")) == key
+            for step in steps
+        ):
             return
-
-        steps.append({
-            "tool": tool,
-            "input": message,
-            "reason": reason,
-        })
+        if tool == "study" and operation:
+            steps.append(_study_step(message, operation, reason))
+            return
+        step = {"tool": tool, "input": message, "reason": reason}
+        if operation:
+            step["arguments"] = {"operation": operation}
+        steps.append(step)
 
     if intent.get("use_rag"):
-        add_step("rag", "User requested knowledge-base grounded context.")
+        add_step("rag_search", "User requested knowledge-base grounded context.")
 
     if intent.get("need_summarize"):
-        add_step("summarize", "User requested a concise summary.")
+        add_step("study", _STUDY_OPERATION_REASONS["summarize"], "summarize")
 
     if intent.get("need_explain"):
-        add_step("explain", "User requested an explanation.")
+        add_step("study", _STUDY_OPERATION_REASONS["explain"], "explain")
 
     if intent.get("need_flashcard"):
-        add_step("flashcard", "User requested memory cards.")
+        add_step("study", _STUDY_OPERATION_REASONS["flashcard"], "flashcard")
 
     if intent.get("need_quiz"):
-        add_step("quiz", "User requested practice questions.")
+        add_step("study", _STUDY_OPERATION_REASONS["quiz"], "quiz")
 
     if not steps:
-        add_step("explain", "Default learning response.")
+        add_step("study", "Default learning response.", "explain")
 
     return steps
 
 
-_LANGGRAPH_TOOL_ORDER = ["rag", "summarize", "explain", "chat", "flashcard", "quiz"]
+_LANGGRAPH_STEP_ORDER = [
+    "rag_search",
+    "study:summarize",
+    "study:explain",
+    "chat",
+    "study:flashcard",
+    "study:quiz",
+]
 
 
 def _tool_descriptions_for_prompt() -> str:
@@ -290,17 +322,53 @@ def _tool_descriptions_for_prompt() -> str:
     )
 
 
-def _normalize_plan_steps(steps: list[dict]) -> list[dict]:
-    by_tool: dict[str, dict] = {}
+def _step_order_key(step: dict) -> str:
+    tool = str(step.get("tool", ""))
+    if tool == "study":
+        operation = (step.get("arguments") or {}).get("operation") or "explain"
+        return f"study:{operation}"
+    return tool
 
+
+def _known_registry_tool(name: str) -> bool:
+    return TOOL_REGISTRY.get(name) is not None
+
+
+def _canonical_plan_steps(steps: list[dict]) -> list[dict]:
+    expanded: list[dict] = []
     for step in steps:
         tool = str(step.get("tool", ""))
         step_input = str(step.get("input") or "")
-        if hasattr(TOOL_REGISTRY, "execute") and tool == "rag_search":
-            tool = "rag"
-        if hasattr(TOOL_REGISTRY, "execute") and tool == "study":
+        reason = step.get("reason")
+        arguments = dict(step.get("arguments") or {})
+        if not step_input:
+            continue
+        if tool in {"rag", "rag_search"}:
+            if not _known_registry_tool("rag_search"):
+                continue
+            expanded.append({
+                "tool": "rag_search",
+                "input": step_input,
+                "reason": reason,
+            })
+            continue
+        if tool in STUDY_OPERATIONS:
+            arguments["operation"] = tool
+            tool = "study"
+        if tool == "study":
+            if not _known_registry_tool("study"):
+                continue
+            operation = arguments.get("operation")
+            if operation in STUDY_OPERATIONS:
+                expanded.append({
+                    "tool": "study",
+                    "input": step_input,
+                    "reason": reason,
+                    "arguments": {"operation": operation},
+                })
+                continue
             intent = detect_intent(step_input)
-            study_tools = [
+            operations = [
                 name
                 for name, needed in (
                     ("summarize", intent.get("need_summarize")),
@@ -310,49 +378,65 @@ def _normalize_plan_steps(steps: list[dict]) -> list[dict]:
                 )
                 if needed
             ] or ["explain"]
-            for study_tool in study_tools:
-                by_tool.setdefault(study_tool, {
-                    "tool": study_tool,
+            for operation in operations:
+                expanded.append({
+                    "tool": "study",
                     "input": step_input,
-                    "reason": step.get("reason"),
+                    "reason": reason,
+                    "arguments": {"operation": operation},
                 })
             continue
-        registry_name = (
-            "rag_search"
-            if tool == "rag"
-            else "study" if tool in {"explain", "summarize", "quiz", "flashcard"} else tool
-        )
-        registry_has_tool = TOOL_REGISTRY.get(
-            registry_name if hasattr(TOOL_REGISTRY, "execute") else tool
-        ) is not None
-        if not registry_has_tool or tool in by_tool:
-            continue
-
-        by_tool[tool] = {
-            "tool": tool,
-            "input": step_input,
-            "reason": step.get("reason"),
-        }
-
+        if tool == "chat":
+            if not _known_registry_tool("chat"):
+                continue
+            expanded.append({
+                "tool": "chat",
+                "input": step_input,
+                "reason": reason,
+            })
+    by_key: dict[str, dict] = {}
+    for step in expanded:
+        key = _step_order_key(step)
+        by_key.setdefault(key, step)
     return [
-        by_tool[tool]
-        for tool in _LANGGRAPH_TOOL_ORDER
-        if tool in by_tool and by_tool[tool]["input"]
+        by_key[key]
+        for key in _LANGGRAPH_STEP_ORDER
+        if key in by_key
     ]
+
+
+def _normalize_plan_steps(steps: list[dict]) -> list[dict]:
+    return _canonical_plan_steps(steps)
+
+
+def _study_operations_from_plan(steps: list[dict]) -> list[str]:
+    operations = []
+    for step in steps:
+        if step.get("tool") != "study":
+            continue
+        operation = (step.get("arguments") or {}).get("operation") or "explain"
+        if operation in STUDY_OPERATIONS and operation not in operations:
+            operations.append(operation)
+    return [operation for operation in STUDY_OPERATIONS if operation in operations]
 
 
 def _intent_from_plan_steps(steps: list[dict]) -> dict:
     tools = [step.get("tool") for step in steps]
-    intent_parts = [tool for tool in _LANGGRAPH_TOOL_ORDER if tool in tools]
-
+    operations = _study_operations_from_plan(steps)
+    intent_parts = []
+    if "rag_search" in tools:
+        intent_parts.append("rag_search")
+    intent_parts.extend(operations)
+    if "chat" in tools:
+        intent_parts.append("chat")
     return {
         "intent": "+".join(intent_parts) or "explain",
-        "use_rag": "rag" in tools,
+        "use_rag": "rag_search" in tools,
         "need_chat": "chat" in tools,
-        "need_explain": "explain" in tools,
-        "need_summarize": "summarize" in tools,
-        "need_quiz": "quiz" in tools,
-        "need_flashcard": "flashcard" in tools,
+        "need_explain": "explain" in operations,
+        "need_summarize": "summarize" in operations,
+        "need_quiz": "quiz" in operations,
+        "need_flashcard": "flashcard" in operations,
     }
 
 
@@ -364,7 +448,7 @@ def _ensure_requested_rag_step(state: LangGraphAgentState, planner_result: dict)
     message = state.get("message", "")
     plan = [
         {
-            "tool": "rag",
+            "tool": "rag_search",
             "input": message,
             "reason": "RAG was explicitly enabled in request settings.",
         },
@@ -409,23 +493,21 @@ AgentPlan schema：
   "goal": "用户任务目标，非空字符串",
   "steps": [
     {{
-      "tool": "chat|rag|explain|summarize|quiz|flashcard",
+      "tool": "chat|rag_search|study",
       "input": "传给工具的输入，非空字符串",
-      "reason": "为什么使用这个工具"
+      "reason": "为什么使用这个工具",
+      "arguments": {{"operation": "explain|summarize|quiz|flashcard"}}
     }}
   ],
   "fallback": false
 }}
 
 规划规则：
-- 如果用户要求根据知识库、文档或资料回答，先使用 rag。
-- 如果用户要求解释概念，使用 explain。
-- 如果用户要求总结、概括、提炼，使用 summarize。
-- 如果用户要求卡片或复习卡，使用 flashcard。
-- 如果用户要求出题、练习题或测验，使用 quiz。
+- 如果用户要求根据知识库、文档或资料回答，先使用 rag_search。
+- 解释、总结、出题、记忆卡片都使用 study，并在 arguments.operation 中指定 explain、summarize、quiz 或 flashcard。
 - 如果用户没有明确学习工具需求，使用 chat。
-- 工具不要重复。
-- 推荐执行顺序：rag -> summarize/explain/chat -> flashcard -> quiz。
+- 同一 operation 不要重复。
+- 推荐执行顺序：rag_search -> study(summarize/explain) -> chat -> study(flashcard/quiz)。
 - 明确否定的任务不要加入，例如“不要出题”就不要加入 quiz。
 
 示例 1：
@@ -434,8 +516,8 @@ AgentPlan schema：
 {{
   "goal": "解释 RAG 并生成练习题",
   "steps": [
-    {{"tool": "explain", "input": "RAG", "reason": "用户要求解释概念"}},
-    {{"tool": "quiz", "input": "基于 RAG 生成 3 道练习题", "reason": "用户要求出题"}}
+    {{"tool": "study", "input": "RAG", "reason": "用户要求解释概念", "arguments": {{"operation": "explain"}}}},
+    {{"tool": "study", "input": "基于 RAG 生成 3 道练习题", "reason": "用户要求出题", "arguments": {{"operation": "quiz"}}}}
   ],
   "fallback": false
 }}
@@ -446,10 +528,10 @@ AgentPlan schema：
 {{
   "goal": "基于知识库解释 agentic rag，生成卡片和练习题",
   "steps": [
-    {{"tool": "rag", "input": "agentic rag", "reason": "用户要求根据知识库回答，先检索相关内容"}},
-    {{"tool": "explain", "input": "基于知识库解释 agentic rag", "reason": "解释概念"}},
-    {{"tool": "flashcard", "input": "基于 agentic rag 生成记忆卡片", "reason": "用户要求生成卡片"}},
-    {{"tool": "quiz", "input": "基于 agentic rag 生成 3 道题", "reason": "用户要求出题"}}
+    {{"tool": "rag_search", "input": "agentic rag", "reason": "用户要求根据知识库回答，先检索相关内容"}},
+    {{"tool": "study", "input": "基于知识库解释 agentic rag", "reason": "解释概念", "arguments": {{"operation": "explain"}}}},
+    {{"tool": "study", "input": "基于 agentic rag 生成记忆卡片", "reason": "用户要求生成卡片", "arguments": {{"operation": "flashcard"}}}},
+    {{"tool": "study", "input": "基于 agentic rag 生成 3 道题", "reason": "用户要求出题", "arguments": {{"operation": "quiz"}}}}
   ],
   "fallback": false
 }}
@@ -483,21 +565,7 @@ JSON 必须符合 AgentPlan schema。
     if not steps:
         raise ValueError("planner returned empty steps")
 
-    if any(
-        TOOL_REGISTRY.get(
-            (
-                "rag_search"
-                if step.get("tool") == "rag"
-                else "study"
-                if step.get("tool") in {"explain", "summarize", "quiz", "flashcard"}
-                else step.get("tool")
-            )
-            if hasattr(TOOL_REGISTRY, "execute")
-            else step.get("tool")
-        )
-        is None
-        for step in steps
-    ):
+    if any(not _known_registry_tool(str(step.get("tool", ""))) for step in steps):
         raise ValueError("planner returned unknown tool")
 
     intent = _intent_from_plan_steps(steps)
@@ -509,12 +577,37 @@ JSON 必须符合 AgentPlan schema。
     })
 
 
-def _first_plan_input(state: LangGraphAgentState, tool_name: str) -> str:
+def _first_plan_input(state: LangGraphAgentState, tool_name: str, operation: str | None = None) -> str:
     for step in state.get("plan", []):
-        if step.get("tool") == tool_name and step.get("input"):
+        if step.get("tool") != tool_name or not step.get("input"):
+            continue
+        if operation is None:
+            return str(step["input"])
+        if (step.get("arguments") or {}).get("operation") == operation:
             return str(step["input"])
 
     return state.get("message", "")
+
+
+def _study_operations(state: LangGraphAgentState) -> list[str]:
+    return _study_operations_from_plan(state.get("plan", []))
+
+
+def _pending_study_operations(state: LangGraphAgentState) -> list[str]:
+    done = {
+        output.get("operation")
+        for output in state.get("step_outputs", [])
+        if output.get("tool") == "study" and output.get("operation")
+    }
+    return [operation for operation in _study_operations(state) if operation not in done]
+
+
+def _has_early_study(state: LangGraphAgentState) -> bool:
+    return any(operation in STUDY_EARLY_OPERATIONS for operation in _study_operations(state))
+
+
+def _has_late_study(state: LangGraphAgentState) -> bool:
+    return any(operation in STUDY_LATE_OPERATIONS for operation in _study_operations(state))
 
 
 def _build_shared_context(state: LangGraphAgentState) -> dict:
@@ -597,15 +690,13 @@ def _normalize_tool_result(tool_name: str, result: dict, success: bool, descript
     }
 
 
-def _run_registry_tool_raw(tool_name: str, step_input: str, state: LangGraphAgentState) -> dict:
-    merged_study_tools = {"explain", "summarize", "quiz", "flashcard"}
-    registry_tool_name = tool_name
-    if hasattr(TOOL_REGISTRY, "execute"):
-        if tool_name == "rag":
-            registry_tool_name = "rag_search"
-        elif tool_name in merged_study_tools:
-            registry_tool_name = "study"
-    tool_spec = TOOL_REGISTRY.get(registry_tool_name)
+def _run_registry_tool_raw(
+    tool_name: str,
+    step_input: str,
+    state: LangGraphAgentState,
+    operation: str | None = None,
+) -> dict:
+    tool_spec = TOOL_REGISTRY.get(tool_name)
 
     if tool_spec is None:
         return _normalize_tool_result(
@@ -624,12 +715,12 @@ def _run_registry_tool_raw(tool_name: str, step_input: str, state: LangGraphAgen
             "top_k": state.get("top_k", 3),
             "shared_context": _build_shared_context(state),
         }
-        if tool_name == "rag" and hasattr(TOOL_REGISTRY, "execute"):
+        if tool_name == "rag_search":
             arguments["generate_answer"] = False
-        if tool_name in merged_study_tools and hasattr(TOOL_REGISTRY, "execute"):
-            arguments["operation"] = tool_name
+        if tool_name == "study":
+            arguments["operation"] = operation or "explain"
         raw_result = (
-            TOOL_REGISTRY.execute(registry_tool_name, actor="langgraph", **arguments)
+            TOOL_REGISTRY.execute(tool_name, actor="langgraph", **arguments)
             if hasattr(TOOL_REGISTRY, "execute")
             else tool_spec.run(**arguments)
         )
@@ -654,10 +745,11 @@ def run_registry_tool_for_state(
     tool_name: str,
     step_input: str,
     state: LangGraphAgentState,
+    operation: str | None = None,
 ) -> LangGraphAgentState:
     usage_started_at = get_llm_usage_record_count(state.get("custom_llm"))
     tool_started_at = perf_counter()
-    result = _run_registry_tool_raw(tool_name, step_input, state)
+    result = _run_registry_tool_raw(tool_name, step_input, state, operation=operation)
     latency_ms = _elapsed_ms(tool_started_at)
     result["latency_ms"] = latency_ms
     usage_delta = summarize_llm_usage_since(state.get("custom_llm"), usage_started_at)
@@ -666,17 +758,20 @@ def run_registry_tool_for_state(
     incoming_flashcards = result.get("flashcards", [])
     sources = _merge_unique_sources(state.get("sources", []), incoming_sources)
     flashcards = [*state.get("flashcards", []), *incoming_flashcards]
+    step_output = {
+        "tool": tool_name,
+        "input": step_input,
+        "answer": answer,
+        "sources": incoming_sources,
+        "flashcards": incoming_flashcards,
+        "success": bool(result.get("tool_success")),
+        "error": result.get("error", ""),
+    }
+    if operation:
+        step_output["operation"] = operation
     step_outputs = [
         *state.get("step_outputs", []),
-        {
-            "tool": tool_name,
-            "input": step_input,
-            "answer": answer,
-            "sources": incoming_sources,
-            "flashcards": incoming_flashcards,
-            "success": bool(result.get("tool_success")),
-            "error": result.get("error", ""),
-        },
+        step_output,
     ]
     trace = [
         *state.get("trace", []),
@@ -692,6 +787,8 @@ def run_registry_tool_for_state(
         "output_length": len(answer),
         "latency_ms": latency_ms,
     }
+    if operation:
+        tool_call["operation"] = operation
     if usage_delta:
         tool_call.update(usage_delta)
     if result.get("error"):
@@ -754,7 +851,7 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
     ]
     if fallback_reason:
         trace.append(f"planner: fallback reason={fallback_reason}")
-    if state.get("use_rag") and planner_mode == "llm" and any(step.get("tool") == "rag" for step in plan):
+    if state.get("use_rag") and planner_mode == "llm" and any(step.get("tool") == "rag_search" for step in plan):
         trace.append("planner: rag enforced by request setting")
 
     planner_call = {
@@ -799,65 +896,59 @@ def planner_node(state: LangGraphAgentState) -> LangGraphAgentState:
     }
 
 
+def _route_to_generation(state: LangGraphAgentState) -> str:
+    if _has_early_study(state) or (_study_operations(state) and not state.get("need_chat")):
+        return "study"
+    if state.get("need_chat"):
+        return "chat"
+    if _study_operations(state):
+        return "study"
+    return "study"
+
+
 def route_after_planner(state: LangGraphAgentState) -> str:
     if state.get("use_rag"):
-        return "rag"
-
-    if state.get("need_summarize"):
-        return "summarize"
-
-    if state.get("need_explain"):
-        return "explain"
-
-    if state.get("need_chat"):
-        return "chat"
-
-    if state.get("need_flashcard"):
-        return "flashcard"
-
-    if state.get("need_quiz"):
-        return "quiz"
-
-    return "explain"
+        return "rag_search"
+    return _route_to_generation(state)
 
 
-def rag_node(state: LangGraphAgentState) -> LangGraphAgentState:
-    query = _first_plan_input(state, "rag")
+def rag_search_node(state: LangGraphAgentState) -> LangGraphAgentState:
+    query = _first_plan_input(state, "rag_search")
     state_with_trace = {
         **state,
-        "trace": _append_trace(state, f"rag: input={query}"),
-        "graph_path": _append_graph_path(state, "rag"),
+        "trace": _append_trace(state, f"rag_search: input={query}"),
+        "graph_path": _append_graph_path(state, "rag_search"),
     }
-    return run_registry_tool_for_state("rag", query, state_with_trace)
+    return run_registry_tool_for_state("rag_search", query, state_with_trace)
 
 
-def route_after_rag(state: LangGraphAgentState) -> str:
-    if state.get("need_summarize"):
-        return "summarize"
-
-    if state.get("need_explain"):
-        return "explain"
-
-    if state.get("need_chat"):
-        return "chat"
-
-    if state.get("need_flashcard"):
-        return "flashcard"
-
-    if state.get("need_quiz"):
-        return "quiz"
-
-    return "explain"
+def route_after_rag_search(state: LangGraphAgentState) -> str:
+    return _route_to_generation(state)
 
 
-def explain_node(state: LangGraphAgentState) -> LangGraphAgentState:
-    topic = _first_plan_input(state, "explain")
-    state_with_trace = {
-        **state,
-        "trace": _append_trace(state, f"explain: input={topic}"),
-        "graph_path": _append_graph_path(state, "explain"),
-    }
-    return run_registry_tool_for_state("explain", topic, state_with_trace)
+def study_node(state: LangGraphAgentState) -> LangGraphAgentState:
+    pending = _pending_study_operations(state)
+    if not pending:
+        pending = ["explain"]
+    if state.get("need_chat") and not _has_early_study(state):
+        pending = [operation for operation in pending if operation in STUDY_LATE_OPERATIONS] or pending
+
+    next_state = state
+    first = True
+    for operation in pending:
+        topic = _first_plan_input(next_state, "study", operation)
+        traced = {
+            **next_state,
+            "trace": _append_trace(
+                next_state,
+                f"study: operation={operation} input={topic}",
+            ),
+        }
+        if first:
+            traced["graph_path"] = _append_graph_path(next_state, "study")
+            first = False
+        next_state = run_registry_tool_for_state("study", topic, traced, operation=operation)
+    return next_state
 
 
 def chat_node(state: LangGraphAgentState) -> LangGraphAgentState:
@@ -870,65 +961,36 @@ def chat_node(state: LangGraphAgentState) -> LangGraphAgentState:
     return run_registry_tool_for_state("chat", topic, state_with_trace)
 
 
-def summarize_node(state: LangGraphAgentState) -> LangGraphAgentState:
-    topic = _first_plan_input(state, "summarize")
-    state_with_trace = {
-        **state,
-        "trace": _append_trace(state, f"summarize: input={topic}"),
-        "graph_path": _append_graph_path(state, "summarize"),
-    }
-    return run_registry_tool_for_state("summarize", topic, state_with_trace)
-
-
-def route_after_main_content(state: LangGraphAgentState) -> str:
-    if state.get("graph_path", [])[-1:] == ["summarize"] and state.get("need_explain"):
-        return "explain"
-
-    if state.get("need_flashcard"):
-        return "flashcard"
-
-    if state.get("need_quiz"):
-        return "quiz"
-
+def route_after_study(state: LangGraphAgentState) -> str:
+    if state.get("need_chat") and not _has_early_study(state):
+        return "chat"
+    if _pending_study_operations(state):
+        return "study"
     return "finalizer"
 
 
-def flashcard_node(state: LangGraphAgentState) -> LangGraphAgentState:
-    topic = _first_plan_input(state, "flashcard")
-    state_with_trace = {
-        **state,
-        "trace": _append_trace(state, f"flashcard: input={topic}"),
-        "graph_path": _append_graph_path(state, "flashcard"),
-    }
-    return run_registry_tool_for_state("flashcard", topic, state_with_trace)
-
-
-def route_after_flashcard(state: LangGraphAgentState) -> str:
-    if state.get("need_quiz"):
-        return "quiz"
-
+def route_after_chat(state: LangGraphAgentState) -> str:
+    if _pending_study_operations(state):
+        return "study"
     return "finalizer"
-
-
-def quiz_node(state: LangGraphAgentState) -> LangGraphAgentState:
-    topic = _first_plan_input(state, "quiz")
-    state_with_trace = {
-        **state,
-        "trace": _append_trace(state, f"quiz: input={topic}"),
-        "graph_path": _append_graph_path(state, "quiz"),
-    }
-    return run_registry_tool_for_state("quiz", topic, state_with_trace)
 
 
 def route_to_finalizer(state: LangGraphAgentState) -> str:
     return "finalizer"
 
 
-def _latest_step_answer(state: LangGraphAgentState, tool_name: str) -> str:
+def _latest_step_answer(state: LangGraphAgentState, tool_name: str, operation: str | None = None) -> str:
+    aliases = {tool_name}
+    if tool_name == "rag_search":
+        aliases.add("rag")
     for output in reversed(state.get("step_outputs", [])):
-        if output.get("tool") == tool_name and output.get("answer"):
+        if operation is not None:
+            if output.get("operation") == operation or output.get("tool") == operation:
+                if output.get("answer"):
+                    return str(output["answer"])
+            continue
+        if output.get("tool") in aliases and output.get("answer"):
             return str(output["answer"])
-
     return ""
 
 
@@ -938,10 +1000,10 @@ def _failed_steps(state: LangGraphAgentState) -> list[dict]:
 
 def compose_final_answer(state: LangGraphAgentState) -> str:
     chat_answer = _latest_step_answer(state, "chat")
-    explain_answer = _latest_step_answer(state, "explain")
-    summarize_answer = _latest_step_answer(state, "summarize")
-    quiz_answer = _latest_step_answer(state, "quiz")
-    rag_answer = _latest_step_answer(state, "rag")
+    explain_answer = _latest_step_answer(state, "study", "explain")
+    summarize_answer = _latest_step_answer(state, "study", "summarize")
+    quiz_answer = _latest_step_answer(state, "study", "quiz")
+    rag_answer = _latest_step_answer(state, "rag_search")
     flashcard_count = len(state.get("flashcards", []))
     failures = _failed_steps(state)
     sections = []
@@ -1030,77 +1092,42 @@ def build_langgraph_workflow():
 
     graph_builder = StateGraph(LangGraphAgentState)
     graph_builder.add_node("planner", planner_node)
-    graph_builder.add_node("rag", rag_node)
+    graph_builder.add_node("rag_search", rag_search_node)
+    graph_builder.add_node("study", study_node)
     graph_builder.add_node("chat", chat_node)
-    graph_builder.add_node("explain", explain_node)
-    graph_builder.add_node("summarize", summarize_node)
-    graph_builder.add_node("flashcard", flashcard_node)
-    graph_builder.add_node("quiz", quiz_node)
     graph_builder.add_node("finalizer", finalizer_node)
     graph_builder.add_edge(START, "planner")
     graph_builder.add_conditional_edges(
         "planner",
         route_after_planner,
         {
-            "rag": "rag",
-            "explain": "explain",
-            "summarize": "summarize",
+            "rag_search": "rag_search",
+            "study": "study",
             "chat": "chat",
-            "flashcard": "flashcard",
-            "quiz": "quiz",
         },
     )
     graph_builder.add_conditional_edges(
-        "rag",
-        route_after_rag,
+        "rag_search",
+        route_after_rag_search,
         {
-            "explain": "explain",
-            "summarize": "summarize",
+            "study": "study",
             "chat": "chat",
-            "flashcard": "flashcard",
-            "quiz": "quiz",
+        },
+    )
+    graph_builder.add_conditional_edges(
+        "study",
+        route_after_study,
+        {
+            "chat": "chat",
+            "study": "study",
+            "finalizer": "finalizer",
         },
     )
     graph_builder.add_conditional_edges(
         "chat",
-        route_after_main_content,
+        route_after_chat,
         {
-            "flashcard": "flashcard",
-            "quiz": "quiz",
-            "finalizer": "finalizer",
-        },
-    )
-    graph_builder.add_conditional_edges(
-        "explain",
-        route_after_main_content,
-        {
-            "flashcard": "flashcard",
-            "quiz": "quiz",
-            "finalizer": "finalizer",
-        },
-    )
-    graph_builder.add_conditional_edges(
-        "summarize",
-        route_after_main_content,
-        {
-            "explain": "explain",
-            "flashcard": "flashcard",
-            "quiz": "quiz",
-            "finalizer": "finalizer",
-        },
-    )
-    graph_builder.add_conditional_edges(
-        "flashcard",
-        route_after_flashcard,
-        {
-            "quiz": "quiz",
-            "finalizer": "finalizer",
-        },
-    )
-    graph_builder.add_conditional_edges(
-        "quiz",
-        route_to_finalizer,
-        {
+            "study": "study",
             "finalizer": "finalizer",
         },
     )

@@ -18,10 +18,10 @@ EVAL_CASES = [
     {
         "id": "LLM-01",
         "message": "什么是 RAG",
-        "expected_tools": ["explain"],
-        "allowed_paths": [["explain"]],
-        "required_tools": ["explain"],
-        "forbidden_tools": ["rag", "flashcard", "quiz"],
+        "expected_tools": ["study:explain"],
+        "allowed_paths": [["study:explain"]],
+        "required_tools": ["study:explain"],
+        "forbidden_tools": ["rag_search", "study:flashcard", "study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
@@ -30,22 +30,22 @@ EVAL_CASES = [
     {
         "id": "LLM-02",
         "message": "请总结 prompt engineering 的核心思想",
-        "expected_tools": ["summarize"],
-        "allowed_paths": [["summarize"]],
-        "required_tools": ["summarize"],
-        "forbidden_tools": ["flashcard", "quiz"],
+        "expected_tools": ["study:summarize"],
+        "allowed_paths": [["study:summarize"]],
+        "required_tools": ["study:summarize"],
+        "forbidden_tools": ["study:flashcard", "study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
-        "notes": "总结意图应优先选择 summarize，不强制 explain。",
+        "notes": "总结意图应优先选择 study summarize，不强制 explain。",
     },
     {
         "id": "LLM-03",
         "message": "根据知识库解释 agentic rag",
-        "expected_tools": ["rag", "explain"],
-        "allowed_paths": [["rag", "explain"]],
-        "required_tools": ["rag", "explain"],
-        "forbidden_tools": ["flashcard", "quiz"],
+        "expected_tools": ["rag_search", "study:explain"],
+        "allowed_paths": [["rag_search", "study:explain"]],
+        "required_tools": ["rag_search", "study:explain"],
+        "forbidden_tools": ["study:flashcard", "study:quiz"],
         "should_use_rag": True,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
@@ -54,9 +54,9 @@ EVAL_CASES = [
     {
         "id": "LLM-04",
         "message": "根据知识库解释 agentic rag，生成记忆卡片，并出 3 道题",
-        "expected_tools": ["rag", "explain", "flashcard", "quiz"],
-        "allowed_paths": [["rag", "explain", "flashcard", "quiz"]],
-        "required_tools": ["rag", "explain", "flashcard", "quiz"],
+        "expected_tools": ["rag_search", "study:explain", "study:flashcard", "study:quiz"],
+        "allowed_paths": [["rag_search", "study:explain", "study:flashcard", "study:quiz"]],
+        "required_tools": ["rag_search", "study:explain", "study:flashcard", "study:quiz"],
         "forbidden_tools": [],
         "should_use_rag": True,
         "should_generate_flashcards": True,
@@ -66,22 +66,22 @@ EVAL_CASES = [
     {
         "id": "LLM-05",
         "message": "帮我生成 RAG 的记忆卡片",
-        "expected_tools": ["explain", "flashcard"],
-        "allowed_paths": [["flashcard"], ["explain", "flashcard"]],
-        "required_tools": ["flashcard"],
-        "forbidden_tools": ["quiz"],
+        "expected_tools": ["study:explain", "study:flashcard"],
+        "allowed_paths": [["study:flashcard"], ["study:explain", "study:flashcard"]],
+        "required_tools": ["study:flashcard"],
+        "forbidden_tools": ["study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": True,
         "should_generate_quiz": False,
-        "notes": "允许只用 flashcard，或先 explain 再 flashcard。",
+        "notes": "允许只用 study flashcard，或先 explain 再 flashcard。",
     },
     {
         "id": "LLM-06",
         "message": "根据刚才内容出 3 道题",
-        "expected_tools": ["quiz"],
-        "allowed_paths": [["quiz"]],
-        "required_tools": ["quiz"],
-        "forbidden_tools": ["flashcard"],
+        "expected_tools": ["study:quiz"],
+        "allowed_paths": [["study:quiz"]],
+        "required_tools": ["study:quiz"],
+        "forbidden_tools": ["study:flashcard"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": True,
@@ -90,46 +90,46 @@ EVAL_CASES = [
     {
         "id": "LLM-07",
         "message": "请解释 RAG，不要出题",
-        "expected_tools": ["explain"],
-        "allowed_paths": [["explain"]],
-        "required_tools": ["explain"],
-        "forbidden_tools": ["quiz"],
+        "expected_tools": ["study:explain"],
+        "allowed_paths": [["study:explain"]],
+        "required_tools": ["study:explain"],
+        "forbidden_tools": ["study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
-        "notes": "必须遵守不要出题，不能调用 quiz。",
+        "notes": "必须遵守不要出题，不能调用 study quiz。",
     },
     {
         "id": "LLM-08",
         "message": "不要生成卡片，只解释 agentic rag",
-        "expected_tools": ["explain"],
-        "allowed_paths": [["explain"]],
-        "required_tools": ["explain"],
-        "forbidden_tools": ["flashcard"],
+        "expected_tools": ["study:explain"],
+        "allowed_paths": [["study:explain"]],
+        "required_tools": ["study:explain"],
+        "forbidden_tools": ["study:flashcard"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
-        "notes": "必须遵守不要生成卡片，不能调用 flashcard。",
+        "notes": "必须遵守不要生成卡片，不能调用 study flashcard。",
     },
     {
         "id": "LLM-09",
         "message": "只根据知识库回答，不要出题",
-        "expected_tools": ["rag", "explain"],
-        "allowed_paths": [["rag"], ["rag", "explain"]],
-        "required_tools": ["rag"],
-        "forbidden_tools": ["quiz"],
+        "expected_tools": ["rag_search", "study:explain"],
+        "allowed_paths": [["rag_search"], ["rag_search", "study:explain"]],
+        "required_tools": ["rag_search"],
+        "forbidden_tools": ["study:quiz"],
         "should_use_rag": True,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
-        "notes": "必须使用知识库，同时不能调用 quiz。",
+        "notes": "必须使用知识库，同时不能调用 study quiz。",
     },
     {
         "id": "LLM-10",
         "message": "请总结这段内容，并生成 3 张复习卡片",
-        "expected_tools": ["summarize", "flashcard"],
-        "allowed_paths": [["summarize", "flashcard"]],
-        "required_tools": ["summarize", "flashcard"],
-        "forbidden_tools": ["quiz"],
+        "expected_tools": ["study:summarize", "study:flashcard"],
+        "allowed_paths": [["study:summarize", "study:flashcard"]],
+        "required_tools": ["study:summarize", "study:flashcard"],
+        "forbidden_tools": ["study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": True,
         "should_generate_quiz": False,
@@ -138,10 +138,10 @@ EVAL_CASES = [
     {
         "id": "LLM-11",
         "message": "根据知识库总结 prompt engineering，并生成选择题",
-        "expected_tools": ["rag", "summarize", "quiz"],
-        "allowed_paths": [["rag", "summarize", "quiz"]],
-        "required_tools": ["rag", "summarize", "quiz"],
-        "forbidden_tools": ["flashcard"],
+        "expected_tools": ["rag_search", "study:summarize", "study:quiz"],
+        "allowed_paths": [["rag_search", "study:summarize", "study:quiz"]],
+        "required_tools": ["rag_search", "study:summarize", "study:quiz"],
+        "forbidden_tools": ["study:flashcard"],
         "should_use_rag": True,
         "should_generate_flashcards": False,
         "should_generate_quiz": True,
@@ -151,21 +151,21 @@ EVAL_CASES = [
         "id": "LLM-12",
         "message": "请直接聊天，不要用知识库",
         "expected_tools": ["chat"],
-        "allowed_paths": [["chat"], ["explain"]],
+        "allowed_paths": [["chat"], ["study:explain"]],
         "required_tools": [],
-        "forbidden_tools": ["rag"],
+        "forbidden_tools": ["rag_search"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
-        "notes": "必须遵守不要用知识库，不能调用 rag。",
+        "notes": "必须遵守不要用知识库，不能调用 rag_search。",
     },
     {
         "id": "LLM-13",
         "message": "根据知识库解释一个不存在的概念",
-        "expected_tools": ["rag", "explain"],
-        "allowed_paths": [["rag"], ["rag", "explain"]],
-        "required_tools": ["rag"],
-        "forbidden_tools": ["flashcard", "quiz"],
+        "expected_tools": ["rag_search", "study:explain"],
+        "allowed_paths": [["rag_search"], ["rag_search", "study:explain"]],
+        "required_tools": ["rag_search"],
+        "forbidden_tools": ["study:flashcard", "study:quiz"],
         "should_use_rag": True,
         "should_generate_flashcards": False,
         "should_generate_quiz": False,
@@ -174,10 +174,10 @@ EVAL_CASES = [
     {
         "id": "LLM-14",
         "message": "把刚才那个概念做成卡片",
-        "expected_tools": ["flashcard"],
-        "allowed_paths": [["flashcard"]],
-        "required_tools": ["flashcard"],
-        "forbidden_tools": ["quiz"],
+        "expected_tools": ["study:flashcard"],
+        "allowed_paths": [["study:flashcard"]],
+        "required_tools": ["study:flashcard"],
+        "forbidden_tools": ["study:quiz"],
         "should_use_rag": False,
         "should_generate_flashcards": True,
         "should_generate_quiz": False,
@@ -186,10 +186,10 @@ EVAL_CASES = [
     {
         "id": "LLM-15",
         "message": "比较传统 RAG 和 Agentic RAG，并出题",
-        "expected_tools": ["explain", "quiz"],
-        "allowed_paths": [["explain", "quiz"], ["rag", "explain", "quiz"]],
-        "required_tools": ["explain", "quiz"],
-        "forbidden_tools": ["flashcard"],
+        "expected_tools": ["study:explain", "study:quiz"],
+        "allowed_paths": [["study:explain", "study:quiz"], ["rag_search", "study:explain", "study:quiz"]],
+        "required_tools": ["study:explain", "study:quiz"],
+        "forbidden_tools": ["study:flashcard"],
         "should_use_rag": False,
         "should_generate_flashcards": False,
         "should_generate_quiz": True,
@@ -303,10 +303,23 @@ def runtime_info(response: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _tool_label(tool: str, operation: str | None = None) -> str:
+    if tool == "rag":
+        return "rag_search"
+    if tool in {"explain", "summarize", "quiz", "flashcard"}:
+        return f"study:{tool}"
+    if tool == "study" and operation:
+        return f"study:{operation}"
+    return tool
+
+
 def plan_tools(response: dict) -> list[str]:
     plan = response.get("plan", [])
     tools = [
-        str(step.get("tool"))
+        _tool_label(
+            str(step.get("tool")),
+            (step.get("arguments") or {}).get("operation") if isinstance(step.get("arguments"), dict) else None,
+        )
         for step in plan
         if isinstance(step, dict) and step.get("tool")
     ] if isinstance(plan, list) else []
@@ -319,7 +332,7 @@ def plan_tools(response: dict) -> list[str]:
         return []
 
     return [
-        str(call.get("tool"))
+        _tool_label(str(call.get("tool")), call.get("operation"))
         for call in tool_calls
         if isinstance(call, dict) and call.get("tool")
     ]
@@ -396,7 +409,7 @@ def evaluate_case(base_url: str, case: dict, top_k: int, timeout: int) -> dict:
         "planner_error": runtime.get("planner_error"),
         "graph_path": runtime.get("graph_path", []),
         "tool_calls": [
-            str(call.get("tool", "unknown"))
+            _tool_label(str(call.get("tool", "unknown")), call.get("operation"))
             for call in tool_calls
             if isinstance(call, dict)
         ],
