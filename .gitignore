@@ -22,3 +22,6 @@ docs/paper_*.pdf
 docs/raw/
 output/
 进阶.py/
+study/
+.commandcode/
+temp_*.py

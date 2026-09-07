@@ -169,9 +169,18 @@ def _fallback_agent_plan(user_input: str, reason: str = "planner json parse fail
     return validated_plan
 
 
-def plan_agent_steps(user_input: str, custom_llm=None, history_context: str | None = None) -> dict:
+def plan_agent_steps(
+    user_input: str,
+    custom_llm=None,
+    history_context: str | None = None,
+    memory_context: str | None = None,
+) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     history_block = history_context or "无"
+    memory_block = ""
+    if memory_context and memory_context.strip():
+        from backend.history_utils import memory_prompt_block
+        memory_block = memory_prompt_block(memory_context)
     planner_prompt = f"""
 你是 AI 学习助手的 Planner。
 请把用户请求拆成 1 到 4 个执行步骤，并只返回 JSON object。
@@ -294,7 +303,7 @@ AgentPlan schema：
 
 最近对话：
 {history_block}
-
+{memory_block}
 当前用户请求：
 {user_input}
 
@@ -443,12 +452,14 @@ def run_agent(
     retrieval_mode: str = "vector",
     reranker_enabled: bool = False,
     history_context: str | None = None,
+    memory_context: str | None = None,
     run_id: str | None = None,
     session_id: str | None = None,
 ) -> dict:
     active_llm = track_llm_usage(custom_llm or llm)
     trace = ["Agent Planner：开始分析用户请求"]
     trace.append(f"Agent Planner 使用 history：{'是' if history_context else '否'}")
+    trace.append(f"Agent Planner 使用 memory：{'是' if memory_context else '否'}")
     trace.append(f"Agent Planner retrieval_mode：{retrieval_mode}")
     trace.append(f"Agent Planner reranker_enabled：{reranker_enabled}")
     planner_usage_started_at = get_llm_usage_record_count(active_llm)
@@ -457,6 +468,7 @@ def run_agent(
         user_input,
         custom_llm=active_llm,
         history_context=history_context,
+        memory_context=memory_context,
     )
     planner_latency_ms = _elapsed_ms(planner_started_at)
 
@@ -531,6 +543,7 @@ def run_agent(
         "session_id": session_id,
         "original_input": user_input,
         "history_context": history_context or "",
+        "memory_context": memory_context or "",
         "retrieval_mode": retrieval_mode,
         "reranker_enabled": reranker_enabled,
         "rag_context": "",

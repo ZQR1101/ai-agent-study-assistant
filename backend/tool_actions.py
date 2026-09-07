@@ -4,17 +4,84 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from backend.config import read_obsidian_vault_path
+
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SAVED_ITEMS_DIR = Path(os.getenv("SAVED_ITEMS_DIR", PROJECT_ROOT / "data" / "saved_items"))
 _store_lock = threading.Lock()
 _COLLECTIONS = {"notes", "flashcards", "quizzes"}
+
+# Obsidian vault integration
+OBSIDIAN_VAULT_PATH = read_obsidian_vault_path()
+VAULT_NOTES_DIR = "AI Study Assistant"
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a string into a safe Obsidian filename."""
+    name = re.sub(r'[<>:"/\\|?*]', "_", name)
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"_+", "_", name)
+    return (name.strip("._") or "untitled")[:80]
+
+
+def _vault_note_path(title: str) -> Path | None:
+    """Generate a unique note path in the vault (always creates new file)."""
+    if OBSIDIAN_VAULT_PATH is None or not OBSIDIAN_VAULT_PATH.is_dir():
+        return None
+
+    vault_root = OBSIDIAN_VAULT_PATH.resolve()
+    notes_dir = vault_root / VAULT_NOTES_DIR
+    safe_title = _sanitize_filename(title)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = notes_dir / f"{safe_title}_{timestamp}.md"
+    suffix = 2
+    while path.exists():
+        path = notes_dir / f"{safe_title}_{timestamp}_{suffix}.md"
+        suffix += 1
+
+    resolved = path.resolve()
+    if not resolved.is_relative_to(vault_root):
+        raise ValueError("Refusing to write outside the Obsidian vault")
+    return path
+
+
+def _yaml_scalar(value: str) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _write_vault_note(
+    title: str,
+    content: str,
+    tags: list[str] | None = None,
+) -> Path | None:
+    """Write a note to the Obsidian vault with YAML frontmatter."""
+    vault_path = _vault_note_path(title)
+    if vault_path is None:
+        return None
+
+    vault_path.parent.mkdir(parents=True, exist_ok=True)
+
+    frontmatter_lines = [
+        "---",
+        f"title: {_yaml_scalar(title)}",
+        f"created: {_yaml_scalar(datetime.now(timezone.utc).isoformat())}",
+        "source: ai-study-assistant",
+    ]
+    if tags:
+        rendered = ", ".join(_yaml_scalar(tag) for tag in tags)
+        frontmatter_lines.append(f"tags: [{rendered}]")
+
+    frontmatter = "\n".join(frontmatter_lines) + "\n---\n"
+    vault_path.write_text(frontmatter + content.strip() + "\n", encoding="utf-8")
+    return vault_path
 
 
 def _collection_path(collection: str) -> Path:
@@ -69,7 +136,16 @@ def save_note(
     body = str(content or step_input).strip()
     if not body:
         raise ValueError("Note content cannot be empty")
-    return _save("notes", {"title": title.strip(), "content": body, "tags": tags or []})
+
+    # Save to JSON store (existing behavior)
+    result = _save("notes", {"title": title.strip(), "content": body, "tags": tags or []})
+
+    # Write to Obsidian vault (if configured)
+    vault_path = _write_vault_note(title or "untitled", body, tags)
+    if vault_path:
+        result["answer"] += f"\nObsidian: {vault_path.relative_to(OBSIDIAN_VAULT_PATH).as_posix()}"
+
+    return result
 
 
 def save_flashcards(

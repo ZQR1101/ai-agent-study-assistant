@@ -107,6 +107,34 @@ QUERY_REWRITE_MODE=off
 
 全量 rewrite benchmark 可在原批量入口追加 `--query-rewrite-mode always`；不传该参数时保持原始 `off` 基线。批量入口会让每个唯一 Query 只调用一次 rewrite API，四种检索模式复用同一改写结果和真实 latency。报告会附带实际 API 调用数、rewrite attempt / success / fallback count、平均 rewrite latency 和 query fusion 次数。
 
+### Reranker Candidate Top-N
+
+`RERANKER_TOP_N` 表示送入 CrossEncoder 打分的候选数，最终返回数量仍由请求的 `top_k` 决定。当前默认值从 20 调整为 15：在现有 40 正样本 + 15 负样本上保持 reranker 的 Top-1、Top-3、MRR、fallback 和 source pollution 结果，同时降低平均和 P95 延迟。Runtime Info 会记录 `reranker_top_n` 与 `reranker_candidate_count`，便于确认实际送入 reranker 的候选规模。
+
+#### Reranker Top-N 测试数据
+
+| 项目 | 测试值 |
+|---|---|
+| 测试样本 | 55 条：40 条正样本 + 15 条负样本 |
+| 样本来源 | `eval_cases/rag_v1_cases.json`、`rag_v2_cases.json`、`rag_v3_cases.json` |
+| 知识库规模 | 359 documents、2,579 indexed chunks |
+| 检索模式 | Hybrid + CrossEncoder Reranker |
+| 最终返回数量 | `top_k=5` |
+| Reranker 模型 | `bge-reranker-base` |
+| 对照参数 | `RERANKER_TOP_N=10 / 15 / 20` |
+| 评价指标 | Top-1、Top-3、MRR、Fallback Success、Source Pollution、平均延迟、P95 延迟 |
+| 索引处理 | 直接复用现有 `rag_index/index.faiss` 和 `chunks.json`，未重新解析 documents、OCR 或构建 Embedding |
+
+三组 Top-N 使用同一份索引、同一套样本和同一个 reranker 模型，保证对照只改变送入 CrossEncoder 的候选数量。
+
+| Reranker Top-N | Top-1 | Top-3 | MRR | Fallback Success | Source Pollution | Avg Latency | P95 Latency |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 82.5% | 90.0% | 0.863 | 80.0% | 20.0% | 1063.1 ms | 1516.9 ms |
+| **15** | **90.0%** | **97.5%** | **0.938** | **80.0%** | **20.0%** | **1274.8 ms** | **2025.6 ms** |
+| 20 | 90.0% | 97.5% | 0.938 | 80.0% | 20.0% | 1711.8 ms | 2995.2 ms |
+
+结论：`top_n=10` 延迟更低但召回明显下降；`top_n=15` 与 20 的结果完全一致，平均延迟降低约 25.5%，P95 降低约 32.3%，因此当前默认使用 15。详细记录见 [Reranker Top-N report](reports/RAG_RERANKER_TOPN_REPORT.md)。
+
 #### Conditional vs Always（当前双查询 RRF）
 
 当前 40 条正样本 + 15 条负样本均为单轮问题，不含 `history_context`，因此 `conditional` 正确跳过全部 55 条 Query。该结果可以验证独立 Query 不会被误改写，但不能证明条件式改写对多轮指代追问的收益。

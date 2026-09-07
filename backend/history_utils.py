@@ -46,41 +46,77 @@ def format_history(history: list[dict]) -> str:
     )
 
 
-def history_prompt(task: str, text: str, history_context: str) -> str:
+def memory_prompt_block(memory_context: str) -> str:
+    """Wrap memory context as a section block for LLM prompt injection."""
+    if not memory_context or not memory_context.strip():
+        return ""
     return f"""
+=== 个人学习画像 ===
+{memory_context.strip()}
+"""
+
+
+def history_prompt(
+    task: str,
+    text: str,
+    history_context: str,
+    memory_context: str | None = None,
+) -> str:
+    sections = []
+
+    if memory_context and memory_context.strip():
+        sections.append(memory_prompt_block(memory_context))
+
+    sections.append(f"""
 请结合最近几轮对话理解指代关系，但必须以当前用户输入为主要任务。
 
 最近对话：
 {history_context}
+""")
 
+    sections.append(f"""
 任务：
 {task}
 
 当前用户输入：
 {text}
-"""
+""")
+
+    return "\n".join(sections)
 
 
-def context_prompt(task: str, text: str, context: str, history_context: str | None = None) -> str:
-    history_block = ""
-    if history_context:
-        history_block = f"""
+def context_prompt(
+    task: str,
+    text: str,
+    context: str,
+    history_context: str | None = None,
+    memory_context: str | None = None,
+) -> str:
+    sections = []
+
+    if memory_context and memory_context.strip():
+        sections.append(memory_prompt_block(memory_context))
+
+    if history_context and history_context.strip():
+        sections.append(f"""
 最近对话（仅用于理解指代关系，不要覆盖当前用户输入）：
 {history_context}
-"""
+""")
 
-    return f"""
+    sections.append(f"""
 请优先根据下面的知识库内容完成任务。
 如果知识库内容不足以回答，再说明不足之处。
 
-{history_block}
-
 知识库内容：
 {context}
+""")
 
+    sections.append(f"""
 任务：
 {task}
 
 用户输入：
 {text}
-"""
+""")
+
+    return "\n".join(sections)
