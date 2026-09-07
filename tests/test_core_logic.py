@@ -1,8 +1,9 @@
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -759,6 +760,41 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(result["context"], rag_context["context"])
         self.assertIn("RAG answer generation：skipped", result["trace"])
 
+    def test_rag_tool_skips_answer_generation_on_miss_when_requested(self):
+        rag_context = {
+            "sources": [],
+            "context": "",
+            "retrieval_mode": "vector",
+            "candidate_k": 3,
+            "vector_candidates": 0,
+            "bm25_candidates": 0,
+            "hybrid_used": False,
+            "expanded_query": "什么是 skill",
+            "max_score": None,
+            "threshold": 0.3,
+            "raw_count": 0,
+            "valid_count": 0,
+            "discarded_invalid_count": 0,
+            "found": False,
+            "error": None,
+        }
+
+        with (
+            patch("backend.tools.get_rag_context", return_value=rag_context),
+            patch("backend.tools.chat") as mock_chat,
+        ):
+            result = tools_module._run_rag_tool(
+                "什么是 skill",
+                custom_llm=object(),
+                generate_answer=False,
+            )
+
+        mock_chat.assert_not_called()
+        self.assertEqual(result["answer"], "")
+        self.assertTrue(result["fallback_used"])
+        self.assertFalse(result["retrieval_info"]["found"])
+        self.assertIn("RAG answer generation：skipped", result["trace"])
+
 
 class ConfigTests(unittest.TestCase):
     def test_unknown_model_falls_back_to_default(self):
@@ -802,6 +838,69 @@ class RagIndexStatusTests(unittest.TestCase):
         self.assertIn("ready", status)
         self.assertIn("message", status)
         self.assertIsNone(rag_store.embedding_model)
+
+
+class RagIndexVersionedTests(unittest.TestCase):
+    """Tests for versioned index layout (rag_index/version-N/ directories)."""
+
+    def test_current_version_returns_none_when_file_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir)
+            with patch.object(rag_store, "CURRENT_FILE", test_dir / "current"):
+                result = rag_store._get_current_version()
+                self.assertIsNone(result)
+
+    def test_set_and_get_current_version_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir)
+            with patch.object(rag_store, "CURRENT_FILE", test_dir / "current"):
+                rag_store._set_current_version(5)
+                self.assertEqual(rag_store._get_current_version(), 5)
+                rag_store._set_current_version(7)
+                self.assertEqual(rag_store._get_current_version(), 7)
+
+    def test_version_dir_path(self):
+        v3 = rag_store._version_dir(3)
+        self.assertEqual(str(v3), str(rag_store.INDEX_DIR / "version-3"))
+
+    def test_atomic_version_switch(self):
+        """Setting current version uses atomic rename (tmp → final)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir)
+            current = test_dir / "current"
+            with (
+                patch.object(rag_store, "INDEX_DIR", test_dir),
+                patch.object(rag_store, "CURRENT_FILE", current),
+            ):
+                rag_store._set_current_version(3)
+            self.assertTrue(current.exists())
+            self.assertEqual(current.read_text(encoding="utf-8").strip(), "3")
+
+    def test_get_rag_index_status_includes_version_field(self):
+        with patch.object(rag_store, "_get_current_version", return_value=3):
+            status = rag_store.get_rag_index_status()
+            self.assertIn("current_version", status)
+            self.assertEqual(status["current_version"], 3)
+
+    def test_rebuild_skips_existing_index_on_empty_chunks(self):
+        """When build_chunks returns no chunks, no version is created."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir)
+            rag_store.index = None
+            rag_store.chunks = []
+            rag_store.rag_index_error = None
+            with (
+                patch.object(rag_store, "INDEX_DIR", test_dir),
+                patch.object(rag_store, "CURRENT_FILE", test_dir / "current"),
+                patch.object(rag_store, "INDEX_FILE", test_dir / "index.faiss"),
+                patch.object(rag_store, "CHUNKS_FILE", test_dir / "chunks.json"),
+                patch.object(rag_store, "_rag_index_lock", threading.Lock()),
+                patch.object(rag_store, "_bm25_lock", threading.Lock()),
+                patch.object(rag_store, "build_chunks", return_value=([], {})),
+            ):
+                rag_store.rebuild_rag_index()
+            # No version directory created when chunks are empty
+            self.assertFalse((test_dir / "current").exists())
 
 
 if __name__ == "__main__":

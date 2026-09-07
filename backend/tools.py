@@ -130,11 +130,13 @@ def _run_chat_tool(
     active_llm = custom_llm or llm
     tool_context, context_sources = build_agent_tool_context(shared_context)
     history_context = (shared_context or {}).get("history_context", "")
+    memory_context = (shared_context or {}).get("memory_context") or None
     answer = chat(
         step_input,
         context=tool_context,
         custom_llm=active_llm,
         history_context=history_context,
+        memory_context=memory_context,
     )
     return _base_tool_result(
         answer=answer,
@@ -153,11 +155,13 @@ def _run_explain_tool(
     active_llm = custom_llm or llm
     tool_context, context_sources = build_agent_tool_context(shared_context)
     history_context = (shared_context or {}).get("history_context", "")
+    memory_context = (shared_context or {}).get("memory_context") or None
     answer = explain(
         step_input,
         context=tool_context,
         custom_llm=active_llm,
         history_context=history_context,
+        memory_context=memory_context,
     )
     return _base_tool_result(
         answer=answer,
@@ -176,11 +180,13 @@ def _run_summarize_tool(
     active_llm = custom_llm or llm
     tool_context, context_sources = build_agent_tool_context(shared_context)
     history_context = (shared_context or {}).get("history_context", "")
+    memory_context = (shared_context or {}).get("memory_context") or None
     answer = summarize(
         step_input,
         context=tool_context,
         custom_llm=active_llm,
         history_context=history_context,
+        memory_context=memory_context,
     )
     return _base_tool_result(
         answer=answer,
@@ -199,11 +205,13 @@ def _run_quiz_tool(
     active_llm = custom_llm or llm
     tool_context, context_sources = build_agent_tool_context(shared_context)
     history_context = (shared_context or {}).get("history_context", "")
+    memory_context = (shared_context or {}).get("memory_context") or None
     answer = generate_questions(
         step_input,
         context=tool_context,
         custom_llm=active_llm,
         history_context=history_context,
+        memory_context=memory_context,
     )
     return _base_tool_result(
         answer=answer,
@@ -348,6 +356,8 @@ def _run_rag_tool(
     rag_kwargs = {}
     if shared_context is not None and "reranker_enabled" in shared_context:
         rag_kwargs["reranker_enabled"] = bool(shared_context["reranker_enabled"])
+    if shared_context is not None and shared_context.get("score_threshold") is not None:
+        rag_kwargs["score_threshold"] = shared_context["score_threshold"]
     rag_context = get_rag_context(
         rag_query,
         top_k=top_k,
@@ -367,6 +377,7 @@ def _run_rag_tool(
         "reranker_used": rag_context.get("reranker_used", False),
         "reranker_model": rag_context.get("reranker_model"),
         "reranker_top_n": rag_context.get("reranker_top_n"),
+        "reranker_candidate_count": rag_context.get("reranker_candidate_count", 0),
         "reranker_error": rag_context.get("reranker_error"),
         "query_rewrite_mode": rag_context.get("query_rewrite_mode", "off"),
         "query_rewrite_attempted": rag_context.get("query_rewrite_attempted", False),
@@ -374,6 +385,9 @@ def _run_rag_tool(
         "query_rewrite_reason": rag_context.get("query_rewrite_reason"),
         "query_rewrite_latency_ms": rag_context.get("query_rewrite_latency_ms", 0),
         "query_fusion_used": rag_context.get("query_fusion_used", False),
+        "max_score": rag_context.get("max_score"),
+        "threshold": rag_context.get("threshold"),
+        "found": bool(rag_context.get("found")),
     }
     trace = [
         f"RAG query：{step_input}",
@@ -428,6 +442,14 @@ def _run_rag_tool(
         )
 
     trace.append("Agent RAG 未命中，未使用知识库来源")
+    if not generate_answer:
+        return _base_tool_result(
+            answer="",
+            trace=[*trace, "RAG answer generation：skipped"],
+            fallback_used=True,
+            retrieval_info=retrieval_info,
+        )
+
     answer = with_fallback_prefix(
         chat(step_input, custom_llm=active_llm, history_context=history_context),
         RAG_FALLBACK_PREFIX,

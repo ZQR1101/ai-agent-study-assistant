@@ -57,6 +57,7 @@ class OCRRagStoreTests(unittest.TestCase):
 
             with (
                 patch.object(rag_store, "DOCS_PATH", docs_path),
+                patch.object(rag_store, "VAULT_PATH", None),
                 patch(
                     "backend.rag_store.extract_text_from_document",
                     return_value=parse_result,

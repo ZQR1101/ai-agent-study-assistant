@@ -6,7 +6,7 @@ import os
 import re
 import threading
 
-from backend.config import get_config, get_embedding_model_settings
+from backend.config import get_config, get_embedding_model_settings, read_obsidian_vault_path
 from backend.ocr_service import extract_text_from_document, safe_document_parse_result
 from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
@@ -79,6 +79,31 @@ DOCS_PATH = PROJECT_ROOT / "docs"
 INDEX_DIR = PROJECT_ROOT / "rag_index"
 INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
+
+# Versioned index layout: rag_index/version-N/{index.faiss,chunks.json}
+CURRENT_FILE = INDEX_DIR / "current"  # pure text: version number string
+VERSION_PREFIX = "version-"
+
+# Obsidian vault integration
+VAULT_PATH = read_obsidian_vault_path()
+VAULT_SOURCES_PREFIX = "obsidian:"
+
+def _version_dir(version: int) -> Path:
+    return INDEX_DIR / f"{VERSION_PREFIX}{version}"
+
+def _get_current_version() -> int | None:
+    if not CURRENT_FILE.exists():
+        return None
+    try:
+        return int(CURRENT_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+def _set_current_version(version: int) -> None:
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CURRENT_FILE.with_suffix(".tmp")
+    tmp.write_text(str(version), encoding="utf-8")
+    tmp.replace(CURRENT_FILE)
 
 SIMILARITY_THRESHOLD = 0.55
 BM25_MIN_SCORE = 1.0
@@ -470,12 +495,73 @@ def _chunk_embedding_text(chunk: dict) -> str:
     ])
 
 
+# ---------------------------------------------------------------------------
+# Obsidian Vault document loading
+# ---------------------------------------------------------------------------
+
+_VAULT_SKIP_DIRS = frozenset({
+    ".obsidian",
+    ".trash",
+    ".git",
+    ".excalidraw",
+    ".templates",
+    ".attachments",
+})
+
+
+def _parse_vault_note(file_path: Path) -> str:
+    """Strip YAML frontmatter from an Obsidian note."""
+    content = file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if content.startswith("---\n"):
+        end = content.find("\n---\n", 4)
+        if end != -1:
+            content = content[end + 5:]
+    return content.strip()
+
+
+def _load_vault_documents() -> list[dict]:
+    """Load markdown notes from the Obsidian vault, skipping system directories."""
+    if VAULT_PATH is None or not VAULT_PATH.is_dir():
+        return []
+
+    documents = []
+    for file_path in sorted(VAULT_PATH.rglob("*.md")):
+        if not file_path.is_file():
+            continue
+        if any(part in _VAULT_SKIP_DIRS for part in file_path.parts):
+            continue
+
+        relative = file_path.relative_to(VAULT_PATH)
+        source = f"{VAULT_SOURCES_PREFIX}{relative.as_posix()}"
+
+        try:
+            text = _parse_vault_note(file_path)
+        except OSError:
+            continue
+
+        if not text:
+            continue
+
+        documents.append({
+            "source": source,
+            "text": text,
+            "parse_method": "vault",
+            "ocr_used": False,
+            "need_ocr": False,
+            "text_char_count": len(text),
+            "warnings": [],
+            "corrupted_pdf": False,
+            "safe_fallback": False,
+        })
+
+    return documents
+
+
 def load_documents():
     documents = []
 
     if not DOCS_PATH.exists():
         DOCS_PATH.mkdir(exist_ok=True)
-        return documents
 
     allowed_suffixes = {".txt", ".md", ".pdf"}
     for file_path in sorted(DOCS_PATH.rglob("*")):
@@ -506,6 +592,10 @@ def load_documents():
                 "corrupted_pdf": parse_result.get("corrupted_pdf", False),
                 "safe_fallback": parse_result.get("safe_fallback", False),
             })
+
+    # Load from Obsidian vault (if configured)
+    vault_docs = _load_vault_documents()
+    documents.extend(vault_docs)
 
     return documents
 
@@ -600,6 +690,10 @@ def build_chunks(documents: list[dict] | None = None):
 
 
 def save_rag_index():
+    """[Deprecated] Writes to legacy flat paths. Use versioned rebuild instead.
+
+    Kept for backward compatibility with any external callers.
+    """
     INDEX_DIR.mkdir(exist_ok=True)
 
     if index is not None:
@@ -621,21 +715,34 @@ def load_rag_index():
         if index is not None:
             return True
 
-        if not INDEX_FILE.exists() or not CHUNKS_FILE.exists():
-            return False
+        current_version = _get_current_version()
+        if current_version is not None:
+            # Versioned structure: rag_index/version-N/
+            vdir = _version_dir(current_version)
+            index_file = vdir / "index.faiss"
+            chunks_file = vdir / "chunks.json"
+            if index_file.exists() and chunks_file.exists():
+                faiss = _get_faiss()
+                loaded_index = faiss.read_index(str(index_file))
+                loaded_chunks = json.loads(chunks_file.read_text(encoding="utf-8"))
+                index = loaded_index
+                chunks = loaded_chunks
+                _reset_bm25_index()
+                print(f"已加载版本 {current_version} RAG 索引，共 {len(chunks)} 个 chunks。")
+                return True
+        else:
+            # Legacy flat structure: rag_index/index.faiss + rag_index/chunks.json
+            if INDEX_FILE.exists() and CHUNKS_FILE.exists():
+                faiss = _get_faiss()
+                loaded_index = faiss.read_index(str(INDEX_FILE))
+                loaded_chunks = json.load(open(CHUNKS_FILE, encoding="utf-8"))
+                index = loaded_index
+                chunks = loaded_chunks
+                _reset_bm25_index()
+                print(f"已加载 RAG 索引（legacy），共 {len(chunks)} 个 chunks。")
+                return True
 
-        faiss = _get_faiss()
-        loaded_index = faiss.read_index(str(INDEX_FILE))
-
-        with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
-            loaded_chunks = json.load(f)
-
-        index = loaded_index
-        chunks = loaded_chunks
-        _reset_bm25_index()
-
-        print(f"已加载 FAISS RAG 索引，共 {len(chunks)} 个 chunks。")
-        return True
+        return False
 
 
 def rebuild_rag_index(documents: list[dict] | None = None):
@@ -645,8 +752,25 @@ def rebuild_rag_index(documents: list[dict] | None = None):
 
     rag_index_error = None
 
-    print("正在构建 FAISS RAG 索引...")
+    # 1. Determine next version number
+    existing_versions = []
+    for d in INDEX_DIR.iterdir() if INDEX_DIR.exists() else []:
+        if d.is_dir() and d.name.startswith(VERSION_PREFIX):
+            try:
+                v = int(d.name[len(VERSION_PREFIX):])
+                existing_versions.append(v)
+            except ValueError:
+                pass
+    next_version = (max(existing_versions) + 1) if existing_versions else 1
 
+    vdir = _version_dir(next_version)
+    vdir.mkdir(parents=True, exist_ok=True)
+    v_index_file = vdir / "index.faiss"
+    v_chunks_file = vdir / "chunks.json"
+
+    print(f"正在构建版本 {next_version} RAG 索引...")
+
+    # 2. Build chunks (unchanged logic)
     global last_build_quality_stats
     chunks, quality_stats = build_chunks(documents=documents)
     last_build_quality_stats = quality_stats
@@ -659,27 +783,33 @@ def rebuild_rag_index(documents: list[dict] | None = None):
         print("知识库为空，未构建索引。")
         return
 
-    chunk_texts = [_chunk_embedding_text(chunk) for chunk in chunks]
-
+    # 3. Generate embeddings and build FAISS index
     faiss = _get_faiss()
     np = _get_numpy()
     model = get_embedding_model()
+    chunk_texts = [_chunk_embedding_text(chunk) for chunk in chunks]
     embeddings = model.encode(chunk_texts)
     embeddings = np.array(embeddings).astype("float32")
-
     faiss.normalize_L2(embeddings)
 
     dimension = embeddings.shape[1]
-
     new_index = faiss.IndexFlatIP(dimension)
     new_index.add(embeddings)
 
+    # 4. Write to version directory (before switching current)
+    faiss.write_index(new_index, str(v_index_file))
+    v_chunks_file.write_text(
+        json.dumps(chunks, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+    # 5. Atomic switch: update in-memory + current pointer
     with _rag_index_lock:
         index = new_index
-        save_rag_index()
+        _set_current_version(next_version)
     _reset_bm25_index()
 
-    print(f"FAISS RAG 索引构建完成，共 {len(chunks)} 个 chunks，并已保存到本地。")
+    print(f"版本 {next_version} RAG 索引构建完成，共 {len(chunks)} 个 chunks。")
 
 
 def ensure_rag_index():
@@ -723,16 +853,39 @@ def get_rag_index_status() -> dict:
     )
     model_path_missing = bool(local_only and is_path_like and not model_path.exists())
 
-    if CHUNKS_FILE.exists():
+    # Check the versioned structure first
+    current_version = _get_current_version()
+    if current_version is not None:
+        vdir = _version_dir(current_version)
+        v_chunks_file = vdir / "chunks.json"
+        if v_chunks_file.exists():
+            try:
+                chunks_count = len(json.loads(v_chunks_file.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError) as error:
+                chunks_error = str(error)
+    elif CHUNKS_FILE.exists():
+        # Legacy flat structure
         try:
             with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
                 chunks_count = len(json.load(f))
         except (OSError, json.JSONDecodeError) as error:
             chunks_error = str(error)
 
+    # Determine index file path and existence
+    if current_version is not None:
+        index_path = _version_dir(current_version) / "index.faiss"
+        chunks_path = _version_dir(current_version) / "chunks.json"
+        index_exists = index_path.exists()
+        chunks_exists = chunks_path.exists()
+    else:
+        index_path = INDEX_FILE
+        chunks_path = CHUNKS_FILE
+        index_exists = INDEX_FILE.exists()
+        chunks_exists = CHUNKS_FILE.exists()
+
     ready = (
-        INDEX_FILE.exists()
-        and CHUNKS_FILE.exists()
+        index_exists
+        and chunks_exists
         and chunks_error is None
         and not model_path_missing
         and rag_index_error is None
@@ -749,10 +902,11 @@ def get_rag_index_status() -> dict:
 
     return {
         "ready": ready,
-        "index_file": str(INDEX_FILE),
-        "chunks_file": str(CHUNKS_FILE),
-        "index_exists": INDEX_FILE.exists(),
-        "chunks_exists": CHUNKS_FILE.exists(),
+        "current_version": current_version,
+        "index_file": str(index_path),
+        "chunks_file": str(chunks_path),
+        "index_exists": index_exists,
+        "chunks_exists": chunks_exists,
         "chunks_count": chunks_count,
         "chunks_error": chunks_error,
         "embedding_model": model_name_or_path,
@@ -1178,6 +1332,7 @@ def _reranker_metadata(enabled: bool, top_n: int) -> dict:
         "reranker_used": False,
         "reranker_model": config.reranker_model or None,
         "reranker_top_n": top_n,
+        "reranker_candidate_count": 0,
         "reranker_error": None,
     }
 
@@ -1429,6 +1584,7 @@ def search_relevant_chunks(
 
     metadata.update(_reranker_metadata(requested_reranker, top_n))
     if requested_reranker:
+        metadata["reranker_candidate_count"] = len(metadata["chunks"])
         reranked = rerank_chunks_with_metadata(
             question,
             metadata["chunks"],

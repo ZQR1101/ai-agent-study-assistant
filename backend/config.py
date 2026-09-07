@@ -91,6 +91,7 @@ class AppConfig:
     ocr_min_text_chars: int
     ocr_render_dpi: int
     ocr_max_pages: int
+    enable_memory: bool
 
     @property
     def has_api_key(self) -> bool:
@@ -176,6 +177,13 @@ def read_tool_secret(name: str, *, allow_insecure_dev_key: bool | None = None) -
     return value
 
 
+def read_obsidian_vault_path() -> Path | None:
+    raw = (os.getenv("OBSIDIAN_VAULT_PATH") or "").strip().strip('"').strip("'")
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
 def get_embedding_model_settings() -> tuple[str, bool]:
     configured_model = os.getenv("EMBEDDING_MODEL_PATH") or os.getenv("EMBEDDING_MODEL")
     if configured_model:
@@ -209,7 +217,7 @@ def get_config() -> AppConfig:
         rag_warmup_load_index=read_bool_env("RAG_WARMUP_LOAD_INDEX", True),
         enable_reranker=read_bool_env("ENABLE_RERANKER", False),
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
-        reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 20),
+        reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 15),
         query_rewrite_mode=read_query_rewrite_mode(),
         cors_allowed_origins=read_cors_allowed_origins(),
         enable_insecure_dev_tool_keys=enable_insecure_dev_tool_keys,
@@ -257,4 +265,5 @@ def get_config() -> AppConfig:
         ocr_min_text_chars=read_positive_int_env("OCR_MIN_TEXT_CHARS", 80),
         ocr_render_dpi=read_positive_int_env("OCR_RENDER_DPI", 200),
         ocr_max_pages=read_positive_int_env("OCR_MAX_PAGES", 20),
+        enable_memory=read_bool_env("ENABLE_MEMORY", False),
     )

@@ -309,9 +309,9 @@ class RerankerTests(unittest.TestCase):
             reranker_enabled=True,
         )
         with (
-            patch("backend.ai_core.get_rag_context", return_value=rag_context),
+            patch("backend.tools.get_rag_context", return_value=rag_context),
             patch("backend.ai_core.build_llm", return_value=object()),
-            patch("backend.ai_core.chat", return_value="answer"),
+            patch("backend.tools.chat", return_value="answer"),
         ):
             response = run_chat_request(request)
 
