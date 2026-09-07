@@ -3,6 +3,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# `learn` is a capability. `chat` is the default capability.
+# `rag` / `explain` / `summarize` / `quiz` are aliases that select a chat operation.
 ChatMode = Literal["chat", "rag", "explain", "summarize", "quiz", "learn", "auto"]
 AgentToolName = Literal[
     "chat",

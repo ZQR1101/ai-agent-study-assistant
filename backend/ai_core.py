@@ -1,119 +1,16 @@
 from backend.agent_core import agent_router, run_agent
-from backend.config import is_image_model
+from backend.capabilities.chat import CHAT_MODES, run_chat
+from backend.capabilities.learn import learning_workflow, run_learn
+from backend.config import get_config, is_image_model
 from backend.history_utils import format_history, normalize_history
 from backend.image_service import generate_image
 from backend.llm_service import (
     attach_usage_to_runtime_info,
     build_llm,
-    chat,
-    explain,
-    generate_questions,
-    llm,
     normalize_model,
-    summarize,
     track_llm_usage,
 )
-from backend.rag_service import (
-    LEARN_FALLBACK_PREFIX,
-    NO_RAG_ANSWER,
-    RAG_FALLBACK_PREFIX,
-    SIMILARITY_THRESHOLD,
-    append_rag_trace,
-    get_rag_context,
-    rag_answer,
-    rag_answer_with_sources,
-    rag_context_for_trace,
-    with_fallback_prefix,
-)
 from backend.schemas import ChatRequest
-
-
-def learning_workflow(
-    topic: str,
-    context=None,
-    custom_llm=None,
-    top_k: int = 3,
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
-    use_rag: bool = True,
-    history_context: str | None = None,
-) -> dict:
-    active_llm = custom_llm or llm
-    sources = []
-    highest_score = None
-    threshold = similarity_threshold
-    passed_threshold = False
-
-    if context:
-        knowledge = explain(
-            topic,
-            context=context,
-            custom_llm=active_llm,
-            history_context=history_context,
-        )
-        passed_threshold = True
-    elif use_rag:
-        rag_context = get_rag_context(
-            topic,
-            top_k=top_k,
-            score_threshold=similarity_threshold,
-            query_rewrite_llm=active_llm,
-            history_context=history_context,
-        )
-        sources = rag_context["sources"]
-        highest_score = rag_context["max_score"]
-        threshold = rag_context["threshold"]
-        passed_threshold = rag_context["found"]
-
-        if rag_context["found"]:
-            knowledge = explain(
-                topic,
-                context=rag_context["context"],
-                custom_llm=active_llm,
-                history_context=history_context,
-            )
-        else:
-            knowledge = explain(topic, custom_llm=active_llm, history_context=history_context)
-    else:
-        knowledge = explain(topic, custom_llm=active_llm, history_context=history_context)
-
-    summary = summarize(knowledge, custom_llm=active_llm, history_context=history_context)
-    quiz = generate_questions(knowledge, custom_llm=active_llm, history_context=history_context)
-
-    advice_prompt = f"""
-请根据下面内容，给出简短的下一步学习建议，不超过 3 条：
-
-最近对话：
-{history_context or "无"}
-
-{summary}
-"""
-    advice = active_llm.invoke(advice_prompt).content
-
-    return {
-        "knowledge": knowledge,
-        "summary": summary,
-        "quiz": quiz,
-        "advice": advice,
-        "sources": sources,
-        "highest_score": highest_score,
-        "threshold": threshold,
-        "passed_threshold": passed_threshold,
-    }
-
-
-def _format_learning_result(result: dict) -> str:
-    parts = [f"知识内容：\n{result.get('knowledge', '')}"]
-
-    if result.get("summary"):
-        parts.append(f"总结：\n{result['summary']}")
-
-    if result.get("quiz"):
-        parts.append(f"练习题：\n{result['quiz']}")
-
-    if result.get("advice"):
-        parts.append(f"学习建议：\n{result['advice']}")
-
-    return "\n\n".join(parts)
 
 
 def _plan_steps_for_response(plan: dict | None) -> list[dict]:
@@ -162,6 +59,7 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
             or item.startswith("top_k：")
             or item.startswith("retrieval_mode：")
             or item.startswith("session_id：")
+            or item.startswith("memory 注入：")
             or item.startswith("使用 history：")
             or item.startswith("history 消息数：")
             or item.startswith("模型 ")
@@ -171,7 +69,7 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
             rag_items.append(item)
         elif item.startswith("最终执行的模式"):
             route_items.append(item)
-        elif item.startswith("Agent "):
+        elif item.startswith("Agent ") or item.startswith("Capability "):
             agent_items.append(item)
         elif item.startswith("是否启用 fallback"):
             result_items.append(item)
@@ -186,6 +84,18 @@ def _group_trace_items(trace: list[str]) -> list[dict]:
     _append_trace_block(blocks, "执行结果", result_items)
     _append_trace_block(blocks, "其他信息", other_items)
     return blocks
+
+
+def _resolve_memory_context() -> str | None:
+    if not get_config().enable_memory:
+        return None
+    try:
+        from backend.memory import get_memory_engine
+
+        context = get_memory_engine().get_context_for_llm()
+    except Exception:
+        return None
+    return context or None
 
 
 def run_langgraph_chat_request(request: ChatRequest) -> dict:
@@ -240,7 +150,6 @@ def run_chat_request(request: ChatRequest) -> dict:
         return run_langgraph_chat_request(request)
 
     use_rag = request.use_rag or request.mode == "rag"
-    agent_handles_rag = request.mode == "auto" and request.use_agent
     history_messages = normalize_history(request.history)
     history_context = format_history(history_messages)
     trace = [
@@ -261,6 +170,9 @@ def run_chat_request(request: ChatRequest) -> dict:
     if selected_model != request.model:
         trace.append(f"模型 {request.model} 不可用，已回退到 {selected_model}")
 
+    memory_context = _resolve_memory_context()
+    trace.append(f"memory 注入：{'是' if memory_context else '否'}")
+
     custom_llm = track_llm_usage(
         build_llm(model=selected_model, temperature=request.temperature),
         selected_model,
@@ -269,193 +181,73 @@ def run_chat_request(request: ChatRequest) -> dict:
     answer = ""
     executed_mode = request.mode
     fallback_used = False
-    rag_context = None
     plan = []
     flashcards = []
     pending_actions = []
     runtime_info = {}
 
-    if use_rag and not agent_handles_rag:
-        rag_context = get_rag_context(
-            request.message,
-            request.top_k,
-            retrieval_mode=request.retrieval_mode,
-            reranker_enabled=request.reranker_enabled,
-            query_rewrite_llm=custom_llm,
-            history_context=history_context,
-        )
-        trace.append(
-            f"RAG query 使用 history："
-            f"{'是' if rag_context.get('query_rewrite_attempted') else '否'}"
-        )
-        append_rag_trace(trace, rag_context_for_trace(rag_context, request.top_k))
-        runtime_info.update({
-            "retrieval_mode": rag_context.get("retrieval_mode", request.retrieval_mode),
-            "candidate_k": rag_context.get("candidate_k"),
-            "vector_candidates": rag_context.get("vector_candidates", 0),
-            "bm25_candidates": rag_context.get("bm25_candidates", 0),
-            "hybrid_used": rag_context.get("hybrid_used", False),
-            "reranker_enabled": rag_context.get("reranker_enabled", False),
-            "reranker_used": rag_context.get("reranker_used", False),
-            "reranker_model": rag_context.get("reranker_model"),
-            "reranker_top_n": rag_context.get("reranker_top_n"),
-            "reranker_error": rag_context.get("reranker_error"),
-            "query_rewrite_mode": rag_context.get("query_rewrite_mode", "off"),
-            "query_rewrite_attempted": rag_context.get("query_rewrite_attempted", False),
-            "query_rewrite_used": rag_context.get("query_rewrite_used", False),
-            "query_rewrite_reason": rag_context.get("query_rewrite_reason"),
-            "query_rewrite_latency_ms": rag_context.get("query_rewrite_latency_ms", 0),
-            "query_fusion_used": rag_context.get("query_fusion_used", False),
-        })
-    elif use_rag and agent_handles_rag:
-        trace.append(f"外层 RAG 检索：跳过，交给 Agent rag tool 执行（retrieval_mode={request.retrieval_mode}）")
-
-    if request.mode == "rag":
-        executed_mode = "rag"
-        trace.append("最终执行的模式：rag")
-
-        if rag_context and rag_context["found"]:
-            answer = chat(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            sources = rag_context["sources"]
-        else:
-            answer = NO_RAG_ANSWER
-
-    elif request.mode == "chat":
-        executed_mode = "chat"
-        trace.append("最终执行的模式：chat")
-
-        if rag_context and rag_context["found"]:
-            answer = chat(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            sources = rag_context["sources"]
-        else:
-            answer = chat(request.message, custom_llm=custom_llm, history_context=history_context)
-            if use_rag and rag_context and not rag_context["found"]:
-                fallback_used = True
-                answer = with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
-
-    elif request.mode == "explain":
-        executed_mode = "explain"
-        trace.append("最终执行的模式：explain")
-
-        if rag_context and rag_context["found"]:
-            answer = explain(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            sources = rag_context["sources"]
-        else:
-            answer = explain(request.message, custom_llm=custom_llm, history_context=history_context)
-            if use_rag and rag_context and not rag_context["found"]:
-                fallback_used = True
-                answer = with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
-
-    elif request.mode == "summarize":
-        executed_mode = "summarize"
-        trace.append("最终执行的模式：summarize")
-
-        if rag_context and rag_context["found"]:
-            answer = summarize(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            sources = rag_context["sources"]
-        else:
-            answer = summarize(request.message, custom_llm=custom_llm, history_context=history_context)
-            if use_rag and rag_context and not rag_context["found"]:
-                fallback_used = True
-                answer = with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
-
-    elif request.mode == "quiz":
-        executed_mode = "quiz"
-        trace.append("最终执行的模式：quiz")
-
-        if rag_context and rag_context["found"]:
-            answer = generate_questions(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            sources = rag_context["sources"]
-        else:
-            answer = generate_questions(
-                request.message,
-                custom_llm=custom_llm,
-                history_context=history_context,
-            )
-            if use_rag and rag_context and not rag_context["found"]:
-                fallback_used = True
-                answer = with_fallback_prefix(answer, RAG_FALLBACK_PREFIX)
-
-    elif request.mode == "learn":
+    if request.mode == "learn":
         executed_mode = "learn"
         trace.append("最终执行的模式：learn")
-
-        if rag_context and rag_context["found"]:
-            result = learning_workflow(
-                request.message,
-                context=rag_context["context"],
-                custom_llm=custom_llm,
-                use_rag=False,
-                history_context=history_context,
+        if use_rag:
+            trace.append(
+                f"外层 RAG 检索：跳过，交给 Learn capability 的 rag_search 执行"
+                f"（retrieval_mode={request.retrieval_mode}）"
             )
-            sources = rag_context["sources"]
-        else:
-            result = learning_workflow(
-                request.message,
-                custom_llm=custom_llm,
-                use_rag=False,
-                history_context=history_context,
-            )
-            if use_rag and rag_context and not rag_context["found"]:
-                fallback_used = True
-                result["knowledge"] = with_fallback_prefix(
-                    result["knowledge"],
-                    LEARN_FALLBACK_PREFIX,
-                )
-
-        answer = _format_learning_result(result)
-
-    elif request.mode == "auto" or request.use_agent:
-        executed_mode = "agent"
-        trace.append("最终执行的模式：agent")
-        agent_result = run_agent(
+        learn_result = run_learn(
             request.message,
             custom_llm=custom_llm,
-            prefer_rag=use_rag,
             top_k=request.top_k,
+            use_rag=use_rag,
+            history_context=history_context,
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
-            history_context=history_context,
             run_id=request.run_id,
+            prefix_on_rag_miss=True,
+            memory_context=memory_context,
             session_id=request.session_id,
         )
-        answer = agent_result["answer"]
-        sources = agent_result.get("sources", [])
-        plan = _plan_steps_for_response(agent_result.get("plan"))
-        flashcards = agent_result.get("flashcards", [])
-        runtime_info = agent_result.get("runtime_info", {})
-        pending_actions = agent_result.get("pending_actions", [])
-        fallback_used = fallback_used or agent_result.get("fallback_used", False)
-        trace.extend(agent_result["trace"])
+        answer = learn_result.answer
+        sources = learn_result.sources
+        plan = learn_result.plan
+        fallback_used = fallback_used or learn_result.fallback_used
+        trace.extend(learn_result.trace)
+        runtime_info["capability"] = "learn"
+        runtime_info.update(learn_result.retrieval_info)
+
+    elif request.mode in CHAT_MODES:
+        executed_mode = request.mode
+        trace.append(f"最终执行的模式：{request.mode}")
+        chat_result = run_chat(
+            request.message,
+            mode=request.mode,
+            use_rag=use_rag,
+            custom_llm=custom_llm,
+            top_k=request.top_k,
+            history_context=history_context,
+            retrieval_mode=request.retrieval_mode,
+            reranker_enabled=request.reranker_enabled,
+            run_id=request.run_id,
+            memory_context=memory_context,
+        )
+        answer = chat_result.answer
+        sources = chat_result.sources
+        plan = chat_result.plan
+        flashcards = chat_result.flashcards
+        fallback_used = fallback_used or chat_result.fallback_used
+        trace.extend(chat_result.trace)
+        runtime_info["capability"] = "chat"
+        runtime_info["operation"] = chat_result.operation
+        runtime_info.update(chat_result.retrieval_info)
 
     else:
         executed_mode = "agent"
         trace.append("最终执行的模式：agent")
+        if use_rag:
+            trace.append(
+                f"外层 RAG 检索：跳过，交给 Agent rag tool 执行"
+                f"（retrieval_mode={request.retrieval_mode}）"
+            )
         agent_result = run_agent(
             request.message,
             custom_llm=custom_llm,
@@ -464,6 +256,7 @@ def run_chat_request(request: ChatRequest) -> dict:
             retrieval_mode=request.retrieval_mode,
             reranker_enabled=request.reranker_enabled,
             history_context=history_context,
+            memory_context=memory_context,
             run_id=request.run_id,
             session_id=request.session_id,
         )
