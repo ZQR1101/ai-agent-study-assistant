@@ -12,6 +12,9 @@ AI Study Assistant 是一个面向学习场景的 AI 应用，而不是普通的
 - **Retrieval Quality Controls**：修复 Negative-case Source Pollution，并过滤 PDF/OCR 产生的 Low-quality Chunks；Query Rewrite 已实测为当前负收益，默认关闭。
 - **Tool Registry Safety**：Tools 按 `read / write / dangerous` 分级；Agent 对危险操作只创建持久化 Pending Action，必须由用户在对话中显式批准。
 - **Run Observability**：统一查看 `Plan / Trace / Tool Calls / Sources / Latency / Token / Cost / Judge`。
+- **Capability Modules**：将 Chat 与学习任务拆分为独立的 `capabilities/chat.py`、`capabilities/learn.py`，由 Agent、LangGraph 和普通对话复用，降低核心逻辑耦合。
+- **Three-layer Learning Memory**：可选的 L1 事件、L2 事实、L3 学习者画像记忆；记忆上下文可注入 Chat、Learn 和 Agent Prompt，并支持将学习笔记保存到 Obsidian。
+- **Versioned RAG Index**：索引按配置指纹和版本管理，记录 Embedding、Chunking、Reranker 等构建参数，避免模型或配置变化后误复用旧索引。
 
 ## 功能截图
 
@@ -36,12 +39,39 @@ AI Study Assistant 是一个面向学习场景的 AI 应用，而不是普通的
 ```text
 React / Vite Frontend
   → POST /chat (FastAPI)
+  → Capability Layer (Chat / Learn)
   → Local RAG / Agent Tool Registry / optional LangGraph Runtime
+  → Memory Engine (optional L1 / L2 / L3)
   → RunRepository
   → Trace / Sources / Tool Calls / Judge
 ```
 
-一次请求生成 `run_id`，RAG Sources、Plan 和 Tool Calls 随 Run 聚合保存；前端使用同一份 Run 数据展示结果与诊断信息。
+一次请求生成 `run_id`，RAG Sources、Plan、Tool Calls 和 Memory References 随 Run 聚合保存；前端使用同一份 Run 数据展示结果与诊断信息。能力层负责具体的对话和学习输出，Runtime 负责编排，Memory Engine 负责跨会话学习状态。
+
+## 学习记忆与笔记
+
+记忆功能默认关闭，通过 `ENABLE_MEMORY=true` 开启，数据保存在 `data/memory/`：
+
+- **L1 Event Memory**：追加记录学习事件，例如提问、完成课程、答题结果和 Agent Run。
+- **L2 Fact Memory**：从事件中提炼可编辑、带置信度和来源引用的知识事实。
+- **L3 Profile Memory**：聚合学习偏好、掌握程度和薄弱主题，作为后续 Prompt 的个性化上下文。
+
+学习任务完成后可以自动记录和提炼记忆；`save_note` 工具还可以把 Markdown 笔记写入 `OBSIDIAN_VAULT_PATH/AI Study Assistant/`。Obsidian 目录只做原地写入或可选索引，不会默认复制进项目知识库。
+
+## 配置与索引复现
+
+首次运行前复制 `.env.example` 为 `.env`。RAG 默认使用本地 Embedding 模型，索引构建会保存版本和配置指纹；更换 Embedding 模型、Chunk 策略或 Reranker 参数后应重新构建索引。常用开关包括：
+
+```env
+ENABLE_MEMORY=false
+ENABLE_OCR=false
+ENABLE_RERANKER=false
+RERANKER_TOP_N=15
+QUERY_REWRITE_MODE=off
+# OBSIDIAN_VAULT_PATH=C:\\Users\\you\\Documents\\Obsidian Vault
+```
+
+版本化索引和评测脚本会记录实际的候选数、Reranker Top-N、Query Rewrite 状态及延迟，便于在相同 Corpus 和参数下复现实验。
 
 ## RAG Benchmark / Evaluation
 
