@@ -71,8 +71,9 @@ class RunRepository:
     }
 
     def __init__(self, root: str | Path | None = None):
-        project_root = Path(__file__).parent.parent
-        self.root = Path(root or os.getenv("RUNS_DIR", project_root / "data" / "runs"))
+        from backend.config import PROJECT_ROOT
+
+        self.root = Path(root or os.getenv("RUNS_DIR", PROJECT_ROOT / "data" / "runs"))
         self._lock = threading.RLock()
 
     def create_run(

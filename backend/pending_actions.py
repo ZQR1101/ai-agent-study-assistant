@@ -171,8 +171,9 @@ class PendingActionRepository:
     }
 
     def __init__(self, root: str | Path | None = None, *, ttl_seconds: int | None = None):
-        project_root = Path(__file__).parent.parent
-        self.root = Path(root or os.getenv("PENDING_ACTIONS_DIR", project_root / "data" / "pending_actions"))
+        from backend.config import PROJECT_ROOT
+
+        self.root = Path(root or os.getenv("PENDING_ACTIONS_DIR", PROJECT_ROOT / "data" / "pending_actions"))
         self.ttl_seconds = int(ttl_seconds or os.getenv("PENDING_ACTION_TTL_SECONDS", "300"))
         self._lock = threading.RLock()
 

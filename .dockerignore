@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.pytest_tmp
+
+# Node
+node_modules
+frontend/dist
+backend/static
+
+# Local data and state (mounted as volumes instead)
+data
+rag_index
+logs
+outputs
+output
+models
+docs
+uploads
+
+# Local environment and secrets
+.env
+
+# Project extras not needed inside the image
+tests
+scripts
+reports
+eval_cases
+eval_data
+learning_notes
+study
+images
+tmp*
+*.log

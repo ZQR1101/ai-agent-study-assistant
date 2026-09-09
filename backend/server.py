@@ -17,6 +17,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import get_config
@@ -60,8 +61,7 @@ from backend.tools import TOOL_REGISTRY
 logger = logging.getLogger(__name__)
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DOCS_PATH = PROJECT_ROOT / "docs"
+DOCS_PATH = get_config().docs_path
 SUPPORTED_DOC_EXTENSIONS = {".md", ".txt", ".pdf"}
 IMAGE_PROXY_MAX_REDIRECTS = 3
 IMAGE_PROXY_MAX_RESOLVED_ADDRESSES = 8
@@ -398,9 +398,21 @@ def _safe_doc_path(filename: str) -> Path:
     return file_path
 
 
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
 @app.get("/", tags=["System"])
 def home():
-    return {"message": "AI 学习助手后端启动成功"}
+    index_file = _STATIC_DIR / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    return {
+        "message": "AI 学习助手后端启动成功",
+        "hint": (
+            "Frontend static files are not bundled here. Run `npm run build` to emit "
+            "backend/static, or start the Vite dev server with `npm run dev`."
+        ),
+    }
 
 
 @app.get("/health", tags=["System"])
@@ -1677,3 +1689,10 @@ def get_session_messages_api(session_id: str, limit: int = Query(50, ge=1, le=50
     except Exception as exc:
         logger.warning("Failed to get session messages: %s", exc)
         raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
+
+
+# --- Frontend static serving (pip install / Docker single-container deployments) ---
+# Mounted last, so every registered API route takes precedence. The root route
+# above serves index.html when static files are bundled.
+if _STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="frontend")

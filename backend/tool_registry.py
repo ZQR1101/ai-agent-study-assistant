@@ -118,7 +118,9 @@ class AuditLog:
     """Append-only JSONL audit log."""
 
     def __init__(self, path: Path | None = None):
-        default_path = Path(__file__).parent.parent / "logs" / "tool_audit.jsonl"
+        from backend.config import PROJECT_ROOT
+
+        default_path = PROJECT_ROOT / "logs" / "tool_audit.jsonl"
         self.path = Path(path or os.getenv("TOOL_AUDIT_LOG_PATH", default_path))
         self._lock = threading.Lock()
 

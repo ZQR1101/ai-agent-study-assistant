@@ -6,7 +6,13 @@ import os
 import re
 import threading
 
-from backend.config import get_config, get_embedding_model_settings, read_obsidian_vault_path
+from backend.config import (
+    get_config,
+    get_embedding_model_settings,
+    read_docs_path,
+    read_obsidian_vault_path,
+    read_rag_index_dir,
+)
 from backend.ocr_service import extract_text_from_document, safe_document_parse_result
 from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
@@ -74,9 +80,8 @@ _bm25_index = None
 _bm25_lock = threading.Lock()
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DOCS_PATH = PROJECT_ROOT / "docs"
-INDEX_DIR = PROJECT_ROOT / "rag_index"
+DOCS_PATH = read_docs_path()
+INDEX_DIR = read_rag_index_dir()
 INDEX_FILE = INDEX_DIR / "index.faiss"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 

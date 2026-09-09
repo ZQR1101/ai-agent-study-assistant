@@ -11,10 +11,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from backend.config import read_obsidian_vault_path
+from backend.config import PROJECT_ROOT, get_config, read_obsidian_vault_path
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
 SAVED_ITEMS_DIR = Path(os.getenv("SAVED_ITEMS_DIR", PROJECT_ROOT / "data" / "saved_items"))
 _store_lock = threading.Lock()
 _COLLECTIONS = {"notes", "flashcards", "quizzes"}
@@ -215,7 +214,7 @@ def reset_saved_items(*, collection: str | None = None, **_: Any) -> dict:
 
 
 def delete_knowledge_file(*, filename: str, **_: Any) -> dict:
-    docs_path = (PROJECT_ROOT / "docs").resolve()
+    docs_path = get_config().docs_path.resolve()
     target = (docs_path / Path(filename).name).resolve()
     if target.parent != docs_path or target.suffix.lower() not in {".md", ".txt", ".pdf"}:
         raise ValueError("Unsupported knowledge file path")

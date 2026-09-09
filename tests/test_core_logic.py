@@ -301,6 +301,9 @@ class RagStoreTests(unittest.TestCase):
                 ),
                 patch.object(rag_store, "INDEX_FILE", Path(tmpdir) / "index.faiss"),
                 patch.object(rag_store, "CHUNKS_FILE", Path(tmpdir) / "chunks.json"),
+                # Keep the versioned-index layout (rag_index/current) away from
+                # the real workspace index as well.
+                patch.object(rag_store, "CURRENT_FILE", Path(tmpdir) / "current"),
                 patch.object(rag_store, "rebuild_rag_index") as mock_rebuild,
                 patch.object(rag_store, "get_embedding_model") as mock_model,
             ):

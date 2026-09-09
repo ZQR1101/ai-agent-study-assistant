@@ -5,7 +5,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
+def resolve_project_root() -> Path:
+    """Resolve the root that holds docs/, data/, rag_index/ and .env.
+
+    Priority:
+    1. ``AI_STUDY_ASSISTANT_HOME`` environment variable (Docker / custom setups).
+    2. Source checkout or sdist: the directory that contains ``pyproject.toml``
+       next to the ``backend`` package.
+    3. Current working directory (pip-installed usage).
+    """
+    env_home = os.getenv("AI_STUDY_ASSISTANT_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve()
+
+    repo_root = Path(__file__).parent.parent
+    if (repo_root / "pyproject.toml").exists():
+        return repo_root
+
+    return Path.cwd()
+
+
+PROJECT_ROOT = resolve_project_root()
 ENV_FILE = PROJECT_ROOT / ".env"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-pro"
@@ -192,7 +212,23 @@ def get_embedding_model_settings() -> tuple[str, bool]:
     if DEFAULT_EMBEDDING_MODEL_PATH.exists():
         return str(DEFAULT_EMBEDDING_MODEL_PATH), True
 
-    return DEFAULT_EMBEDDING_MODEL, read_bool_env("EMBEDDING_MODEL_LOCAL_ONLY", True)
+    # No bundled local model (pip install / fresh clone): fall back to the public
+    # Hugging Face model id and let it download on first use.
+    return DEFAULT_EMBEDDING_MODEL, read_bool_env("EMBEDDING_MODEL_LOCAL_ONLY", False)
+
+
+def read_docs_path() -> Path:
+    raw = os.getenv("DOCS_DIR")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return PROJECT_ROOT / "docs"
+
+
+def read_rag_index_dir() -> Path:
+    raw = os.getenv("RAG_INDEX_DIR")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return PROJECT_ROOT / "rag_index"
 
 
 def get_config() -> AppConfig:
@@ -204,8 +240,8 @@ def get_config() -> AppConfig:
     )
     return AppConfig(
         project_root=PROJECT_ROOT,
-        docs_path=PROJECT_ROOT / "docs",
-        rag_index_dir=PROJECT_ROOT / "rag_index",
+        docs_path=read_docs_path(),
+        rag_index_dir=read_rag_index_dir(),
         model=normalize_model(os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL)),
         base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL),
         api_key=api_key,

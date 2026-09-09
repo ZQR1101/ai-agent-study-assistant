@@ -25,7 +25,6 @@ class L3Store:
     def __init__(self, root: str | Path | None = None):
         from backend.config import get_config
 
-        project_root = Path(__file__).parent.parent.parent
         config = get_config()
         self.root = Path(root or config.project_root / "data" / "memory" / "l3_profile")
         self.profile_path = self.root / "profile.json"

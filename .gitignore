@@ -8,7 +8,10 @@ rag_index/
 outputs/
 *.log
 frontend/dist/
+backend/static/
+backend/env.example
 dist/
+*.egg-info/
 .vite/
 node_modules/
 DESIGN.md
@@ -25,3 +28,5 @@ output/
 study/
 .commandcode/
 temp_*.py
+# local competition / requirement notes (do not publish)
+更换需求/

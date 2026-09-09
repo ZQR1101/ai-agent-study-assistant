@@ -1,0 +1,15 @@
+# Files that must be part of the sdist in addition to the discovered packages.
+include README.md
+include LICENSE
+include requirements.txt
+include .env.example
+include package.json
+include package-lock.json
+include vite.config.js
+include backend/env.example
+recursive-include frontend *.html *.jsx *.js *.css
+recursive-include backend *.py
+recursive-include backend/static *
+recursive-include scripts *.py
+recursive-include tests *.py
+global-exclude __pycache__ *.pyc

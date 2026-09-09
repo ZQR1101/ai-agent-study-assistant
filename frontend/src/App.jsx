@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-const API_BASE_URL = "http://127.0.0.1:8000"
+// Dev mode (vite server on :5500) talks to the backend on :8000.
+// Production builds are served by the backend itself, so same-origin relative URLs work.
+const API_BASE_URL = import.meta.env.DEV ? "http://127.0.0.1:8000" : ""
 const HISTORY_LIMIT = 6
 const CONVERSATIONS_KEY = "aiStudyAssistant.conversations.v1"
 const CARD_LIBRARY_KEY = "aiStudyAssistant.cardLibrary.v1"

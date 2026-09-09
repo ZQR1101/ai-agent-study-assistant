@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-study-assistant"
+dynamic = ["version"]
+description = "Study-focused AI assistant: local RAG, agent tool registry, optional LangGraph runtime and three-layer learning memory, shipped as a local web app + CLI."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["rag", "agent", "langgraph", "fastapi", "faiss", "study", "learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-dotenv",
+    "langchain",
+    "langchain-openai",
+    "sentence-transformers",
+    "scikit-learn",
+    "pypdf",
+    "python-multipart",
+    "faiss-cpu",
+    "langgraph",
+    "SQLAlchemy",
+    "psycopg[binary]",
+]
+
+[project.optional-dependencies]
+# Optional scanned-PDF OCR support (pip install ai-study-assistant[ocr])
+ocr = ["rapidocr-onnxruntime", "PyMuPDF"]
+dev = ["pytest"]
+
+[project.scripts]
+ai-study-assistant = "backend.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ZQR1101/ai-agent-study-assistant"
+
+[tool.setuptools.dynamic]
+version = { attr = "backend.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.setuptools.package-data]
+backend = [
+    "static/*",
+    "static/**/*",
+    "env.example",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

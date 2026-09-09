@@ -1,0 +1,24 @@
+services:
+  ai-study-assistant:
+    build: .
+    image: ai-study-assistant:latest
+    container_name: ai-study-assistant
+    ports:
+      - "8000:8000"
+    # Load DEEPSEEK_API_KEY etc. from the repo .env when present.
+    # (Requires Docker Compose v2.24+; on older versions delete this block
+    #  and pass variables with `docker compose run -e` instead.)
+    env_file:
+      - path: ./.env
+        required: false
+    volumes:
+      - ./docs:/app/docs
+      - ./data:/app/data
+      - ./rag_index:/app/rag_index
+      - ./logs:/app/logs
+      # Cache the embedding model so container restarts do not re-download it.
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
