@@ -7,13 +7,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.evaluate_rag_retrieval import (
+    build_case_type_summary,
     build_hybrid_reranker_diagnostics,
     build_mode_summary,
     compute_ranking_metrics,
     evaluate_cases,
+    format_history_context,
     load_cases,
     parse_args,
     render_markdown,
+    run_retrieval,
     score_retrieval,
     write_json_report,
     write_markdown_report,
@@ -338,6 +341,286 @@ class RagRetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(summary["source_pollution_rate"], 0.5)
         self.assertEqual(summary["average_latency_ms"], 20.0)
         self.assertEqual(summary["p95_latency_ms"], 30.0)
+
+    def test_case_type_summary_layers_positive_and_negative_metrics(self):
+        cases = [
+            {
+                "id": "fact_1",
+                "case_type": "fact_lookup",
+                "expected_sources": ["a.md"],
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 2,
+                        "source_hit_count": 1,
+                        "retrieval_score": 3,
+                        "ranking_metrics": {
+                            "top1_source_hit": 1,
+                            "top3_source_hit": 1,
+                            "top_k_source_hit": 1,
+                            "mrr": 1.0,
+                        },
+                        "fallback_success": False,
+                        "source_pollution": False,
+                        "latency_ms": 10.0,
+                    }
+                },
+            },
+            {
+                "id": "neg_1",
+                "case_type": "fact_lookup",
+                "is_negative": True,
+                "expected_sources": [],
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {},
+                        "fallback_success": True,
+                        "source_pollution": False,
+                        "latency_ms": 20.0,
+                    }
+                },
+            },
+            {
+                "id": "rewrite_1",
+                "case_type": "semantic_rewrite",
+                "expected_sources": ["b.md"],
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 1,
+                        "retrieval_score": 1,
+                        "ranking_metrics": {
+                            "top1_source_hit": 0,
+                            "top3_source_hit": 1,
+                            "top_k_source_hit": 1,
+                            "mrr": 0.5,
+                        },
+                        "fallback_success": False,
+                        "source_pollution": False,
+                        "latency_ms": 30.0,
+                    }
+                },
+            },
+        ]
+
+        summary = build_case_type_summary(cases, ["hybrid"])
+
+        self.assertEqual(sorted(summary), ["fact_lookup", "semantic_rewrite"])
+        fact = summary["fact_lookup"]["hybrid"]
+        self.assertEqual(fact["case_count"], 2)
+        self.assertEqual(fact["positive_case_count"], 1)
+        self.assertEqual(fact["negative_case_count"], 1)
+        self.assertEqual(fact["top1_source_hit_rate"], 1.0)
+        self.assertEqual(fact["fallback_success_rate"], 1.0)
+        self.assertEqual(fact["source_pollution_rate"], 0.0)
+        self.assertEqual(fact["average_latency_ms"], 15.0)
+        rewrite = summary["semantic_rewrite"]["hybrid"]
+        self.assertEqual(rewrite["top3_source_hit_rate"], 1.0)
+        self.assertIsNone(rewrite["fallback_success_rate"])
+
+    def test_case_type_summary_tracks_answer_citation_hits(self):
+        cases = [
+            {
+                "id": "fact_1",
+                "case_type": "fact_lookup",
+                "expected_sources": ["docs/a.md"],
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 1,
+                        "source_hit_count": 1,
+                        "retrieval_score": 1,
+                        "ranking_metrics": {
+                            "top1_source_hit": 1,
+                            "top3_source_hit": 1,
+                            "top_k_source_hit": 1,
+                            "mrr": 1.0,
+                        },
+                        "fallback_success": False,
+                        "source_pollution": False,
+                        "latency_ms": 5.0,
+                        "answer": {"success": True, "sources": [{"source": "docs/a.md"}]},
+                    }
+                },
+            },
+            {
+                "id": "fact_2",
+                "case_type": "fact_lookup",
+                "expected_sources": ["a.md"],
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 1,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {
+                            "top1_source_hit": 0,
+                            "top3_source_hit": 0,
+                            "top_k_source_hit": 0,
+                            "mrr": 0.0,
+                        },
+                        "fallback_success": False,
+                        "source_pollution": False,
+                        "latency_ms": 5.0,
+                        "answer": {"success": True, "sources": [{"source": "other.md"}]},
+                    }
+                },
+            },
+        ]
+
+        summary = build_case_type_summary(cases, ["hybrid"])
+
+        self.assertEqual(
+            summary["fact_lookup"]["hybrid"]["answer_citation_hit_rate"],
+            0.5,
+        )
+
+    def test_case_type_summary_omits_citation_rate_without_answers(self):
+        cases = [
+            {
+                "id": "fact_1",
+                "case_type": "fact_lookup",
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 0,
+                        "source_hit_count": 0,
+                        "retrieval_score": 0,
+                        "ranking_metrics": {},
+                        "latency_ms": 1.0,
+                    }
+                },
+            }
+        ]
+
+        summary = build_case_type_summary(cases, ["hybrid"])
+
+        self.assertNotIn("answer_citation_hit_rate", summary["fact_lookup"]["hybrid"])
+
+    def test_markdown_includes_case_type_breakdown(self):
+        cases = [
+            {
+                "id": "fact_1",
+                "question": "What is Alpha?",
+                "expected_keywords": ["Alpha"],
+                "expected_sources": ["a.md"],
+                "case_type": "fact_lookup",
+                "results": {
+                    "hybrid": {
+                        "success": True,
+                        "keyword_hit_count": 1,
+                        "source_hit_count": 1,
+                        "retrieval_score": 1,
+                        "ranking_metrics": {
+                            "top1_source_hit": 1,
+                            "top3_source_hit": 1,
+                            "top_k_source_hit": 1,
+                            "mrr": 1.0,
+                        },
+                        "fallback_success": False,
+                        "source_pollution": False,
+                        "latency_ms": 5.0,
+                    }
+                },
+            }
+        ]
+        report = evaluate_cases(cases, ["hybrid"], 3, search_fn=lambda _q, **_k: {"chunks": sample_chunks(), "error": None})
+        markdown = render_markdown(report)
+
+        self.assertIn("## Case Type Breakdown", markdown)
+        self.assertIn("| fact_lookup | hybrid | 1 |", markdown)
+
+    def test_load_cases_parses_and_validates_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases_path = Path(tmpdir) / "cases.json"
+            cases_path.write_text(
+                json.dumps([
+                    {
+                        "id": "mt_1",
+                        "question": "那它怎么部署？",
+                        "expected_keywords": [],
+                        "expected_sources": ["mcp.md"],
+                        "history": [
+                            {"role": "user", "content": "MCP 的架构是什么？"},
+                            {"role": "assistant", "content": "MCP 分为数据层和传输层。"},
+                        ],
+                    }
+                ]),
+                encoding="utf-8",
+            )
+            cases = load_cases(cases_path)
+
+        self.assertEqual(len(cases[0]["history"]), 2)
+        self.assertEqual(cases[0]["history"][0]["role"], "user")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases_path = Path(tmpdir) / "cases.json"
+            cases_path.write_text(
+                json.dumps([
+                    {
+                        "id": "mt_bad",
+                        "question": "那它怎么部署？",
+                        "history": [{"role": "system", "content": "bad"}],
+                    }
+                ]),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                load_cases(cases_path)
+
+    def test_format_history_context_renders_turns(self):
+        history = [
+            {"role": "user", "content": "MCP 的架构是什么？"},
+            {"role": "assistant", "content": "MCP 分为数据层和传输层。"},
+        ]
+
+        self.assertEqual(
+            format_history_context(history),
+            "用户：MCP 的架构是什么？\n助手：MCP 分为数据层和传输层。",
+        )
+        self.assertEqual(format_history_context(None), "")
+        self.assertEqual(format_history_context([]), "")
+
+    def test_run_retrieval_passes_history_context_to_search_fn(self):
+        captured = {}
+
+        def search_fn(question, **kwargs):
+            captured["question"] = question
+            captured["history_context"] = kwargs.get("history_context")
+            return {"chunks": sample_chunks(), "error": None}
+
+        case = {
+            **sample_case(),
+            "history": [{"role": "user", "content": "What is Alpha?"}],
+        }
+        result = run_retrieval(case, "hybrid", 3, search_fn=search_fn)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["question"], "What is Alpha?")
+        self.assertEqual(captured["history_context"], "用户：What is Alpha?")
+
+    def test_run_retrieval_plain_search_drops_history_context(self):
+        captured = {}
+
+        def fake_search(question, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"chunks": sample_chunks(), "error": None}
+
+        case = {
+            **sample_case(),
+            "history": [{"role": "user", "content": "What is Alpha?"}],
+        }
+        with patch("backend.rag_store.search_relevant_chunks", side_effect=fake_search):
+            with patch("scripts.evaluate_rag_retrieval.configure_offline_embedding"):
+                result = run_retrieval(case, "vector", 3, search_fn=None)
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("history_context", captured["kwargs"])
 
     def test_query_rewrite_metrics_are_aggregated_and_rendered(self):
         cases = []

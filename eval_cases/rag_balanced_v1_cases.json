@@ -1,0 +1,2377 @@
+[
+  {
+    "id": "bal_fact_agent_loop_min_elements",
+    "question": "Agent 的最小闭环有哪四个要素？",
+    "expected_keywords": [
+      "目标",
+      "工具",
+      "观察",
+      "验证"
+    ],
+    "expected_sources": [
+      "agent_hot_01_agent_loop_and_aci.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "agent_hot_01 最小闭环四要素。"
+  },
+  {
+    "id": "bal_fact_agent_loop_sources",
+    "question": "agent_hot_01 引用了哪些来源材料？",
+    "expected_keywords": [
+      "Anthropic",
+      "Building Effective AI Agents",
+      "OpenAI"
+    ],
+    "expected_sources": [
+      "agent_hot_01_agent_loop_and_aci.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "文件/来源定位题。"
+  },
+  {
+    "id": "bal_fact_mcp_data_layer_protocol",
+    "question": "MCP 分为哪两层？数据层基于什么协议？",
+    "expected_keywords": [
+      "数据层",
+      "传输层",
+      "JSON-RPC 2.0"
+    ],
+    "expected_sources": [
+      "agent_hot_02_mcp_architecture_primitives.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "MCP 分层与协议。"
+  },
+  {
+    "id": "bal_fact_mcp_server_primitives",
+    "question": "MCP 的三类服务端原语分别是什么？",
+    "expected_keywords": [
+      "Tools",
+      "Resources",
+      "Prompts"
+    ],
+    "expected_sources": [
+      "agent_hot_02_mcp_architecture_primitives.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "MCP 三类原语。"
+  },
+  {
+    "id": "bal_fact_mcp_client_capabilities",
+    "question": "MCP 客户端提供的 sampling 和 elicitation 能力分别解决什么？",
+    "expected_keywords": [
+      "sampling",
+      "elicitation",
+      "模型密钥"
+    ],
+    "expected_sources": [
+      "agent_hot_02_mcp_architecture_primitives.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "MCP 客户端能力。"
+  },
+  {
+    "id": "bal_fact_mcp_deploy_paths",
+    "question": "MCP server 的四种常见部署路径是什么？",
+    "expected_keywords": [
+      "本地 stdio",
+      "Streamable HTTP",
+      "MCP Apps",
+      "MCPB"
+    ],
+    "expected_sources": [
+      "agent_hot_03_mcp_deployment_patterns.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "MCP 部署四路径。"
+  },
+  {
+    "id": "bal_fact_skill_structure",
+    "question": "Agent Skill 通常包含哪些文件结构？",
+    "expected_keywords": [
+      "SKILL.md",
+      "脚本",
+      "模板",
+      "参考资料"
+    ],
+    "expected_sources": [
+      "agent_hot_04_agent_skills_portable_workflows.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Skill 包结构。"
+  },
+  {
+    "id": "bal_fact_memory_long_types",
+    "question": "长期记忆按内容分为哪三类？",
+    "expected_keywords": [
+      "语义记忆",
+      "情节记忆",
+      "程序性记忆"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "长期记忆三分类。"
+  },
+  {
+    "id": "bal_fact_memory_namespaces",
+    "question": "长期记忆常按哪些 namespace 组织？",
+    "expected_keywords": [
+      "user",
+      "org",
+      "project",
+      "application"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "namespace 组织。"
+  },
+  {
+    "id": "bal_fact_procedural_memory_files",
+    "question": "哪些文件可以被视作 agent 的程序性记忆？",
+    "expected_keywords": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "程序性记忆"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "程序性记忆载体。"
+  },
+  {
+    "id": "bal_fact_zep_arxiv",
+    "question": "Zep 论文的 arXiv 编号是多少？",
+    "expected_keywords": [
+      "2501.13956"
+    ],
+    "expected_sources": [
+      "agent_hot_06_memory_temporal_graph_zep.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字定位题。"
+  },
+  {
+    "id": "bal_fact_zep_vs_vector",
+    "question": "时间感知图谱与向量检索在记忆系统中如何分工？",
+    "expected_keywords": [
+      "找相关材料",
+      "维护世界状态",
+      "实体消歧"
+    ],
+    "expected_sources": [
+      "agent_hot_06_memory_temporal_graph_zep.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "图谱与向量互补。"
+  },
+  {
+    "id": "bal_fact_prompt_cache_static_content",
+    "question": "prompt 的静态部分应包含哪些内容？",
+    "expected_keywords": [
+      "系统规则",
+      "工具说明",
+      "输出格式"
+    ],
+    "expected_sources": [
+      "agent_hot_07_static_dynamic_prompt_cache.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "静态内容清单。"
+  },
+  {
+    "id": "bal_fact_prompt_cache_stability",
+    "question": "为了利用 OpenAI 的 prompt caching，静态前缀要保持什么性质？",
+    "expected_keywords": [
+      "字节级稳定",
+      "缓存命中"
+    ],
+    "expected_sources": [
+      "agent_hot_07_static_dynamic_prompt_cache.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "缓存友好条件。"
+  },
+  {
+    "id": "bal_fact_compaction_keep_list",
+    "question": "上下文压缩应保留哪些内容（列三个以上）？",
+    "expected_keywords": [
+      "目标",
+      "约束",
+      "已修改文件",
+      "关键决策",
+      "验证命令"
+    ],
+    "expected_sources": [
+      "agent_hot_08_context_compaction.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "压缩保留清单。"
+  },
+  {
+    "id": "bal_fact_compaction_openai_api",
+    "question": "OpenAI Responses API 提供的 server 端压缩能力叫什么？",
+    "expected_keywords": [
+      "server-side compaction",
+      "token"
+    ],
+    "expected_sources": [
+      "agent_hot_08_context_compaction.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "OpenAI 压缩能力。"
+  },
+  {
+    "id": "bal_fact_harness_components",
+    "question": "Agent harness 由哪五个部分组成？",
+    "expected_keywords": [
+      "任务集",
+      "执行器",
+      "观察器",
+      "判定器",
+      "护栏"
+    ],
+    "expected_sources": [
+      "agent_hot_09_eval_harness_and_guardrails.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "harness 五组成。"
+  },
+  {
+    "id": "bal_fact_harness_golden_tasks",
+    "question": "最小可用 harness 建议先构建多少个黄金任务？",
+    "expected_keywords": [
+      "20 个黄金任务",
+      "最大轮数"
+    ],
+    "expected_sources": [
+      "agent_hot_09_eval_harness_and_guardrails.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字事实题。"
+  },
+  {
+    "id": "bal_fact_loop_six_elements",
+    "question": "一个有效 loop 的六要素是什么？",
+    "expected_keywords": [
+      "目标",
+      "上下文",
+      "动作",
+      "反馈",
+      "验证",
+      "停止"
+    ],
+    "expected_sources": [
+      "agent_hot_10_loop_engineering.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "loop 六要素。"
+  },
+  {
+    "id": "bal_fact_a2a_origin",
+    "question": "A2A（Agent2Agent）协议由谁在什么时候发布？",
+    "expected_keywords": [
+      "Google",
+      "2025",
+      "开放协议"
+    ],
+    "expected_sources": [
+      "agent_hot_13_a2a_interoperability.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "A2A 来源事实。"
+  },
+  {
+    "id": "bal_fact_agent_card",
+    "question": "Agent Card 是远程 agent 用什么格式描述自己的什么信息？",
+    "expected_keywords": [
+      "JSON",
+      "能力",
+      "认证方式"
+    ],
+    "expected_sources": [
+      "agent_hot_13_a2a_interoperability.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Agent Card 内容。"
+  },
+  {
+    "id": "bal_fact_ocr_industries",
+    "question": "百度智能云 OCR 覆盖哪些行业场景（列四个以上）？",
+    "expected_keywords": [
+      "金融",
+      "财税",
+      "政务",
+      "保险",
+      "医疗"
+    ],
+    "expected_sources": [
+      "agent_hot_14_baidu_ocr_for_document_agents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "OCR 行业清单。"
+  },
+  {
+    "id": "bal_fact_ocr_pipeline",
+    "question": "OCR 结果进入 RAG 的最小流程是什么？",
+    "expected_keywords": [
+      "上传图片",
+      "OCR",
+      "字段结构化",
+      "RAG 索引"
+    ],
+    "expected_sources": [
+      "agent_hot_14_baidu_ocr_for_document_agents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "OCR 流程定位。"
+  },
+  {
+    "id": "bal_fact_hermes_arxiv",
+    "question": "Hermes 4 Technical Report 的 arXiv 编号是多少？",
+    "expected_keywords": [
+      "2508.18255"
+    ],
+    "expected_sources": [
+      "agent_hot_15_hermes4_open_reasoning_agents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字定位题。"
+  },
+  {
+    "id": "bal_fact_tool_risk_types",
+    "question": "Agent 工具层的五种风险类型是什么？",
+    "expected_keywords": [
+      "工具投毒",
+      "间接 prompt injection",
+      "权限过宽",
+      "组合攻击"
+    ],
+    "expected_sources": [
+      "agent_hot_16_tool_security_permissions.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "工具风险清单。"
+  },
+  {
+    "id": "bal_fact_guardrails_stages",
+    "question": "护栏在哪些阶段对 agent 做检查？",
+    "expected_keywords": [
+      "输入",
+      "工具调用",
+      "输出"
+    ],
+    "expected_sources": [
+      "agent_hot_09_eval_harness_and_guardrails.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "护栏阶段（出自 agent_hot_09）。"
+  },
+  {
+    "id": "bal_fact_subagent_patterns",
+    "question": "多 agent 系统的五种常见模式是什么？",
+    "expected_keywords": [
+      "研究 subagent",
+      "执行 agent",
+      "验证 agent",
+      "路由 agent",
+      "对抗审查"
+    ],
+    "expected_sources": [
+      "agent_hot_17_multi_agent_subagents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "subagent 模式清单。"
+  },
+  {
+    "id": "bal_fact_manifest_contents",
+    "question": "编码 agent 的 manifest 应包含哪六项内容？",
+    "expected_keywords": [
+      "项目地图",
+      "常用命令",
+      "编码规则",
+      "安全规则",
+      "验证规则",
+      "协作规则"
+    ],
+    "expected_sources": [
+      "agent_hot_18_agentic_coding_manifest.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "manifest 六项。"
+  },
+  {
+    "id": "bal_fact_hitl_checkpoints",
+    "question": "人工介入 agent 的五个时机是什么？",
+    "expected_keywords": [
+      "任务开始",
+      "计划阶段",
+      "高风险工具前",
+      "验证阶段",
+      "失败循环中"
+    ],
+    "expected_sources": [
+      "agent_hot_19_human_in_the_loop.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "介入点清单。"
+  },
+  {
+    "id": "bal_fact_hitl_high_risk_examples",
+    "question": "哪些操作属于高风险工具前需要人工确认的例子？",
+    "expected_keywords": [
+      "发送邮件",
+      "付款",
+      "删除文件",
+      "发布内容"
+    ],
+    "expected_sources": [
+      "agent_hot_19_human_in_the_loop.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "高风险动作清单。"
+  },
+  {
+    "id": "bal_fact_stack_layers",
+    "question": "2026 年 agent 技术栈分为哪八层？",
+    "expected_keywords": [
+      "模型层",
+      "上下文层",
+      "工具层",
+      "技能层",
+      "记忆层",
+      "编排层",
+      "安全层",
+      "评测层"
+    ],
+    "expected_sources": [
+      "agent_hot_20_latest_agent_stack_overview.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "八层清单。"
+  },
+  {
+    "id": "bal_fact_agent_core_parts",
+    "question": "AI 代理的核心包含哪三部分？",
+    "expected_keywords": [
+      "环境",
+      "传感器",
+      "执行器"
+    ],
+    "expected_sources": [
+      "agents_01_intro-to-ai-agents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "代理三部分。"
+  },
+  {
+    "id": "bal_fact_agent_when_to_use",
+    "question": "课程列出的适合使用代理的三种情况是什么？",
+    "expected_keywords": [
+      "开放式问题",
+      "多步骤流程",
+      "持续改进"
+    ],
+    "expected_sources": [
+      "agents_01_intro-to-ai-agents.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "适用场景清单。"
+  },
+  {
+    "id": "bal_fact_agentic_principles",
+    "question": "代理性设计原则分为哪三组？",
+    "expected_keywords": [
+      "Agent (Space)",
+      "Agent (Time)",
+      "Agent (Core)"
+    ],
+    "expected_sources": [
+      "agents_03_agentic-design-patterns.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "设计原则分组。"
+  },
+  {
+    "id": "bal_fact_function_call_requirements",
+    "question": "实现函数/工具调用需要哪三件事？",
+    "expected_keywords": [
+      "支持函数调用的 LLM 模型",
+      "函数描述的 schema",
+      "每个函数对应的代码"
+    ],
+    "expected_sources": [
+      "agents_04_tool-use.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "函数调用三要素。"
+  },
+  {
+    "id": "bal_fact_planning_subtasks",
+    "question": "旅行行程示例把总体目标拆分成哪四个子任务？",
+    "expected_keywords": [
+      "机票预订",
+      "酒店预订",
+      "租车服务",
+      "个性化定制"
+    ],
+    "expected_sources": [
+      "agents_07_Planning Design Pattern.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "规划拆分示例。"
+  },
+  {
+    "id": "bal_fact_multiagent_modes",
+    "question": "课程介绍的三种多代理模式是什么？",
+    "expected_keywords": [
+      "群聊",
+      "任务转接",
+      "协同过滤"
+    ],
+    "expected_sources": [
+      "agents_08_Multi-Agent Design Pattern.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "多代理模式。"
+  },
+  {
+    "id": "bal_fact_refund_agents",
+    "question": "退款流程示例设置了哪五个专属代理？",
+    "expected_keywords": [
+      "客户代理",
+      "卖家代理",
+      "支付代理",
+      "解决代理",
+      "合规代理"
+    ],
+    "expected_sources": [
+      "agents_08_Multi-Agent Design Pattern.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "退款代理清单。"
+  },
+  {
+    "id": "bal_fact_fabrication_term",
+    "question": "这门生成式 AI 课程用什么词指代幻觉现象？",
+    "expected_keywords": [
+      "虚假响应",
+      "fabrication"
+    ],
+    "expected_sources": [
+      "genai_04_prompt_engineering.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "术语命名事实。"
+  },
+  {
+    "id": "bal_fact_azure_api_version",
+    "question": "撰写文档时 Azure OpenAI 配置的最新 api_version 是多少？",
+    "expected_keywords": [
+      "2023-05-15"
+    ],
+    "expected_sources": [
+      "genai_06_text_generation.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字事实题。"
+  },
+  {
+    "id": "bal_fact_temperature_ends",
+    "question": "课程认为 temperature 取 0 和 1 分别代表什么？",
+    "expected_keywords": [
+      "最不变化",
+      "变化最大"
+    ],
+    "expected_sources": [
+      "genai_06_text_generation.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "参数语义事实。"
+  },
+  {
+    "id": "bal_fact_responsible_ai_principles",
+    "question": "微软负责任 AI 的六项原则是什么？",
+    "expected_keywords": [
+      "公平性",
+      "可靠性与安全性",
+      "隐私与安全",
+      "包容性",
+      "透明性",
+      "责任性"
+    ],
+    "expected_sources": [
+      "genai_07_chat_applications.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "六原则清单。"
+  },
+  {
+    "id": "bal_fact_gpt4_cutoff",
+    "question": "GPT-4 的知识截止时间是什么时候？",
+    "expected_keywords": [
+      "2021年9月"
+    ],
+    "expected_sources": [
+      "genai_15_rag.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字事实题。"
+  },
+  {
+    "id": "bal_fact_similarity_metrics",
+    "question": "RAG 课程列举的三种向量相似度度量是什么？",
+    "expected_keywords": [
+      "余弦相似度",
+      "欧氏距离",
+      "点积"
+    ],
+    "expected_sources": [
+      "genai_15_rag.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "相似度度量清单。"
+  },
+  {
+    "id": "bal_fact_faiss_origin",
+    "question": "FAISS 是哪个机构开发的什么库？",
+    "expected_keywords": [
+      "Facebook AI Research",
+      "向量相似度搜索库"
+    ],
+    "expected_sources": [
+      "faiss_intro.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "FAISS 来源。"
+  },
+  {
+    "id": "bal_fact_indexflatip_choice",
+    "question": "本项目为什么选择 IndexFlatIP 做向量检索？",
+    "expected_keywords": [
+      "L2 归一化",
+      "cosine similarity"
+    ],
+    "expected_sources": [
+      "official_faiss_getting_started.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "索引选型理由。"
+  },
+  {
+    "id": "bal_fact_faiss_matrix_layout",
+    "question": "FAISS 输入矩阵使用什么数据布局和类型？",
+    "expected_keywords": [
+      "row-major",
+      "32-bit float"
+    ],
+    "expected_sources": [
+      "official_faiss_getting_started.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "矩阵约定。"
+  },
+  {
+    "id": "bal_fact_pydantic_skip_validation",
+    "question": "Pydantic 中哪个方法会跳过校验？它适合什么数据？",
+    "expected_keywords": [
+      "model_construct",
+      "跳过校验"
+    ],
+    "expected_sources": [
+      "official_pydantic_models.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "API 事实题。"
+  },
+  {
+    "id": "bal_fact_langgraph_nodes",
+    "question": "本项目 LangGraph 图中包含哪些节点？",
+    "expected_keywords": [
+      "planner",
+      "rag",
+      "chat",
+      "explain",
+      "summarize",
+      "flashcard",
+      "quiz",
+      "finalizer"
+    ],
+    "expected_sources": [
+      "official_langgraph_concepts.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "节点清单。"
+  },
+  {
+    "id": "bal_fact_hybrid_weights",
+    "question": "当前 Hybrid 融合中 Vector 和 BM25 的权重分别是多少？",
+    "expected_keywords": [
+      "Vector 1.0",
+      "BM25 1.15"
+    ],
+    "expected_sources": [
+      "project_rag_implementation.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "项目常量事实。"
+  },
+  {
+    "id": "bal_fact_context_budget_const",
+    "question": "Context 装配使用的总预算常量名和值是什么？",
+    "expected_keywords": [
+      "CONTEXT_BUDGET_CHARS",
+      "6000"
+    ],
+    "expected_sources": [
+      "project_rag_implementation.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "项目常量事实。"
+  },
+  {
+    "id": "bal_fact_judge_dimensions",
+    "question": "LLM-as-Judge 评估哪五个维度？",
+    "expected_keywords": [
+      "correctness",
+      "relevance",
+      "completeness",
+      "clarity",
+      "citation_quality"
+    ],
+    "expected_sources": [
+      "project_llm_judge.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "judge 维度清单。"
+  },
+  {
+    "id": "bal_fact_toolspec_levels",
+    "question": "ToolSpec 的三级分类是什么？危险工具注册有什么约束？",
+    "expected_keywords": [
+      "read",
+      "write",
+      "dangerous",
+      "requires_confirmation"
+    ],
+    "expected_sources": [
+      "project_tool_registry.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "工具分级事实。"
+  },
+  {
+    "id": "bal_fact_run_fields",
+    "question": "Run 记录包含哪些核心字段？",
+    "expected_keywords": [
+      "id",
+      "status",
+      "plan",
+      "tools",
+      "audit"
+    ],
+    "expected_sources": [
+      "project_run_repository.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "Run 字段清单。"
+  },
+  {
+    "id": "bal_fact_mastery_update",
+    "question": "答对变式题和答错分别让掌握度变化多少？",
+    "expected_keywords": [
+      "+0.15",
+      "-0.08"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字事实题。"
+  },
+  {
+    "id": "bal_fact_pathnode_defaults",
+    "question": "PathNode 的 estimated_minutes 和 mastery_target 默认值是多少？",
+    "expected_keywords": [
+      "estimated_minutes: int = 15",
+      "mastery_target: float = 0.8"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "默认值事实。"
+  },
+  {
+    "id": "bal_fact_companion_runtime_stages",
+    "question": "伴学运行时的八个阶段是什么？",
+    "expected_keywords": [
+      "diagnose",
+      "plan",
+      "assign",
+      "teach",
+      "practice",
+      "scaffold",
+      "evaluate",
+      "reflect"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "阶段清单。"
+  },
+  {
+    "id": "bal_fact_planner_compare_configs",
+    "question": "Planner 评估对比了哪三种配置？",
+    "expected_keywords": [
+      "use_langgraph=false",
+      "use_langgraph=true",
+      "planner_mode=llm"
+    ],
+    "expected_sources": [
+      "PLANNER_EVALUATION.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "配置组合事实。"
+  },
+  {
+    "id": "bal_fact_paper_manifest_arxiv",
+    "question": "paper_react_2023.pdf 对应的 arXiv 编号是多少？",
+    "expected_keywords": [
+      "2210.03629"
+    ],
+    "expected_sources": [
+      "PAPER_PDF_MANIFEST.md"
+    ],
+    "case_type": "fact_lookup",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "数字定位题。"
+  },
+  {
+    "id": "bal_rw_skill_vs_prompt",
+    "question": "skill 包跟直接写一个大 prompt 比，到底强在哪啊？",
+    "expected_keywords": [
+      "SKILL.md",
+      "脚本",
+      "模板"
+    ],
+    "expected_sources": [
+      "agent_hot_04_agent_skills_portable_workflows.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：Skill 结构与优点。"
+  },
+  {
+    "id": "bal_rw_mcp_protocol",
+    "question": "MCP 那个协议的数据层是用啥协议通信的？",
+    "expected_keywords": [
+      "JSON-RPC 2.0"
+    ],
+    "expected_sources": [
+      "agent_hot_02_mcp_architecture_primitives.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：MCP 数据层。"
+  },
+  {
+    "id": "bal_rw_mcp_local_deploy",
+    "question": "我想先在本地搞个 MCP 原型，选哪种部署方式好？为啥？",
+    "expected_keywords": [
+      "本地 stdio",
+      "延迟低",
+      "实现简单"
+    ],
+    "expected_sources": [
+      "agent_hot_03_mcp_deployment_patterns.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：部署选择准则。"
+  },
+  {
+    "id": "bal_rw_memory_types",
+    "question": "agent 的记性是不是分短期长期？长期那块还能再细分不？",
+    "expected_keywords": [
+      "语义记忆",
+      "情节记忆",
+      "程序性记忆"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：记忆分类。"
+  },
+  {
+    "id": "bal_rw_prompt_cache_order",
+    "question": "为啥大家都说 prompt 里不变的东西要放最前面？",
+    "expected_keywords": [
+      "字节级稳定",
+      "缓存命中"
+    ],
+    "expected_sources": [
+      "agent_hot_07_static_dynamic_prompt_cache.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：静态前缀。"
+  },
+  {
+    "id": "bal_rw_context_full",
+    "question": "跟 agent 聊太久上下文快满了咋整？",
+    "expected_keywords": [
+      "压缩",
+      "server-side compaction"
+    ],
+    "expected_sources": [
+      "agent_hot_08_context_compaction.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：上下文压缩。"
+  },
+  {
+    "id": "bal_rw_build_eval_harness",
+    "question": "想搞清楚一个 agent 到底行不行，得先搭一套什么东西来测？",
+    "expected_keywords": [
+      "任务集",
+      "执行器",
+      "判定器",
+      "护栏"
+    ],
+    "expected_sources": [
+      "agent_hot_09_eval_harness_and_guardrails.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：harness 组成。"
+  },
+  {
+    "id": "bal_rw_loop_closure",
+    "question": "把一次性提示词变成能持续干活的闭环，关键得有哪几样？",
+    "expected_keywords": [
+      "目标",
+      "上下文",
+      "动作",
+      "反馈",
+      "验证",
+      "停止"
+    ],
+    "expected_sources": [
+      "agent_hot_10_loop_engineering.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：loop 要素。"
+  },
+  {
+    "id": "bal_rw_ui_agent_screen",
+    "question": "那些操作老系统界面的 agent，是怎么'看见'屏幕的？",
+    "expected_keywords": [
+      "截图",
+      "动作数组",
+      "点击"
+    ],
+    "expected_sources": [
+      "agent_hot_11_computer_use_ui_agents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：computer use。"
+  },
+  {
+    "id": "bal_rw_google_agent_protocol",
+    "question": "Google 搞的那个让 agent 之间互相打交道的开放协议叫啥来着？",
+    "expected_keywords": [
+      "Agent2Agent",
+      "Google",
+      "2025"
+    ],
+    "expected_sources": [
+      "agent_hot_13_a2a_interoperability.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：A2A。"
+  },
+  {
+    "id": "bal_rw_scanned_pdf_ingest",
+    "question": "扫描版 PDF 想进知识库被检索到，中间得经过什么处理？",
+    "expected_keywords": [
+      "OCR",
+      "字段结构化",
+      "RAG 索引"
+    ],
+    "expected_sources": [
+      "agent_hot_14_baidu_ocr_for_document_agents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：OCR 流程。"
+  },
+  {
+    "id": "bal_rw_open_weight_models",
+    "question": "开放权重那种模型，对想自己部署 agent 的团队有啥用？",
+    "expected_keywords": [
+      "开放权重",
+      "数据不能出域",
+      "低成本高并发"
+    ],
+    "expected_sources": [
+      "agent_hot_15_hermes4_open_reasoning_agents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：Hermes 4 定位。"
+  },
+  {
+    "id": "bal_rw_tool_abuse",
+    "question": "agent 的工具会不会被人使坏？一般都有哪些招？",
+    "expected_keywords": [
+      "工具投毒",
+      "间接 prompt injection",
+      "组合攻击"
+    ],
+    "expected_sources": [
+      "agent_hot_16_tool_security_permissions.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：工具风险。"
+  },
+  {
+    "id": "bal_rw_multiagent_value",
+    "question": "多 agent 这么费钱，到底图啥啊？",
+    "expected_keywords": [
+      "上下文隔离",
+      "专业化分工",
+      "并行调查",
+      "独立验证"
+    ],
+    "expected_sources": [
+      "agent_hot_17_multi_agent_subagents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：多 agent 价值。"
+  },
+  {
+    "id": "bal_rw_agents_md_role",
+    "question": "AGENTS.md、CLAUDE.md 这种文件对 agent 来说算个啥？",
+    "expected_keywords": [
+      "程序性记忆",
+      "AGENTS.md",
+      "CLAUDE.md"
+    ],
+    "expected_sources": [
+      "agent_hot_18_agentic_coding_manifest.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：manifest 定位。"
+  },
+  {
+    "id": "bal_rw_human_approval",
+    "question": "哪些动作 agent 不能自己拍板，得先问过人？",
+    "expected_keywords": [
+      "发送邮件",
+      "付款",
+      "删除文件"
+    ],
+    "expected_sources": [
+      "agent_hot_19_human_in_the_loop.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：高风险介入。"
+  },
+  {
+    "id": "bal_rw_agent_definition",
+    "question": "用大白话说，啥叫 AI agent？",
+    "expected_keywords": [
+      "工具和知识",
+      "操控世界"
+    ],
+    "expected_sources": [
+      "agents_01_intro-to-ai-agents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：agent 定义。"
+  },
+  {
+    "id": "bal_rw_agentic_rag_cycle",
+    "question": "agent 自己查资料、自己检查答案的那种 RAG，是咋转起来的？",
+    "expected_keywords": [
+      "制作者-检查者",
+      "迭代",
+      "自我纠正"
+    ],
+    "expected_sources": [
+      "agents_05_agentic-rag.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：Agentic RAG 循环。"
+  },
+  {
+    "id": "bal_neg_cooking",
+    "question": "红烧肉怎么做才能肥而不腻？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：烹饪主题，语料不含。"
+  },
+  {
+    "id": "bal_rw_temperature_effect",
+    "question": "temperature 调大有啥后果？调到 0 呢？",
+    "expected_keywords": [
+      "越随机",
+      "最不变化"
+    ],
+    "expected_sources": [
+      "genai_06_text_generation.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：参数语义。"
+  },
+  {
+    "id": "bal_rw_responsible_ai",
+    "question": "微软搞的那套负责任 AI 一共有几条原则，都是啥？",
+    "expected_keywords": [
+      "公平性",
+      "可靠性与安全性",
+      "隐私与安全",
+      "包容性",
+      "透明性",
+      "责任性"
+    ],
+    "expected_sources": [
+      "genai_07_chat_applications.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：六原则。"
+  },
+  {
+    "id": "bal_rw_rag_stale_knowledge",
+    "question": "模型的知识太旧了，RAG 是怎么把新东西喂给它的？",
+    "expected_keywords": [
+      "知识库",
+      "检索",
+      "增强生成"
+    ],
+    "expected_sources": [
+      "genai_15_rag.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：RAG 工作流程。"
+  },
+  {
+    "id": "bal_rw_embedding_similarity",
+    "question": "两个 embedding 像不像，都有哪几种算法可以衡量？",
+    "expected_keywords": [
+      "余弦相似度",
+      "欧氏距离",
+      "点积"
+    ],
+    "expected_sources": [
+      "genai_15_rag.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：相似度度量。"
+  },
+  {
+    "id": "bal_rw_vector_index_purpose",
+    "question": "知识库一大，每次都重算所有文档向量太慢了，有啥办法？",
+    "expected_keywords": [
+      "重新计算所有文档向量",
+      "检索速度"
+    ],
+    "expected_sources": [
+      "faiss_intro.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：FAISS 作用。"
+  },
+  {
+    "id": "bal_rw_inner_product_choice",
+    "question": "为啥项目里用内积而不是 L2 距离来算向量相似度？",
+    "expected_keywords": [
+      "L2 归一化",
+      "cosine similarity"
+    ],
+    "expected_sources": [
+      "official_faiss_getting_started.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：索引选型。"
+  },
+  {
+    "id": "bal_rw_langgraph_graph",
+    "question": "项目里 LangGraph 那张图上都挂了哪些节点来着？",
+    "expected_keywords": [
+      "planner",
+      "rag",
+      "chat",
+      "finalizer"
+    ],
+    "expected_sources": [
+      "official_langgraph_concepts.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：节点清单。"
+  },
+  {
+    "id": "bal_rw_hybrid_weight_ratio",
+    "question": "检索混合排序的时候，两路分数的权重是怎么配的？",
+    "expected_keywords": [
+      "Vector 1.0",
+      "BM25 1.15"
+    ],
+    "expected_sources": [
+      "project_rag_implementation.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：融合权重。"
+  },
+  {
+    "id": "bal_rw_mastery_delta",
+    "question": "学生答错题掌握度会掉多少？答对变式题能涨多少？",
+    "expected_keywords": [
+      "+0.15",
+      "-0.08"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：掌握度数值。"
+  },
+  {
+    "id": "bal_rw_companion_flow",
+    "question": "伴学流程从头到尾要走哪几步啊？",
+    "expected_keywords": [
+      "diagnose",
+      "teach",
+      "scaffold",
+      "reflect"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：伴学运行时。"
+  },
+  {
+    "id": "bal_rw_judge_scoring",
+    "question": "judge 给回答打分都看哪几个方面来着？",
+    "expected_keywords": [
+      "correctness",
+      "relevance",
+      "citation_quality"
+    ],
+    "expected_sources": [
+      "project_llm_judge.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：judge 维度。"
+  },
+  {
+    "id": "bal_rw_pydantic_no_validation",
+    "question": "pydantic 里如果不想走校验直接建对象，有啥办法？",
+    "expected_keywords": [
+      "model_construct",
+      "跳过校验"
+    ],
+    "expected_sources": [
+      "official_pydantic_models.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：API 事实。"
+  },
+  {
+    "id": "bal_rw_tool_choice_auto",
+    "question": "想让模型自己决定要不要调工具，那个参数咋设来着？",
+    "expected_keywords": [
+      "tool_choice",
+      "auto"
+    ],
+    "expected_sources": [
+      "agents_04_tool-use.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：工具调用参数。"
+  },
+  {
+    "id": "bal_rw_memory_write_timing",
+    "question": "给 agent 写记忆是当场写好，还是回头慢慢补？各有啥问题？",
+    "expected_keywords": [
+      "热路径",
+      "延迟",
+      "后台写入"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：记忆写入时机。"
+  },
+  {
+    "id": "bal_rw_graph_vs_rag",
+    "question": "记忆图谱跟 RAG 各管一摊，分工是啥？",
+    "expected_keywords": [
+      "找相关材料",
+      "维护世界状态"
+    ],
+    "expected_sources": [
+      "agent_hot_06_memory_temporal_graph_zep.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：图谱分工。"
+  },
+  {
+    "id": "bal_rw_computer_use_vs_rpa",
+    "question": "这种操作界面的 agent，跟以前那种 RPA 脚本有啥不一样？",
+    "expected_keywords": [
+      "RPA",
+      "固定选择器",
+      "脆弱"
+    ],
+    "expected_sources": [
+      "agent_hot_11_computer_use_ui_agents.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：RPA 对比。"
+  },
+  {
+    "id": "bal_rw_planning_dispatch",
+    "question": "规划 agent 拿到任务之后，是把活儿派给谁的？",
+    "expected_keywords": [
+      "语义路由代理",
+      "代理注册表",
+      "群聊管理器"
+    ],
+    "expected_sources": [
+      "agents_07_Planning Design Pattern.md"
+    ],
+    "case_type": "semantic_rewrite",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "口语化改写：规划派发。"
+  },
+  {
+    "id": "bal_mh_mcp_arch_deploy",
+    "question": "MCP 的三类服务端原语和四种部署路径分别是什么？本地原型和云上 API 各该怎么选？",
+    "expected_keywords": [
+      "Tools",
+      "Prompts",
+      "本地 stdio",
+      "Streamable HTTP",
+      "云 API 优先远程 HTTP"
+    ],
+    "expected_sources": [
+      "agent_hot_02_mcp_architecture_primitives.md",
+      "agent_hot_03_mcp_deployment_patterns.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_02/03 合并。"
+  },
+  {
+    "id": "bal_mh_memory_taxonomy_graph",
+    "question": "长期记忆分为哪三类？时间感知图谱又额外解决了什么问题？",
+    "expected_keywords": [
+      "语义记忆",
+      "程序性记忆",
+      "世界状态",
+      "有效时间"
+    ],
+    "expected_sources": [
+      "agent_hot_05_memory_short_long_langgraph.md",
+      "agent_hot_06_memory_temporal_graph_zep.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_05/06 合并。"
+  },
+  {
+    "id": "bal_mh_agentic_rag_graph",
+    "question": "Agentic RAG 和普通 RAG 差在哪？记忆图谱和向量检索怎么互补？",
+    "expected_keywords": [
+      "动态决定",
+      "找相关材料",
+      "维护世界状态"
+    ],
+    "expected_sources": [
+      "agent_hot_12_file_search_rag_for_agents.md",
+      "agent_hot_06_memory_temporal_graph_zep.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_12/06 合并。"
+  },
+  {
+    "id": "bal_mh_security_and_hitl",
+    "question": "agent 工具层有哪些攻击面？人应该在哪些环节介入兜底？",
+    "expected_keywords": [
+      "间接 prompt injection",
+      "最小权限",
+      "高风险工具前",
+      "失败循环中"
+    ],
+    "expected_sources": [
+      "agent_hot_16_tool_security_permissions.md",
+      "agent_hot_19_human_in_the_loop.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_16/19 合并。"
+  },
+  {
+    "id": "bal_mh_subagent_and_loop",
+    "question": "subagent 有哪些分工模式？单个 agent 的执行闭环又包含什么要素？",
+    "expected_keywords": [
+      "研究 subagent",
+      "对抗审查",
+      "目标",
+      "验证",
+      "停止"
+    ],
+    "expected_sources": [
+      "agent_hot_17_multi_agent_subagents.md",
+      "agent_hot_10_loop_engineering.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_17/10 合并。"
+  },
+  {
+    "id": "bal_mh_cache_and_compaction",
+    "question": "prompt 缓存要求什么结构？上下文压缩又该保留什么、丢什么？",
+    "expected_keywords": [
+      "字节级稳定",
+      "静态前缀",
+      "关键决策",
+      "重复日志"
+    ],
+    "expected_sources": [
+      "agent_hot_07_static_dynamic_prompt_cache.md",
+      "agent_hot_08_context_compaction.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_07/08 合并。"
+  },
+  {
+    "id": "bal_mh_skill_and_manifest",
+    "question": "SKILL.md 和 AGENTS.md 分别承担什么角色？它们和程序性记忆是什么关系？",
+    "expected_keywords": [
+      "SKILL.md",
+      "工作流知识包",
+      "程序性记忆",
+      "项目地图"
+    ],
+    "expected_sources": [
+      "agent_hot_04_agent_skills_portable_workflows.md",
+      "agent_hot_18_agentic_coding_manifest.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_04/18 合并。"
+  },
+  {
+    "id": "bal_mh_rag_two_schools",
+    "question": "代理式 RAG 和传统 RAG 有什么区别？RAG-Sequence 与 RAG-Token 两种实现又是什么？",
+    "expected_keywords": [
+      "掌控推理过程",
+      "预定义路径",
+      "RAG-Sequence",
+      "RAG-Token"
+    ],
+    "expected_sources": [
+      "agents_05_agentic-rag.md",
+      "genai_15_rag.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agents_05/genai_15 合并。"
+  },
+  {
+    "id": "bal_mh_planning_and_multiagent",
+    "question": "规划模式怎么拆解和派发任务？多代理的三种协作模式是什么？",
+    "expected_keywords": [
+      "任务拆分",
+      "语义路由代理",
+      "群聊",
+      "任务转接",
+      "协同过滤"
+    ],
+    "expected_sources": [
+      "agents_07_Planning Design Pattern.md",
+      "agents_08_Multi-Agent Design Pattern.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agents_07/08 合并。"
+  },
+  {
+    "id": "bal_mh_tools_and_langgraph",
+    "question": "实现函数调用需要哪些条件？项目的 LangGraph 图包含哪些节点？",
+    "expected_keywords": [
+      "schema",
+      "tool_choice",
+      "planner",
+      "finalizer"
+    ],
+    "expected_sources": [
+      "agents_04_tool-use.md",
+      "official_langgraph_concepts.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agents_04/official_langgraph 合并。"
+  },
+  {
+    "id": "bal_mh_run_vs_history",
+    "question": "RunRepository 和数据库会话历史分别面向什么场景？各自保存什么？",
+    "expected_keywords": [
+      "JSON 文件",
+      "tombstone",
+      "ChatSession",
+      "会话恢复"
+    ],
+    "expected_sources": [
+      "project_run_repository.md",
+      "project_sqlalchemy_session_history.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 project_run/project_sqlalchemy 合并。"
+  },
+  {
+    "id": "bal_mh_rag_and_runtime",
+    "question": "项目 RAG 有哪三种召回模式？LangGraph runtime 的节点是怎么和工具对齐的？",
+    "expected_keywords": [
+      "vector",
+      "bm25",
+      "hybrid",
+      "rag_search",
+      "finalizer"
+    ],
+    "expected_sources": [
+      "project_rag_implementation.md",
+      "project_agent_langgraph.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 project_rag/project_langgraph 合并。"
+  },
+  {
+    "id": "bal_mh_tooltoken_and_judge",
+    "question": "危险工具的两阶段确认是怎么工作的？Judge 的评估结果存到哪里？",
+    "expected_keywords": [
+      "requires_confirmation",
+      "一次性 token",
+      "JudgeEvaluation",
+      "ENABLE_JUDGE_PERSISTENCE"
+    ],
+    "expected_sources": [
+      "project_tool_registry.md",
+      "project_llm_judge.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 project_tool/project_judge 合并。"
+  },
+  {
+    "id": "bal_mh_companion_reuse",
+    "question": "伴学改造要新增哪些模块？复用了项目里哪些现有组件？",
+    "expected_keywords": [
+      "companionship",
+      "mastery",
+      "rag_service",
+      "tool_registry"
+    ],
+    "expected_sources": [
+      "伴学智能体改造方案.md",
+      "project_readme_snapshot.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨伴学/README 合并。"
+  },
+  {
+    "id": "bal_mh_frameworks_landscape",
+    "question": "课程介绍了哪些开源 agent 框架？代理框架和代理服务又该怎么区分选型？",
+    "expected_keywords": [
+      "AutoGen",
+      "Taskweaver",
+      "JARVIS",
+      "AzureAIProjectAgentProvider"
+    ],
+    "expected_sources": [
+      "genai_17_agents.md",
+      "agents_02_design_patterns.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 genai_17/agents_02 合并。"
+  },
+  {
+    "id": "bal_mh_faiss_index_choice",
+    "question": "IndexFlatL2 和 IndexFlatIP 有什么区别？本项目为什么选 IP？",
+    "expected_keywords": [
+      "IndexFlatL2",
+      "IndexFlatIP",
+      "L2 归一化",
+      "cosine similarity"
+    ],
+    "expected_sources": [
+      "official_faiss_getting_started.md",
+      "faiss_intro.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 faiss 两篇合并。"
+  },
+  {
+    "id": "bal_mh_hermes_in_stack",
+    "question": "开放权重模型适合哪些场景？它在 2026 agent 技术栈分层中处于什么位置？",
+    "expected_keywords": [
+      "开放权重",
+      "自托管",
+      "模型层",
+      "Hermes 4"
+    ],
+    "expected_sources": [
+      "agent_hot_15_hermes4_open_reasoning_agents.md",
+      "agent_hot_20_latest_agent_stack_overview.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_15/20 合并。"
+  },
+  {
+    "id": "bal_mh_a2a_orchestration",
+    "question": "A2A 解决的是哪类协作问题？2026 技术栈的编排层包含哪些模式？",
+    "expected_keywords": [
+      "Agent2Agent",
+      "委派",
+      "单 agent loop",
+      "A2A 跨系统协作"
+    ],
+    "expected_sources": [
+      "agent_hot_13_a2a_interoperability.md",
+      "agent_hot_20_latest_agent_stack_overview.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_13/20 合并。"
+  },
+  {
+    "id": "bal_mh_ocr_granularity",
+    "question": "OCR 进来的文档为什么要分层保存？Agentic RAG 对文档颗粒度有什么要求？",
+    "expected_keywords": [
+      "三层数据",
+      "原图坐标",
+      "主题单一",
+      "同义词"
+    ],
+    "expected_sources": [
+      "agent_hot_14_baidu_ocr_for_document_agents.md",
+      "agent_hot_12_file_search_rag_for_agents.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_14/12 合并。"
+  },
+  {
+    "id": "bal_mh_subagent_harness",
+    "question": "每个 subagent 应该有哪些明确约束？这些约束在 harness 五组成里对应什么？",
+    "expected_keywords": [
+      "输入",
+      "输出格式",
+      "权限",
+      "停止条件",
+      "判定器"
+    ],
+    "expected_sources": [
+      "agent_hot_17_multi_agent_subagents.md",
+      "agent_hot_09_eval_harness_and_guardrails.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_17/09 合并。"
+  },
+  {
+    "id": "bal_mh_planning_loop_iteration",
+    "question": "迭代规划在什么情况下触发？有效 loop 的六要素又是什么？",
+    "expected_keywords": [
+      "用户反馈",
+      "子任务结果",
+      "目标",
+      "反馈",
+      "停止"
+    ],
+    "expected_sources": [
+      "agents_07_Planning Design Pattern.md",
+      "agent_hot_10_loop_engineering.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agents_07/agent_hot_10 合并。"
+  },
+  {
+    "id": "bal_mh_prompt_design_security",
+    "question": "prompt 分层设计有哪些原则？间接注入的恶意内容通常藏在哪里？",
+    "expected_keywords": [
+      "静态部分",
+      "动态部分",
+      "网页",
+      "文档",
+      "恶意文本"
+    ],
+    "expected_sources": [
+      "agent_hot_07_static_dynamic_prompt_cache.md",
+      "agent_hot_16_tool_security_permissions.md"
+    ],
+    "case_type": "multi_hop",
+    "batch": "balanced_v1",
+    "is_negative": false,
+    "requires_ocr": false,
+    "notes": "跨 agent_hot_07/16 合并。"
+  },
+  {
+    "id": "bal_neg_nba_rules",
+    "question": "NBA 的三分线距离篮筐是多少米？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：体育规则。"
+  },
+  {
+    "id": "bal_neg_train_ticket",
+    "question": "北京到上海的高铁二等座票价大概是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：生活出行。"
+  },
+  {
+    "id": "bal_neg_driving_license",
+    "question": "考驾照科目二有哪些扣分项？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：驾考。"
+  },
+  {
+    "id": "bal_neg_formaldehyde",
+    "question": "新房装修除甲醛最有效的方法是什么？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：装修生活。"
+  },
+  {
+    "id": "bal_neg_tomato_eggs",
+    "question": "番茄炒蛋应该先放番茄还是先放蛋？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：烹饪。"
+  },
+  {
+    "id": "bal_neg_cat_food",
+    "question": "猫粮应该怎么选才健康？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：宠物。"
+  },
+  {
+    "id": "bal_neg_exchange_rate",
+    "question": "日元兑人民币今天的汇率是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：实时汇率。"
+  },
+  {
+    "id": "bal_neg_hiking",
+    "question": "周末去京郊爬山有哪些路线推荐？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：户外出行。"
+  },
+  {
+    "id": "bal_neg_photography",
+    "question": "拍星空照片需要什么快门参数？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "out_of_knowledge",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：摄影。"
+  },
+  {
+    "id": "bal_neg_mcp_oauth_port",
+    "question": "MCP 协议的 OAuth 回调端口默认是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：术语真实（MCP/OAuth），答案不存在。"
+  },
+  {
+    "id": "bal_neg_faiss_sql",
+    "question": "FAISS 索引支持 SQL 事务回滚吗？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：FAISS 与 SQL 事务无关。"
+  },
+  {
+    "id": "bal_neg_hermes_pricing",
+    "question": "Hermes 4 模型的 API 定价是每百万 token 多少钱？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：术语真实，定价不存在。"
+  },
+  {
+    "id": "bal_neg_ocr_pricing",
+    "question": "百度智能云 OCR 的公开报价是每千次调用多少元？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：术语真实，报价不存在。"
+  },
+  {
+    "id": "bal_neg_skillmd_version",
+    "question": "SKILL.md 官方规范的最新版本号是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：SKILL.md 无版本号事实。"
+  },
+  {
+    "id": "bal_neg_zep_mysql",
+    "question": "Zep 图谱可以直接写入 MySQL 吗？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：Zep 与 MySQL 组合不存在。"
+  },
+  {
+    "id": "bal_neg_agentic_rag_batchsize",
+    "question": "Agentic RAG 推荐的 batch size 是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：术语真实，batch size 无出处。"
+  },
+  {
+    "id": "bal_neg_agentsmd_limit",
+    "question": "AGENTS.md 文件的字数上限是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：字数上限不存在。"
+  },
+  {
+    "id": "bal_neg_autogen_npm",
+    "question": "AutoGen 框架的官方 npm 包名是什么？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：AutoGen 是 Python 生态，npm 包不存在。"
+  },
+  {
+    "id": "bal_neg_indexflatip_vram",
+    "question": "IndexFlatIP 在 GPU 上运行时的显存占用是多少？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "distractor_keywords",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：显存数字不存在。"
+  },
+  {
+    "id": "bal_neg_kubernetes_hpa",
+    "question": "Kubernetes HPA 的最小副本数怎么配置？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：运维领域，语料不含。"
+  },
+  {
+    "id": "bal_neg_react_usestate",
+    "question": "React 的 useState 钩子应该怎么用？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：前端开发；项目文档仅提及 React 名称，不讲解 hooks。"
+  },
+  {
+    "id": "bal_neg_tf_pytorch",
+    "question": "TensorFlow 和 PyTorch 哪个更适合初学者？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：深度学习框架选型。"
+  },
+  {
+    "id": "bal_neg_blockchain",
+    "question": "区块链的共识机制都有哪些？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：区块链领域。"
+  },
+  {
+    "id": "bal_neg_python_gil",
+    "question": "Python 的 GIL 会影响多线程性能吗？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：Python 运行时。"
+  },
+  {
+    "id": "bal_neg_bonds_fed",
+    "question": "美联储加息一般会怎样影响债券价格？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：宏观经济。"
+  },
+  {
+    "id": "bal_neg_calculus",
+    "question": "微积分里链式法则怎么推导？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：数学基础。"
+  },
+  {
+    "id": "bal_neg_photoshop",
+    "question": "Photoshop 怎么快速抠图换背景？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：图像处理软件。"
+  },
+  {
+    "id": "bal_neg_reactor_backpressure",
+    "question": "Project Reactor 的背压机制是什么原理？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：响应式编程；react 词面干扰。"
+  },
+  {
+    "id": "bal_neg_docker_compose",
+    "question": "Docker Compose 的 depends_on 和 healthcheck 怎么配合？",
+    "expected_keywords": [],
+    "expected_sources": [],
+    "case_type": "cross_domain",
+    "batch": "balanced_v1",
+    "is_negative": true,
+    "requires_ocr": false,
+    "notes": "负样本：容器编排；项目仅以容器交付，语料不讲解 Compose。"
+  }
+]

@@ -30,3 +30,5 @@ study/
 temp_*.py
 # local competition / requirement notes (do not publish)
 更换需求/
+.pytest_tmp/
+tmp/

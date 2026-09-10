@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", default=str(DEFAULT_CASES_PATH))
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--modes", type=parse_modes, default=list(BASE_MODES))
+    parser.add_argument(
+        "--query-rewrite-mode",
+        choices=("off", "conditional", "always"),
+        default="off",
+        help="Wrap retrieval with the query rewrite + two-query fusion pipeline.",
+    )
     parser.add_argument("--output", default=str(DEFAULT_JSON_OUTPUT))
     parser.add_argument("--markdown", default=str(DEFAULT_MARKDOWN_OUTPUT))
     parser.add_argument("--with-answer", action="store_true")
@@ -98,6 +104,7 @@ def load_cases(path: str | Path) -> list[dict]:
             "question": question,
             "expected_keywords": _string_list(raw_case.get("expected_keywords", []), "expected_keywords", case_id),
             "expected_sources": expected_sources,
+            "history": _validate_history(raw_case.get("history", []), case_id),
             "case_type": str(raw_case.get("case_type") or "fact_lookup").strip(),
             "batch": str(raw_case.get("batch") or "unspecified").strip(),
             "is_negative": is_negative,
@@ -105,6 +112,37 @@ def load_cases(path: str | Path) -> list[dict]:
             "notes": str(raw_case.get("notes") or "").strip(),
         })
     return cases
+
+
+def _validate_history(history: Any, case_id: str) -> list[dict]:
+    """Validate the optional conversation history carried by multi-turn cases."""
+    if history in (None, []):
+        return []
+    if not isinstance(history, list):
+        raise ValueError(f"case {case_id}: history must be a list of turns")
+    validated = []
+    for turn_index, turn in enumerate(history, start=1):
+        if not isinstance(turn, dict):
+            raise ValueError(f"case {case_id}: history turn {turn_index} must be an object")
+        role = str(turn.get("role") or "").strip().lower()
+        content = str(turn.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            raise ValueError(
+                f"case {case_id}: history turn {turn_index} needs role user/assistant and content"
+            )
+        validated.append({"role": role, "content": content})
+    return validated
+
+
+def format_history_context(history: list[dict] | None) -> str:
+    """Render history turns the same way the production prompt labels them."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        label = {"user": "用户", "assistant": "助手"}.get(turn["role"], turn["role"])
+        lines.append(f"{label}：{turn['content']}")
+    return "\n".join(lines)
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -295,11 +333,17 @@ def run_retrieval(
 ) -> dict:
     started_at = perf_counter()
     try:
+        history_context = format_history_context(case.get("history"))
         if search_fn is None:
             configure_offline_embedding()
             from backend.rag_store import search_relevant_chunks
 
-            search_fn = search_relevant_chunks
+            def search_fn(question: str, **kwargs):
+                # Plain retrieval cannot use conversation history; drop it so
+                # multi-turn cases stay callable across all search wrappers.
+                kwargs.pop("history_context", None)
+                return search_relevant_chunks(question, **kwargs)
+
         retrieval_mode = "hybrid" if mode == RERANKER_MODE else mode
         raw_result = search_fn(
             case["question"],
@@ -307,6 +351,7 @@ def run_retrieval(
             retrieval_mode=retrieval_mode,
             reranker_enabled=mode == RERANKER_MODE,
             include_metadata=True,
+            history_context=history_context or None,
         )
         metadata = raw_result if isinstance(raw_result, dict) else {"chunks": raw_result}
         chunks = metadata.get("chunks", [])
@@ -424,6 +469,85 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[index]
 
 
+def _answer_citation_hit(case: dict, result: dict) -> bool:
+    answer = result.get("answer") or {}
+    actual_sources = [
+        str(source.get("source") or "")
+        for source in (answer.get("sources") or [])
+        if isinstance(source, dict)
+    ]
+    return any(
+        _source_matches(expected, actual)
+        for expected in case.get("expected_sources", [])
+        for actual in actual_sources
+    )
+
+
+def _layered_mode_metrics(results: list[dict], cases: list[dict]) -> dict:
+    positive_results = [
+        result for result, case in zip(results, cases)
+        if not bool(case.get("is_negative", False))
+    ]
+    negative_results = [
+        result for result, case in zip(results, cases)
+        if bool(case.get("is_negative", False))
+    ]
+    ranking_metrics = [result.get("ranking_metrics") or {} for result in positive_results]
+    positive_count = len(positive_results)
+    negative_count = len(negative_results)
+    top1_hits = sum(int(metrics.get("top1_source_hit", 0)) for metrics in ranking_metrics)
+    top3_hits = sum(int(metrics.get("top3_source_hit", 0)) for metrics in ranking_metrics)
+    top_k_hits = sum(int(metrics.get("top_k_source_hit", 0)) for metrics in ranking_metrics)
+    fallback_successes = sum(bool(result.get("fallback_success")) for result in negative_results)
+    pollution_cases = sum(bool(result.get("source_pollution")) for result in negative_results)
+    latencies = [float(result.get("latency_ms", 0.0)) for result in results]
+    metrics = {
+        "case_count": len(cases),
+        "positive_case_count": positive_count,
+        "negative_case_count": negative_count,
+        "top1_source_hit_rate": round(top1_hits / positive_count, 4) if positive_count else None,
+        "top3_source_hit_rate": round(top3_hits / positive_count, 4) if positive_count else None,
+        "top_k_source_hit_rate": round(top_k_hits / positive_count, 4) if positive_count else None,
+        "average_mrr": round(
+            sum(float(metrics.get("mrr", 0.0)) for metrics in ranking_metrics) / positive_count,
+            3,
+        ) if positive_count else None,
+        "fallback_success_rate": round(fallback_successes / negative_count, 4) if negative_count else None,
+        "source_pollution_rate": round(pollution_cases / negative_count, 4) if negative_count else None,
+        "average_latency_ms": round(sum(latencies) / len(latencies), 3) if latencies else 0.0,
+        "p95_latency_ms": round(_percentile(latencies, 0.95), 3),
+    }
+    if any(result.get("answer") for result in results):
+        answered = [
+            (case, result)
+            for case, result in zip(cases, results)
+            if not bool(case.get("is_negative", False))
+            and (result.get("answer") or {}).get("success")
+        ]
+        citation_hits = sum(_answer_citation_hit(case, result) for case, result in answered)
+        metrics["answer_citation_hit_rate"] = (
+            round(citation_hits / len(answered), 4) if answered else None
+        )
+    return metrics
+
+
+def build_case_type_summary(evaluated_cases: list[dict], modes: list[str]) -> dict:
+    """Layered metrics per case_type so fact/rewrite/multi-hop/negative stay visible."""
+    by_type: dict[str, list[dict]] = {}
+    for case in evaluated_cases:
+        by_type.setdefault(str(case.get("case_type") or "untyped"), []).append(case)
+
+    summary = {}
+    for case_type in sorted(by_type):
+        cases = by_type[case_type]
+        type_summary = {"case_count": len(cases)}
+        for mode in modes:
+            results = [case["results"][mode] for case in cases]
+            type_summary[mode] = _layered_mode_metrics(results, cases)
+        summary[case_type] = type_summary
+    return summary
+
+
 def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
     summary = {}
     case_count = len(cases)
@@ -467,6 +591,13 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             for result in results
             if result.get("query_rewrite_attempted")
         ]
+        answered = [
+            (case, result)
+            for case, result in zip(cases, results)
+            if not bool(case.get("is_negative", False))
+            and (result.get("answer") or {}).get("success")
+        ]
+        citation_hits = sum(_answer_citation_hit(case, result) for case, result in answered)
         rewrite_attempts = sum(
             bool(result.get("query_rewrite_attempted")) for result in results
         )
@@ -502,6 +633,7 @@ def build_mode_summary(cases: list[dict], modes: list[str]) -> dict:
             ) if keyword_ranks else None,
             "average_latency_ms": round(sum(latencies) / len(latencies), 3) if latencies else 0.0,
             "p95_latency_ms": round(_percentile(latencies, 0.95), 3),
+            "answer_citation_hit_rate": round(citation_hits / len(answered), 4) if answered else None,
             "fallback_success_count": fallback_successes,
             "fallback_success_rate": round(fallback_successes / negative_count, 4) if negative_count else None,
             "source_pollution_count": pollution_cases,
@@ -619,6 +751,7 @@ def evaluate_cases(
             "with_reranker": RERANKER_MODE in modes,
         },
         "mode_summary": build_mode_summary(evaluated_cases, modes),
+        "case_type_summary": build_case_type_summary(evaluated_cases, modes),
         "cases": evaluated_cases,
     }
     if "hybrid" in modes and RERANKER_MODE in modes:
@@ -670,6 +803,30 @@ def render_markdown(report: dict) -> str:
             f"{item['successful_cases']} | {item['failed_cases']} | "
             f"{item.get('reranker_used_cases', 0)} |"
         )
+
+    case_type_summary = report.get("case_type_summary") or {}
+    if case_type_summary:
+        lines.extend([
+            "",
+            "## Case Type Breakdown",
+            "",
+            "| Case Type | Mode | Cases | Recall@1 | Recall@3 | Recall@K | MRR | Fallback | Pollution | Citation | Avg ms |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for case_type, item in case_type_summary.items():
+            for mode in summary["modes"]:
+                metrics = item.get(mode) or {}
+                lines.append(
+                    f"| {case_type} | {mode} | {metrics.get('case_count', 0)} | "
+                    f"{_md_metric(metrics.get('top1_source_hit_rate'))} | "
+                    f"{_md_metric(metrics.get('top3_source_hit_rate'))} | "
+                    f"{_md_metric(metrics.get('top_k_source_hit_rate'))} | "
+                    f"{_md_metric(metrics.get('average_mrr'))} | "
+                    f"{_md_metric(metrics.get('fallback_success_rate'))} | "
+                    f"{_md_metric(metrics.get('source_pollution_rate'))} | "
+                    f"{_md_metric(metrics.get('answer_citation_hit_rate'))} | "
+                    f"{_md_metric(metrics.get('average_latency_ms'))} |"
+                )
 
     if any(
         report["mode_summary"][mode].get("query_rewrite_attempt_count", 0)
@@ -816,6 +973,14 @@ def main() -> int:
     try:
         cases_path = project_path(args.cases)
         cases = load_cases(cases_path)
+        search_fn = None
+        if args.query_rewrite_mode != "off":
+            from scripts.query_rewrite_search import build_query_rewrite_search
+
+            search_fn = build_query_rewrite_search(args.query_rewrite_mode)
+            if search_fn is None:
+                print(f"Query rewrite mode '{args.query_rewrite_mode}' produced no search wrapper")
+                return 1
         print(f"Evaluating {len(cases)} cases across modes: {', '.join(args.modes)}")
         report = evaluate_cases(
             cases,
@@ -823,8 +988,10 @@ def main() -> int:
             args.top_k,
             with_answer=args.with_answer,
             with_judge=args.with_judge,
+            search_fn=search_fn,
         )
         report["summary"]["cases_file"] = str(cases_path)
+        report["summary"]["query_rewrite_mode"] = args.query_rewrite_mode
         json_path = write_json_report(report, args.output)
         markdown_path = write_markdown_report(report, args.markdown)
         print(f"JSON report: {json_path}")
