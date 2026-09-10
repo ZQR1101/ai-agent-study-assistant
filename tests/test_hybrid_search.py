@@ -268,6 +268,108 @@ class HybridSearchTests(unittest.TestCase):
 
         self.assertEqual(results[0]["source"], "agent_skills.md")
 
+    def test_hybrid_threshold_rejects_weak_bm25_only_top1(self):
+        vector_result = {
+            "chunk_id": "vector:0",
+            "source": "generic_learning_guide.md",
+            "text": "generic learning path content",
+            "score": 0.56,
+            "retrieval": "vector",
+            "vector_score": 0.56,
+            "vector_rank": 1,
+        }
+        bm25_result = {
+            "chunk_id": "bm25:0",
+            "source": "agent_skills.md",
+            "text": "Agent Skill and SKILL.md workflow knowledge",
+            "score": 8.2,
+            "retrieval": "bm25",
+            "bm25_score": 8.2,
+            "bm25_rank": 1,
+            "bm25_entity_term_count": 2,
+            "bm25_entity_match_count": 1,
+        }
+        with (
+            patch("backend.rag_store.search_vector_chunks", return_value=[vector_result]),
+            patch("backend.rag_store.search_keyword_chunks", return_value=[bm25_result]),
+        ):
+            result = search_relevant_chunks(
+                "Agent Skill 学习路线",
+                retrieval_mode="hybrid",
+                include_metadata=True,
+            )
+
+        self.assertFalse(result["passed_threshold"])
+        self.assertEqual(result["chunks"], [])
+
+    def test_hybrid_threshold_accepts_bm25_only_top1_with_strong_score(self):
+        vector_result = {
+            "chunk_id": "vector:0",
+            "source": "generic_learning_guide.md",
+            "text": "generic learning path content",
+            "score": 0.56,
+            "retrieval": "vector",
+            "vector_score": 0.56,
+            "vector_rank": 1,
+        }
+        bm25_result = {
+            "chunk_id": "bm25:0",
+            "source": "agent_skills.md",
+            "text": "Agent Skill and SKILL.md workflow knowledge",
+            "score": 30.0,
+            "retrieval": "bm25",
+            "bm25_score": 30.0,
+            "bm25_rank": 1,
+            "bm25_entity_term_count": 2,
+            "bm25_entity_match_count": 1,
+        }
+        with (
+            patch("backend.rag_store.search_vector_chunks", return_value=[vector_result]),
+            patch("backend.rag_store.search_keyword_chunks", return_value=[bm25_result]),
+        ):
+            result = search_relevant_chunks(
+                "Agent Skill 学习路线",
+                retrieval_mode="hybrid",
+                include_metadata=True,
+            )
+
+        self.assertTrue(result["passed_threshold"])
+        self.assertEqual(result["chunks"][0]["source"], "agent_skills.md")
+
+    def test_hybrid_threshold_accepts_bm25_only_top1_with_full_entity_coverage(self):
+        vector_result = {
+            "chunk_id": "vector:0",
+            "source": "generic_learning_guide.md",
+            "text": "generic learning path content",
+            "score": 0.56,
+            "retrieval": "vector",
+            "vector_score": 0.56,
+            "vector_rank": 1,
+        }
+        bm25_result = {
+            "chunk_id": "bm25:0",
+            "source": "agent_skills.md",
+            "text": "Agent Skill and SKILL.md workflow knowledge",
+            "score": 8.2,
+            "retrieval": "bm25",
+            "bm25_score": 8.2,
+            "bm25_rank": 1,
+            "bm25_entity_term_count": 2,
+            "bm25_entity_match_count": 2,
+        }
+        with (
+            patch("backend.rag_store.search_vector_chunks", return_value=[vector_result]),
+            patch("backend.rag_store.search_keyword_chunks", return_value=[bm25_result]),
+        ):
+            result = search_relevant_chunks(
+                "Agent Skill 学习路线",
+                retrieval_mode="hybrid",
+                include_metadata=True,
+            )
+
+        self.assertTrue(result["passed_threshold"])
+        self.assertEqual(result["chunks"][0]["source"], "agent_skills.md")
+
     def test_empty_knowledge_base_does_not_error(self):
         with (
             patch("backend.rag_store._load_chunks_file_only", return_value=False),

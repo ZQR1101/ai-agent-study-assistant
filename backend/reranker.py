@@ -124,6 +124,7 @@ def rerank_chunks_with_metadata(
         "reranker_used": False,
         "reranker_model": config.reranker_model or None,
         "reranker_top_n": config.reranker_top_n,
+        "reranker_filtered_count": 0,
         "reranker_error": None,
     }
 
@@ -160,7 +161,13 @@ def rerank_chunks_with_metadata(
         for rank, chunk in enumerate(ranked, start=1):
             chunk["rerank_rank"] = rank
 
-        metadata["chunks"] = ranked[:top_k]
+        # Chunks scoring below the floor are treated as non-answers: they are
+        # dropped so a query whose best candidate is weak gets rejected
+        # (fallback) instead of surfacing topically-related noise.
+        min_score = config.reranker_min_score
+        kept = [chunk for chunk in ranked if chunk["rerank_score"] >= min_score]
+        metadata["reranker_filtered_count"] = len(ranked) - len(kept)
+        metadata["chunks"] = kept[:top_k]
         metadata["reranker_used"] = True
         return metadata
     except Exception as exc:

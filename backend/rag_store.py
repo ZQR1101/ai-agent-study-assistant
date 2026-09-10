@@ -113,7 +113,6 @@ def _set_current_version(version: int) -> None:
 SIMILARITY_THRESHOLD = 0.55
 BM25_MIN_SCORE = 1.0
 BM25_STRONG_THRESHOLD = 25.0
-RERANKER_MIN_SCORE = 0.0
 MIN_CHUNK_LENGTH = 30
 HYBRID_VECTOR_WEIGHT = 1.0
 HYBRID_BM25_WEIGHT = 1.15
@@ -605,11 +604,12 @@ def load_documents():
     return documents
 
 
-def build_chunks(documents: list[dict] | None = None):
+def build_chunks(
+    documents: list[dict] | None = None,
+    chunk_size: int = 500,
+    overlap: int = 100,
+):
     documents = load_documents() if documents is None else documents
-
-    chunk_size = 500
-    overlap = 100
 
     new_chunks = []
     quality_stats = {"kept": 0, "low_quality": 0, "dropped": 0, "dropped_reasons": []}
@@ -1475,6 +1475,70 @@ def reciprocal_rank_fusion(
     return results[:top_k]
 
 
+def _chunk_has_vector_hit(chunk: dict) -> bool:
+    # vector_score is only set for chunks that passed SIMILARITY_THRESHOLD on the vector side
+    return chunk.get("vector_score") is not None
+
+
+def _is_strong_bm25_chunk(chunk: dict) -> bool:
+    if float(chunk.get("bm25_score") or 0.0) >= BM25_STRONG_THRESHOLD:
+        return True
+    entity_terms = int(chunk.get("bm25_entity_term_count") or 0)
+    entity_matches = int(chunk.get("bm25_entity_match_count") or 0)
+    return entity_terms > 0 and entity_matches >= entity_terms
+
+
+def passes_hybrid_top_gate(chunk: dict | None) -> bool:
+    """The fused top-1 must itself have a vector hit or strong BM25 evidence.
+
+    A BM25-only chunk promoted to top-1 by RRF cannot rely on vector results
+    sitting elsewhere in the candidate list.
+    """
+    return chunk is not None and (
+        _chunk_has_vector_hit(chunk) or _is_strong_bm25_chunk(chunk)
+    )
+
+
+def get_chunk_neighbor_windows(
+    anchor_chunks: list[dict],
+    *,
+    before: int = 1,
+    after: int = 1,
+) -> dict[tuple, dict[str, list[dict]]]:
+    """Look up adjacent same-document chunks for each anchor by chunk_index.
+
+    Returns {(source, chunk_index): {"before": [...], "after": [...]}} with
+    neighbors ordered nearest-first. Neighbors that are themselves anchors are
+    excluded; callers handle cross-window dedup and the size budget.
+    """
+    anchor_keys = {
+        (chunk.get("source"), chunk.get("chunk_index"))
+        for chunk in anchor_chunks
+    }
+    index: dict[tuple, dict] = {}
+    for chunk in chunks:
+        index[(chunk.get("source"), chunk.get("chunk_index"))] = chunk
+
+    windows: dict[tuple, dict[str, list[dict]]] = {}
+    for anchor in anchor_chunks:
+        source = anchor.get("source")
+        chunk_index = anchor.get("chunk_index")
+        window = {"before": [], "after": []}
+        if source and chunk_index is not None:
+            for offset in range(-before, 0):
+                key = (source, chunk_index + offset)
+                entry = index.get(key)
+                if entry is not None and key not in anchor_keys:
+                    window["before"].append(entry)
+            for offset in range(1, after + 1):
+                key = (source, chunk_index + offset)
+                entry = index.get(key)
+                if entry is not None and key not in anchor_keys:
+                    window["after"].append(entry)
+        windows[(source, chunk_index)] = window
+    return windows
+
+
 def _search_hybrid_chunks_with_metadata(
     question: str,
     top_k: int = 3,
@@ -1495,15 +1559,14 @@ def _search_hybrid_chunks_with_metadata(
         weights=[HYBRID_VECTOR_WEIGHT, HYBRID_BM25_WEIGHT],
     )
     highest_score = max((float(item["score"]) for item in fused_results), default=None)
-    vector_has_results = bool(vector_results)
-    bm25_top_score = max((float(item.get("bm25_score", 0)) for item in bm25_results), default=0.0)
-    bm25_strong = bm25_top_score >= BM25_STRONG_THRESHOLD
 
     return {
         "chunks": fused_results,
         "highest_score": highest_score,
         "threshold": float(similarity_threshold),
-        "passed_threshold": bool(fused_results) and (vector_has_results or bm25_strong),
+        "passed_threshold": passes_hybrid_top_gate(
+            fused_results[0] if fused_results else None
+        ),
         "expanded_query": expanded_question,
         "raw_count": len(fused_results),
         "valid_count": len(fused_results),
@@ -1563,6 +1626,7 @@ def search_relevant_chunks(
     candidate_k: int | None = None,
     reranker_enabled: bool | None = False,
     reranker_top_n: int | None = None,
+    apply_reranker: bool = True,
 ):
     mode = retrieval_mode if retrieval_mode in {"vector", "bm25", "hybrid"} else "vector"
     config = get_config()
@@ -1590,19 +1654,20 @@ def search_relevant_chunks(
     metadata.update(_reranker_metadata(requested_reranker, top_n))
     if requested_reranker:
         metadata["reranker_candidate_count"] = len(metadata["chunks"])
-        reranked = rerank_chunks_with_metadata(
-            question,
-            metadata["chunks"],
-            top_k,
-            enabled=True,
-        )
-        metadata["chunks"] = reranked.pop("chunks")
-        metadata.update(reranked)
-        metadata["valid_count"] = len(metadata["chunks"])
-        metadata["highest_score"] = max(
-            (float(item["score"]) for item in metadata["chunks"]),
-            default=None,
-        )
+        if apply_reranker:
+            reranked = rerank_chunks_with_metadata(
+                question,
+                metadata["chunks"],
+                top_k,
+                enabled=True,
+            )
+            metadata["chunks"] = reranked.pop("chunks")
+            metadata.update(reranked)
+            metadata["valid_count"] = len(metadata["chunks"])
+            metadata["highest_score"] = max(
+                (float(item["score"]) for item in metadata["chunks"]),
+                default=None,
+            )
 
     if not metadata.get("passed_threshold", True):
         metadata["chunks"] = []

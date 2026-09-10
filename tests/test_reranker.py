@@ -223,6 +223,41 @@ class RerankerTests(unittest.TestCase):
         self.assertEqual(len(mock_rerank.call_args.args[1]), 2)
         self.assertEqual(result["chunks"][0]["source"], "b.md")
 
+    def test_apply_reranker_false_defers_rerank_and_keeps_wide_pool(self):
+        metadata = sample_search_metadata()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "ENABLE_RERANKER": "true",
+                    "RERANKER_MODEL": "mock/model",
+                    "RERANKER_TOP_N": "2",
+                },
+                clear=False,
+            ),
+            patch(
+                "backend.rag_store._search_hybrid_chunks_with_metadata",
+                return_value=metadata,
+            ) as mock_hybrid,
+            patch("backend.rag_store.rerank_chunks_with_metadata") as mock_rerank,
+        ):
+            result = rag_store.search_relevant_chunks(
+                "query",
+                top_k=1,
+                retrieval_mode="hybrid",
+                reranker_enabled=True,
+                apply_reranker=False,
+                include_metadata=True,
+            )
+
+        self.assertEqual(mock_hybrid.call_args.kwargs["top_k"], 2)
+        mock_rerank.assert_not_called()
+        self.assertEqual(len(result["chunks"]), 2)
+        self.assertEqual(result["reranker_candidate_count"], 2)
+        self.assertEqual(result["reranker_top_n"], 2)
+        self.assertFalse(result["reranker_used"])
+        self.assertIsNone(result["reranker_error"])
+
     def test_rerank_chunks_uses_mock_scores_to_reorder(self):
         class FakeCrossEncoder:
             def predict(self, pairs, show_progress_bar=False):
@@ -244,6 +279,77 @@ class RerankerTests(unittest.TestCase):
         self.assertEqual(result[0]["rerank_rank"], 1)
         self.assertTrue(result[0]["reranker_used"])
         self.assertEqual(result[0]["score"], 0.8)
+
+    def test_min_score_filters_weak_candidates(self):
+        class FakeCrossEncoder:
+            def predict(self, pairs, show_progress_bar=False):
+                return [0.1, 0.95, -3.0]
+
+        chunks = sample_chunks() + [
+            {
+                "chunk_id": "c",
+                "source": "c.md",
+                "text": "Gamma candidate about a different topic entirely.",
+                "score": 0.7,
+                "retrieval": "hybrid",
+            }
+        ]
+
+        with (
+            patch.dict(
+                os.environ,
+                {"ENABLE_RERANKER": "true", "RERANKER_MODEL": "mock/model"},
+                clear=False,
+            ),
+            patch("backend.reranker.get_reranker_model", return_value=FakeCrossEncoder()),
+        ):
+            result = rerank_chunks_with_metadata("query", chunks, top_k=3)
+
+        self.assertEqual([chunk["source"] for chunk in result["chunks"]], ["b.md", "a.md"])
+        self.assertEqual(result["reranker_filtered_count"], 1)
+        self.assertTrue(result["reranker_used"])
+
+    def test_min_score_rejects_query_when_all_candidates_weak(self):
+        class FakeCrossEncoder:
+            def predict(self, pairs, show_progress_bar=False):
+                return [-1.0, -2.5]
+
+        with (
+            patch.dict(
+                os.environ,
+                {"ENABLE_RERANKER": "true", "RERANKER_MODEL": "mock/model"},
+                clear=False,
+            ),
+            patch("backend.reranker.get_reranker_model", return_value=FakeCrossEncoder()),
+        ):
+            result = rerank_chunks_with_metadata("query", sample_chunks(), top_k=2)
+
+        self.assertEqual(result["chunks"], [])
+        self.assertEqual(result["reranker_filtered_count"], 2)
+        self.assertTrue(result["reranker_used"])
+
+    def test_fallback_path_does_not_filter_candidates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_model = Path(tmpdir) / "missing-reranker"
+            with patch.dict(
+                os.environ,
+                {
+                    "ENABLE_RERANKER": "true",
+                    "RERANKER_MODEL": str(missing_model),
+                    "RERANKER_MIN_SCORE": "0.0",
+                },
+                clear=False,
+            ):
+                result = rerank_chunks_with_metadata(
+                    "query",
+                    sample_chunks(),
+                    top_k=2,
+                    enabled=True,
+                )
+
+        self.assertEqual(len(result["chunks"]), 2)
+        self.assertEqual(result["reranker_filtered_count"], 0)
+        self.assertFalse(result["reranker_used"])
 
     def test_debug_rag_accepts_reranker_flag(self):
         metadata = {

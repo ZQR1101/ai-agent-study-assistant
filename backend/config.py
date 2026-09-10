@@ -88,6 +88,7 @@ class AppConfig:
     enable_reranker: bool
     reranker_model: str
     reranker_top_n: int
+    reranker_min_score: float
     query_rewrite_mode: str
     cors_allowed_origins: tuple[str, ...]
     enable_insecure_dev_tool_keys: bool
@@ -160,6 +161,13 @@ def read_bool_env(name: str, default: bool = False) -> bool:
 def read_positive_int_env(name: str, default: int) -> int:
     try:
         return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def read_float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -254,6 +262,7 @@ def get_config() -> AppConfig:
         enable_reranker=read_bool_env("ENABLE_RERANKER", False),
         reranker_model=os.getenv("RERANKER_MODEL", "").strip(),
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 15),
+        reranker_min_score=read_float_env("RERANKER_MIN_SCORE", 0.0),
         query_rewrite_mode=read_query_rewrite_mode(),
         cors_allowed_origins=read_cors_allowed_origins(),
         enable_insecure_dev_tool_keys=enable_insecure_dev_tool_keys,

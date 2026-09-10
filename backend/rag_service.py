@@ -4,15 +4,28 @@ from time import perf_counter
 from backend.config import QUERY_REWRITE_MODES, get_config
 from backend.history_utils import truncate_text
 from backend.llm_service import chat
-from backend.rag_store import SIMILARITY_THRESHOLD, search_relevant_chunks
+from backend.rag_store import (
+    SIMILARITY_THRESHOLD,
+    get_chunk_neighbor_windows,
+    passes_hybrid_top_gate,
+    search_relevant_chunks,
+)
+from backend.reranker import is_reranker_enabled, rerank_chunks_with_metadata
 
 SOURCE_SNIPPET_LENGTH = 400
 QUERY_FUSION_K = 60
+CONTEXT_NEIGHBOR_BEFORE = 1
+CONTEXT_NEIGHBOR_AFTER = 1
+# Total assembled-context budget in chars (~1 char per token for CJK notes):
+# anchors are admitted first, neighbors share whatever is left.
+CONTEXT_BUDGET_CHARS = 6000
+CONTEXT_MAX_CHUNK_CHARS = 800
+CONTEXT_MIN_TRUNCATED_CHARS = 200
+CONTEXT_MAX_CHUNKS_PER_SOURCE = 3
+# Adjacent same-document blocks have their chunking-overlap seam removed.
+CONTEXT_SEAM_MIN_CHARS = 20
+CONTEXT_SEAM_MAX_CHARS = 160
 
-_QUERY_REWRITE_FOLLOW_UP_PATTERN = re.compile(
-    r"(?:它|这个|那个|上述|前面|刚才|其中|这两者|他们|她们|这些|那些|"
-    r"该(?:方法|模型|接口|算法|功能|配置|文档|章节|项目))"
-)
 _QUERY_REWRITE_STRONG_ANCHOR_PATTERN = re.compile(
     r"/[A-Za-z0-9_./-]+|[A-Za-z][A-Za-z0-9_.-]*|\d+(?:\.\d+)*"
 )
@@ -70,21 +83,23 @@ def _clean_rewritten_query(text: str) -> str:
     return cleaned[:300].strip()
 
 
-def should_rewrite_query(question: str, history_context: str | None) -> bool:
-    query = " ".join(str(question or "").split()).strip()
-    if not query or not str(history_context or "").strip():
-        return False
-    if len(query) > 30 or not _QUERY_REWRITE_FOLLOW_UP_PATTERN.search(query):
-        return False
-    if _QUERY_REWRITE_EXACT_VALUE_PATTERN.search(query):
-        return False
+def _question_is_self_contained(question: str) -> bool:
+    """Lightweight 'independently retrievable' classifier.
 
-    anchors = {
-        value.casefold()
-        for value in _QUERY_REWRITE_STRONG_ANCHOR_PATTERN.findall(query)
-        if value.strip()
-    }
-    return len(anchors) <= 1
+    A question carrying exact values (versions/numbers/paths) or explicit
+    entity/number anchors is treated as self-contained: try the original query
+    as-is and never substitute history into it.
+    """
+    query = " ".join(str(question or "").split())
+    if not query:
+        return True
+    if _QUERY_REWRITE_EXACT_VALUE_PATTERN.search(query):
+        return True
+    return bool(_QUERY_REWRITE_STRONG_ANCHOR_PATTERN.findall(query))
+
+
+def _is_retrieval_insufficient(result: dict) -> bool:
+    return not result.get("chunks") or not result.get("passed_threshold", True)
 
 
 def _query_rewrite_decision(
@@ -101,9 +116,7 @@ def _query_rewrite_decision(
         return {"mode": normalized_mode, "enabled": True, "reason": "mode_always"}
     if not str(history_context or "").strip():
         return {"mode": normalized_mode, "enabled": False, "reason": "missing_history"}
-    if should_rewrite_query(question, history_context):
-        return {"mode": normalized_mode, "enabled": True, "reason": "context_follow_up"}
-    return {"mode": normalized_mode, "enabled": False, "reason": "query_self_contained"}
+    return {"mode": normalized_mode, "enabled": True, "reason": "history_present"}
 
 
 def _query_result_key(chunk: dict, position: int):
@@ -123,7 +136,7 @@ def _merge_search_errors(*errors) -> str | None:
 def _fuse_query_search_results(
     original_result: dict,
     rewritten_result: dict,
-    top_k: int,
+    pool_size: int,
 ) -> dict:
     fused = {}
     for query_name, search_result in (
@@ -142,7 +155,7 @@ def _fuse_query_search_results(
 
     all_chunks = list(fused.values())
     all_chunks.sort(key=lambda item: item["query_fusion_score"], reverse=True)
-    chunks = all_chunks[:top_k]
+    chunks = all_chunks[:pool_size]
     passed_threshold = bool(
         original_result.get("passed_threshold")
         or rewritten_result.get("passed_threshold")
@@ -189,6 +202,127 @@ def _fuse_query_search_results(
     return merged
 
 
+def _rerank_search_result(search_result: dict, question: str, top_k: int) -> dict:
+    """Apply the (deferred) rerank to a retrieval result and update its metadata."""
+    candidates = search_result.get("chunks", [])
+    reranked = rerank_chunks_with_metadata(question, candidates, top_k, enabled=True)
+    reranked_chunks = reranked.pop("chunks")
+    merged = {
+        **search_result,
+        "chunks": reranked_chunks,
+        "highest_score": max(
+            (float(item.get("score", 0.0)) for item in reranked_chunks),
+            default=None,
+        ),
+        "valid_count": len(reranked_chunks),
+        "reranker_candidate_count": len(candidates),
+        "reranker_used": reranked["reranker_used"],
+        "reranker_model": reranked["reranker_model"],
+        "reranker_top_n": reranked["reranker_top_n"],
+        "reranker_error": reranked["reranker_error"],
+    }
+    if not reranked["reranker_used"] and search_result.get("retrieval_mode") == "hybrid":
+        # Reranker fallback keeps fusion order, so the final top-1 still has to
+        # stand on its own vector hit or strong BM25 evidence.
+        merged["passed_threshold"] = passes_hybrid_top_gate(
+            reranked_chunks[0] if reranked_chunks else None
+        )
+    return merged
+
+
+def search_with_conditional_rewrite(
+    question: str,
+    *,
+    history_context: str | None,
+    query_rewrite_llm,
+    top_k: int,
+    search_kwargs: dict,
+    rewrite_fn=None,
+) -> tuple[dict, dict]:
+    """Two-stage adaptive retrieval for follow-up questions.
+
+    Stage 1 always retrieves with the original query. Only when the retrieval
+    signals are insufficient AND the question is not self-contained (history is
+    the only way to resolve it) does stage 2 rewrite with history, retrieve
+    again, and fuse both candidate pools. The rerank is deferred to after the
+    rewrite decision so the reranker scores the final pool exactly once.
+
+    Returns (search_result, rewrite_info_delta).
+    """
+    rewrite_fn = rewrite_fn or (
+        lambda q, history: rewrite_query_for_retrieval(
+            q, custom_llm=query_rewrite_llm, history_context=history
+        )
+    )
+    defer_rerank = bool(history_context) and is_reranker_enabled(
+        search_kwargs.get("reranker_enabled", False)
+    )
+    stage_kwargs = {**search_kwargs, "apply_reranker": not defer_rerank}
+    original_result = search_relevant_chunks(question, **stage_kwargs)
+
+    info = {
+        "original_query": question,
+        "retrieval_query": question,
+        "retrieval_queries": [question],
+        "query_fusion_used": False,
+        "query_rewrite_attempted": False,
+        "query_rewrite_used": False,
+        "query_rewrite_error": None,
+        "query_rewrite_latency_ms": 0.0,
+    }
+
+    def finish(result: dict, *, reason: str, rewrite: dict | None = None) -> tuple[dict, dict]:
+        info["query_rewrite_reason"] = reason
+        if rewrite is not None:
+            info["query_rewrite_attempted"] = True
+            info["query_rewrite_error"] = rewrite["error"]
+            info["query_rewrite_latency_ms"] = rewrite["latency_ms"]
+        return result, info
+
+    if not history_context:
+        reason = "missing_history"
+    elif _question_is_self_contained(question):
+        reason = "self_contained_query"
+    elif _is_retrieval_insufficient(original_result):
+        reason = "retrieval_insufficient"
+    else:
+        reason = "retrieval_sufficient"
+
+    if reason != "retrieval_insufficient":
+        result = (
+            _rerank_search_result(original_result, question, top_k)
+            if defer_rerank
+            else original_result
+        )
+        return finish(result, reason=reason)
+
+    rewrite = rewrite_fn(question, history_context)
+    if not rewrite["used"]:
+        result = (
+            _rerank_search_result(original_result, question, top_k)
+            if defer_rerank
+            else original_result
+        )
+        return finish(
+            result,
+            reason="rewrite_unchanged" if not rewrite["error"] else "rewrite_error",
+            rewrite=rewrite,
+        )
+
+    rewritten_result = search_relevant_chunks(rewrite["query"], **stage_kwargs)
+    fusion_pool_size = top_k
+    if defer_rerank:
+        fusion_pool_size = int(original_result.get("reranker_top_n") or 0) or top_k
+    fused = _fuse_query_search_results(original_result, rewritten_result, fusion_pool_size)
+    if defer_rerank:
+        fused = _rerank_search_result(fused, question, top_k)
+    info["retrieval_query"] = rewrite["query"]
+    info["retrieval_queries"] = [question, rewrite["query"]]
+    info["query_fusion_used"] = True
+    info["query_rewrite_used"] = True
+    return finish(fused, reason="rewritten", rewrite=rewrite)
+
+
 def rewrite_query_for_retrieval(
     question: str,
     custom_llm=None,
@@ -223,6 +357,168 @@ def rewrite_query_for_retrieval(
     return result(rewritten, rewritten != original_query, None)
 
 
+def _context_header_lines(chunk: dict, retrieval: str, *, include_score: bool) -> list[str]:
+    source = str(chunk.get("source", ""))
+    document = str(chunk.get("document_title") or chunk.get("document") or source)
+    section = str(chunk.get("section") or "无")
+    title = str(chunk.get("title") or "无")
+    lines = [f"来源文件：{source}"]
+    if document != source:
+        lines.append(f"文档：{document}")
+    lines.append(f"章节：{section}")
+    if title not in (section, document):
+        lines.append(f"标题：{title}")
+    lines.append(f"检索方式：{retrieval}")
+    if include_score:
+        lines.append(f"得分：{chunk['score']:.4f}")
+    return lines
+
+
+def _chunk_context_text(chunk: dict) -> str:
+    text = str(chunk.get("text") or "")
+    if len(text) > CONTEXT_MAX_CHUNK_CHARS:
+        return text[:CONTEXT_MAX_CHUNK_CHARS].rstrip() + "…"
+    return text
+
+
+def _context_block_overhead(chunk: dict, retrieval: str, *, include_score: bool) -> int:
+    header = _context_header_lines(chunk, retrieval, include_score=include_score)
+    return len("\n".join(header)) + len("\n内容：\n")
+
+
+def _render_context_block(chunk: dict, text: str, retrieval: str, *, include_score: bool) -> str:
+    header = _context_header_lines(chunk, retrieval, include_score=include_score)
+    return "\n".join(header) + f"\n内容：\n{text}"
+
+
+def _seam_trimmed_text(previous_text: str | None, text: str) -> str:
+    """Drop the leading chunking-overlap seam shared with the previous block."""
+    if not previous_text:
+        return text
+    max_check = min(CONTEXT_SEAM_MAX_CHARS, len(previous_text), len(text))
+    for length in range(max_check, CONTEXT_SEAM_MIN_CHARS - 1, -1):
+        if previous_text.endswith(text[:length]):
+            return text[length:].lstrip()
+    return text
+
+
+def _build_context_blocks(chunks: list[dict], default_retrieval: str) -> tuple[list[str], dict]:
+    """Assemble the final context blocks under one shared char budget.
+
+    Anchors are admitted first in rank order (exact-text dedup, per-source cap,
+    per-chunk cap, tail truncation when over budget); neighbors of admitted
+    anchors then share the leftover budget. Adjacent same-document blocks have
+    their chunking-overlap seam removed and redundant header lines are dropped.
+    """
+    stats = {"anchor_count": 0, "neighbor_count": 0, "truncated_count": 0, "dropped_count": 0}
+    budget_left = CONTEXT_BUDGET_CHARS
+    emitted_keys: set = set()
+    seen_texts: set[str] = set()
+    source_counts: dict[str, int] = {}
+    admitted_anchors: list[dict] = []
+
+    for chunk in chunks:
+        key = (chunk.get("source"), chunk.get("chunk_index"))
+        source = str(chunk.get("source") or "")
+        normalized_text = " ".join(str(chunk.get("text") or "").split())
+        if (
+            key in emitted_keys
+            or (normalized_text and normalized_text in seen_texts)
+            or source_counts.get(source, 0) >= CONTEXT_MAX_CHUNKS_PER_SOURCE
+        ):
+            stats["dropped_count"] += 1
+            continue
+        text = _chunk_context_text(chunk)
+        overhead = _context_block_overhead(
+            chunk, chunk.get("retrieval", default_retrieval), include_score=True
+        )
+        available = budget_left - overhead
+        if available < CONTEXT_MIN_TRUNCATED_CHARS:
+            if admitted_anchors:
+                stats["dropped_count"] += 1
+                break
+            available = min(CONTEXT_MIN_TRUNCATED_CHARS, len(text))
+        if available < len(text):
+            text = text[: available - 1].rstrip() + "…"
+            stats["truncated_count"] += 1
+        emitted_keys.add(key)
+        if normalized_text:
+            seen_texts.add(normalized_text)
+        source_counts[source] = source_counts.get(source, 0) + 1
+        budget_left -= overhead + len(text)
+        admitted_anchors.append({**chunk, "_context_text": text})
+
+    stats["anchor_count"] = len(admitted_anchors)
+    if not admitted_anchors:
+        return [], stats
+
+    windows = get_chunk_neighbor_windows(
+        admitted_anchors,
+        before=CONTEXT_NEIGHBOR_BEFORE,
+        after=CONTEXT_NEIGHBOR_AFTER,
+    )
+    neighbor_plan: list[tuple[dict, list, list]] = []
+    for anchor in admitted_anchors:
+        window = windows.get((anchor.get("source"), anchor.get("chunk_index"))) or {}
+        before: list[tuple[dict, str]] = []
+        after: list[tuple[dict, str]] = []
+        for side, bucket in (("before", before), ("after", after)):
+            for neighbor in window.get(side, []):
+                neighbor_key = (neighbor.get("source"), neighbor.get("chunk_index"))
+                if neighbor_key in emitted_keys:
+                    continue
+                text = _chunk_context_text(neighbor)
+                normalized_text = " ".join(text.split())
+                if normalized_text and normalized_text in seen_texts:
+                    continue
+                overhead = _context_block_overhead(
+                    neighbor, "neighbor", include_score=False
+                )
+                if overhead + len(text) > budget_left:
+                    continue
+                emitted_keys.add(neighbor_key)
+                if normalized_text:
+                    seen_texts.add(normalized_text)
+                budget_left -= overhead + len(text)
+                bucket.append((neighbor, text))
+        neighbor_plan.append((anchor, before, after))
+        stats["neighbor_count"] += len(before) + len(after)
+
+    blocks: list[str] = []
+    last_key: tuple | None = None
+    last_text: str | None = None
+
+    def render(chunk: dict, text: str, retrieval: str, *, include_score: bool) -> None:
+        nonlocal last_key, last_text
+        key = (chunk.get("source"), chunk.get("chunk_index"))
+        if (
+            last_text is not None
+            and last_key is not None
+            and key[0] == last_key[0]
+            and isinstance(key[1], int)
+            and isinstance(last_key[1], int)
+            and key[1] == last_key[1] + 1
+        ):
+            text = _seam_trimmed_text(last_text, text)
+        blocks.append(
+            _render_context_block(chunk, text, retrieval, include_score=include_score)
+        )
+        last_key, last_text = key, text
+
+    for anchor, before, after in neighbor_plan:
+        for neighbor, text in before:
+            render(neighbor, text, "neighbor", include_score=False)
+        render(
+            anchor,
+            anchor["_context_text"],
+            anchor.get("retrieval", default_retrieval),
+            include_score=True,
+        )
+        for neighbor, text in after:
+            render(neighbor, text, "neighbor", include_score=False)
+    return blocks, stats
+
+
 def get_rag_context(
     question: str,
     top_k: int = 3,
@@ -241,13 +537,7 @@ def get_rag_context(
         history_context,
         configured_mode,
     )
-    query_rewrite = rewrite_query_for_retrieval(
-        question,
-        custom_llm=query_rewrite_llm if rewrite_decision["enabled"] else None,
-        history_context=history_context,
-    )
-    retrieval_query = query_rewrite["query"]
-    search_kwargs = {
+    base_search_kwargs = {
         "top_k": top_k,
         "similarity_threshold": score_threshold,
         "include_metadata": True,
@@ -256,24 +546,90 @@ def get_rag_context(
         "reranker_enabled": reranker_enabled,
         "reranker_top_n": reranker_top_n,
     }
-    original_search_result = search_relevant_chunks(
-        question,
-        **search_kwargs,
-    )
-    if query_rewrite["used"]:
-        rewritten_search_result = search_relevant_chunks(
-            retrieval_query,
+    if configured_mode == "conditional" and rewrite_decision["enabled"]:
+        if query_rewrite_llm is None:
+            original_search_result = search_relevant_chunks(
+                question,
+                **{**base_search_kwargs, "apply_reranker": True},
+            )
+            search_result = {**original_search_result, "query_fusion_used": False}
+            rewrite_delta = {
+                "original_query": question,
+                "retrieval_query": question,
+                "retrieval_queries": [question],
+                "query_fusion_used": False,
+                "query_rewrite_attempted": False,
+                "query_rewrite_used": False,
+                "query_rewrite_error": None,
+                "query_rewrite_reason": "llm_unavailable",
+                "query_rewrite_latency_ms": 0.0,
+            }
+        else:
+            search_result, rewrite_delta = search_with_conditional_rewrite(
+                question,
+                history_context=history_context,
+                query_rewrite_llm=query_rewrite_llm,
+                top_k=top_k,
+                search_kwargs=base_search_kwargs,
+            )
+    else:
+        query_rewrite = rewrite_query_for_retrieval(
+            question,
+            custom_llm=query_rewrite_llm if rewrite_decision["enabled"] else None,
+            history_context=history_context,
+        )
+        retrieval_query = query_rewrite["query"]
+        rerank_after_fusion = bool(query_rewrite["used"]) and is_reranker_enabled(reranker_enabled)
+        search_kwargs = {**base_search_kwargs, "apply_reranker": not rerank_after_fusion}
+        original_search_result = search_relevant_chunks(
+            question,
             **search_kwargs,
         )
-        search_result = _fuse_query_search_results(
-            original_search_result,
-            rewritten_search_result,
-            top_k,
-        )
-    else:
-        search_result = {
-            **original_search_result,
-            "query_fusion_used": False,
+        if query_rewrite["used"]:
+            rewritten_search_result = search_relevant_chunks(
+                retrieval_query,
+                **search_kwargs,
+            )
+            fusion_pool_size = top_k
+            if rerank_after_fusion:
+                fusion_pool_size = (
+                    int(original_search_result.get("reranker_top_n") or 0) or top_k
+                )
+            search_result = _fuse_query_search_results(
+                original_search_result,
+                rewritten_search_result,
+                fusion_pool_size,
+            )
+            if rerank_after_fusion:
+                search_result = _rerank_search_result(search_result, question, top_k)
+        else:
+            search_result = {
+                **original_search_result,
+                "query_fusion_used": False,
+            }
+        rewrite_reason = rewrite_decision["reason"]
+        if rewrite_decision["enabled"] and query_rewrite_llm is None:
+            rewrite_reason = "llm_unavailable"
+        elif query_rewrite["error"]:
+            rewrite_reason = "rewrite_error"
+        elif query_rewrite["used"]:
+            rewrite_reason = "rewritten"
+        elif rewrite_decision["enabled"]:
+            rewrite_reason = "rewrite_unchanged"
+        rewrite_delta = {
+            "original_query": question,
+            "retrieval_query": retrieval_query,
+            "retrieval_queries": (
+                [question, retrieval_query] if query_rewrite["used"] else [question]
+            ),
+            "query_fusion_used": bool(query_rewrite["used"]),
+            "query_rewrite_attempted": bool(
+                rewrite_decision["enabled"] and query_rewrite_llm is not None
+            ),
+            "query_rewrite_used": query_rewrite["used"],
+            "query_rewrite_error": query_rewrite["error"],
+            "query_rewrite_reason": rewrite_reason,
+            "query_rewrite_latency_ms": query_rewrite["latency_ms"],
         }
     chunks = search_result["chunks"]
     max_score = search_result["highest_score"]
@@ -289,31 +645,12 @@ def get_rag_context(
         "reranker_used": search_result.get("reranker_used", False),
         "reranker_model": search_result.get("reranker_model"),
         "reranker_top_n": search_result.get("reranker_top_n"),
+        "reranker_candidate_count": search_result.get("reranker_candidate_count", 0),
         "reranker_error": search_result.get("reranker_error"),
     }
-    rewrite_reason = rewrite_decision["reason"]
-    if rewrite_decision["enabled"] and query_rewrite_llm is None:
-        rewrite_reason = "llm_unavailable"
-    elif query_rewrite["error"]:
-        rewrite_reason = "rewrite_error"
-    elif query_rewrite["used"]:
-        rewrite_reason = "rewritten"
-    elif rewrite_decision["enabled"]:
-        rewrite_reason = "rewrite_unchanged"
     rewrite_info = {
-        "original_query": question,
-        "retrieval_query": retrieval_query,
-        "retrieval_queries": (
-            [question, retrieval_query] if query_rewrite["used"] else [question]
-        ),
+        **rewrite_delta,
         "query_rewrite_mode": rewrite_decision["mode"],
-        "query_rewrite_attempted": bool(
-            rewrite_decision["enabled"] and query_rewrite_llm is not None
-        ),
-        "query_rewrite_used": query_rewrite["used"],
-        "query_rewrite_error": query_rewrite["error"],
-        "query_rewrite_reason": rewrite_reason,
-        "query_rewrite_latency_ms": query_rewrite["latency_ms"],
         "query_fusion_used": search_result.get("query_fusion_used", False),
     }
 
@@ -339,20 +676,11 @@ def get_rag_context(
             **reranker_info,
         }
 
-    context_parts = []
+    context_blocks, context_stats = _build_context_blocks(chunks, retrieval_mode)
     source_chunks = []
 
     for chunk in chunks:
         retrieval = chunk.get("retrieval", retrieval_mode)
-        context_parts.append(
-            f"来源文件：{chunk['source']}\n"
-            f"文档：{chunk.get('document_title') or chunk.get('document') or chunk['source']}\n"
-            f"章节：{chunk.get('section') or '无'}\n"
-            f"标题：{chunk.get('title') or '无'}\n"
-            f"检索方式：{retrieval}\n"
-            f"得分：{chunk['score']:.4f}\n"
-            f"内容：\n{chunk['text']}"
-        )
         source_payload = {
             "source": chunk["source"],
             "score": float(chunk["score"]),
@@ -384,8 +712,13 @@ def get_rag_context(
 
     return {
         "found": True,
-        "context": "\n\n---\n\n".join(context_parts),
+        "context": "\n\n---\n\n".join(context_blocks),
         "sources": source_chunks,
+        "neighbor_chunk_count": context_stats["neighbor_count"],
+        "context_anchor_count": context_stats["anchor_count"],
+        "context_chars": sum(len(block) for block in context_blocks),
+        "context_truncated_chunk_count": context_stats["truncated_count"],
+        "context_dropped_chunk_count": context_stats["dropped_count"],
         "retrieved_chunks": chunks,
         "max_score": max_score,
         "threshold": result_threshold,
@@ -522,6 +855,12 @@ def append_rag_trace(trace: list[str], rag_context: dict | None) -> None:
         trace.append(f"RAG reranker_error：{rag_context.get('reranker_error')}")
     trace.append(f"RAG 原始候选数：{rag_context.get('raw_count')}")
     trace.append(f"RAG 有效候选数：{rag_context.get('valid_count')}")
+    trace.append(f"RAG 邻近扩展 chunk 数：{rag_context.get('neighbor_chunk_count', 0)}")
+    trace.append(
+        f"RAG 上下文字符：{rag_context.get('context_chars', 0)}"
+        f"（截断 {rag_context.get('context_truncated_chunk_count', 0)}，"
+        f"去重/上限丢弃 {rag_context.get('context_dropped_chunk_count', 0)}）"
+    )
     trace.append(f"RAG 丢弃无效 chunk 数：{rag_context.get('discarded_invalid_count')}")
     trace.append(f"RAG 是否通过阈值：{'是' if rag_context.get('found') else '否'}")
     trace.append(f"RAG sources：{source_names(rag_context.get('sources', []))}")

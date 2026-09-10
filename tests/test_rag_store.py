@@ -213,5 +213,45 @@ class OCRRagStoreTests(unittest.TestCase):
         embedding_model.assert_not_called()
 
 
+class ChunkNeighborWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.original_chunks = rag_store.chunks
+        rag_store.chunks = [self._entry("course.md", index) for index in range(4)]
+        rag_store.chunks.append(self._entry("other.md", 0))
+
+    def tearDown(self):
+        rag_store.chunks = self.original_chunks
+        rag_store._reset_bm25_index()
+
+    @staticmethod
+    def _entry(source: str, chunk_index: int) -> dict:
+        return {"source": source, "chunk_index": chunk_index, "text": f"{source}#{chunk_index}"}
+
+    def test_windows_return_nearest_prev_and_next_per_anchor(self):
+        windows = rag_store.get_chunk_neighbor_windows([self._entry("course.md", 2)])
+
+        window = windows[("course.md", 2)]
+        self.assertEqual([entry["chunk_index"] for entry in window["before"]], [1])
+        self.assertEqual([entry["chunk_index"] for entry in window["after"]], [3])
+
+    def test_windows_exclude_neighbors_that_are_anchors(self):
+        windows = rag_store.get_chunk_neighbor_windows(
+            [self._entry("course.md", 1), self._entry("course.md", 2)]
+        )
+
+        self.assertEqual(windows[("course.md", 1)]["after"], [])
+        self.assertEqual(windows[("course.md", 2)]["before"], [])
+        self.assertEqual([entry["chunk_index"] for entry in windows[("course.md", 1)]["before"]], [0])
+        self.assertEqual([entry["chunk_index"] for entry in windows[("course.md", 2)]["after"]], [3])
+
+    def test_windows_isolate_documents_and_missing_indexes(self):
+        windows = rag_store.get_chunk_neighbor_windows(
+            [self._entry("other.md", 0), {"source": "course.md"}]
+        )
+
+        self.assertEqual(windows[("other.md", 0)], {"before": [], "after": []})
+        self.assertEqual(windows[("course.md", None)], {"before": [], "after": []})
+
+
 if __name__ == "__main__":
     unittest.main()
