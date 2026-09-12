@@ -1,0 +1,450 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { api, RATING_LABELS } from "../api.js";
+import {
+  Chip,
+  ErrorBanner,
+  Icon,
+  Modal,
+  MonoId,
+  PrimaryButton,
+  SecondaryButton,
+  Spinner,
+  StateTag,
+  StatusChip,
+  TextAction,
+} from "../ui.jsx";
+
+function DecisionModal({ document_, verdict, onClose, onDone }) {
+  const [decision, setDecision] = useState("approve");
+  const [newRating, setNewRating] = useState(verdict.rating);
+  const [note, setNote] = useState("");
+  const [rationale, setRationale] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const ratingText = RATING_LABELS[verdict.rating] || verdict.rating;
+
+  const submit = async () => {
+    setError("");
+    if (decision === "reject" && !note.trim()) {
+      setError("驳回必须填写专家意见");
+      return;
+    }
+    if (decision === "edit" && newRating === verdict.rating && !rationale.trim()) {
+      setError("改判请选择新等级或填写修改理由");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.decide(document_.id, verdict.id, {
+        decision,
+        expert_note: note.trim() || null,
+        new_rating: decision === "edit" ? newRating : null,
+        rationale: decision === "edit" ? rationale.trim() || null : null,
+      });
+      onDone();
+    } catch (err) {
+      setError(err.message || "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="确认判定" onClose={onClose} width="max-w-md">
+      <div className="flex items-center gap-2">
+        <Chip tone={verdict.rating === "red" ? "red" : verdict.rating === "amber" ? "amber" : "green"} dot>
+          {ratingText}灯
+        </Chip>
+        <span className="text-[14px] font-semibold text-ink">{verdict.rule_name}</span>
+      </div>
+
+      <div className="mt-3 flex gap-1 rounded-md border border-line bg-canvas p-1">
+        {[
+          ["approve", "批准"],
+          ["edit", "改判"],
+          ["reject", "驳回"],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => {
+              setDecision(key);
+              setError("");
+            }}
+            className={`flex-1 rounded px-3 py-1.5 text-[13px] font-medium transition-colors ${
+              decision === key ? "bg-surface text-accent shadow-pop" : "text-ink-2 hover:text-ink"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {decision === "approve" && (
+        <p className="mt-3 text-[13px] text-ink-2">
+          确认将该判定保持为{ratingText}灯吗？批准后将计入定稿报告。
+        </p>
+      )}
+
+      {decision === "edit" && (
+        <div className="mt-3">
+          <div className="text-[13px] font-medium text-ink">新等级</div>
+          <div className="mt-1.5 flex gap-2">
+            {["red", "amber", "green"].map((r) => (
+              <button
+                key={r}
+                onClick={() => setNewRating(r)}
+                className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-[13px] transition-colors ${
+                  newRating === r
+                    ? "border-accent bg-accent-tint font-semibold text-accent"
+                    : "border-line text-ink-2 hover:border-line-strong"
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    r === "red" ? "bg-red-text" : r === "amber" ? "bg-amber-text" : "bg-green-text"
+                  }`}
+                />
+                {RATING_LABELS[r]}
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={rationale}
+            onChange={(e) => setRationale(e.target.value)}
+            placeholder="改判理由（可留空，将记录你的新等级）"
+            rows={2}
+            className="mt-3 w-full rounded-md border border-line-strong px-3 py-2 text-[13px] outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/10"
+          />
+        </div>
+      )}
+
+      {decision === "reject" && (
+        <p className="mt-3 text-[13px] text-ink-2">
+          驳回表示不同意机器判定；被驳回的判定将阻止文档定稿，需后续处理。
+        </p>
+      )}
+
+      <label className="mt-3 block text-[13px] font-medium text-ink">
+        专家意见{decision === "reject" ? <span className="text-red-text">（必填）</span> : "（选填）"}
+      </label>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        className="mt-1.5 w-full rounded-md border border-line-strong px-3 py-2 text-[13px] outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/10"
+      />
+
+      {error && <div className="mt-3"><ErrorBanner message={error} /></div>}
+
+      <div className="mt-4 flex justify-end gap-2">
+        <SecondaryButton onClick={onClose}>取消</SecondaryButton>
+        <PrimaryButton onClick={submit} disabled={busy} className={decision === "reject" ? "bg-red-text hover:bg-red-text/90" : ""}>
+          {decision === "approve" ? "确认批准" : decision === "edit" ? "确认改判" : "确认驳回"}
+        </PrimaryButton>
+      </div>
+    </Modal>
+  );
+}
+
+function VerdictCard({ verdict, canReview, onDecide }) {
+  const [open, setOpen] = useState(false);
+  const stateTone =
+    verdict.review_state === "awaiting_review" ? "amber" : verdict.review_state === "rejected" ? "red" : "muted";
+
+  return (
+    <div className="rounded-lg border border-line bg-surface p-4 shadow-card">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border text-[12px] font-semibold whitespace-nowrap ${
+              verdict.rating === "red"
+                ? "border-red-line bg-red-bg text-red-text"
+                : verdict.rating === "amber"
+                  ? "border-amber-line bg-amber-bg text-amber-text"
+                  : "border-green-line bg-green-bg text-green-text"
+            }`}
+          >
+            {RATING_LABELS[verdict.rating]}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[14px] font-semibold text-ink">{verdict.rule_name}</span>
+              {verdict.weight > 1 && (
+                <span className="rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-ink-2">
+                  ×{verdict.weight}
+                </span>
+              )}
+              <Chip tone={stateTone}>{verdict.review_state === "awaiting_review" ? "待签字" : verdict.review_state === "approved" ? "已批准" : verdict.review_state === "edited" ? "已改判" : verdict.review_state === "rejected" ? "已驳回" : "初判"}</Chip>
+            </div>
+            <p className="mt-1.5 text-[13px] leading-5 text-ink-2">{verdict.rationale}</p>
+            {verdict.gap_reason && (
+              <div className="mt-2 flex items-center gap-1.5 rounded border border-amber-line bg-amber-bg px-2.5 py-1.5 text-[12px] text-amber-text">
+                <Icon name="warning" className="text-[15px]" />
+                缺口：{verdict.gap_reason}
+              </div>
+            )}
+            {(verdict.citations?.length || 0) > 0 && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setOpen((v) => !v)}
+                  className="flex items-center gap-1 text-[12px] font-medium text-ink-2 transition-colors hover:text-accent"
+                >
+                  引用原文
+                  <Icon name={open ? "expand_less" : "expand_more"} className="text-[16px]" />
+                </button>
+                {open && (
+                  <div className="mt-1.5 space-y-1.5">
+                    {verdict.citations.map((citation, index) => (
+                      <blockquote
+                        key={index}
+                        className="rounded-r border-l-[3px] border-accent bg-canvas px-3 py-2 text-[13px] italic leading-5 text-ink-2"
+                      >
+                        “{citation.quote}”
+                      </blockquote>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {verdict.expert_note && (
+              <div className="mt-2 text-[12px] text-ink-3">
+                专家意见（{verdict.reviewed_by}）：{verdict.expert_note}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {canReview && verdict.review_state === "awaiting_review" && (
+          <div className="flex shrink-0 items-center gap-1">
+            <TextAction onClick={() => onDecide(verdict, "approve")}>批准</TextAction>
+            <TextAction onClick={() => onDecide(verdict, "edit")}>改判</TextAction>
+            <TextAction tone="red" onClick={() => onDecide(verdict, "reject")}>
+              驳回
+            </TextAction>
+          </div>
+        )}
+        {!canReview && verdict.review_state === "approved" && (
+          <div className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-green-text">
+            <Icon name="verified" className="text-[15px]" />
+            专家已签字确认
+          </div>
+        )}
+        {!canReview && verdict.review_state === "edited" && (
+          <div className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-accent">
+            <Icon name="published_with_changes" className="text-[15px]" />
+            {verdict.reviewed_by ? `已改判 · ${verdict.reviewed_by}` : "已改判"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function DocumentDetailPage({ documentId }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [deciding, setDeciding] = useState(null); // {verdict, decision}
+  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const detail = await api.document(documentId);
+      setData(detail);
+      setError("");
+    } catch (err) {
+      setError(err.message || "加载失败");
+    }
+  }, [documentId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const processing = data?.document?.status === "parsing" || data?.document?.status === "scoring";
+  useEffect(() => {
+    if (!processing) return undefined;
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [processing, load]);
+
+  const grouped = useMemo(() => {
+    if (!data) return [];
+    const groups = new Map();
+    for (const verdict of data.verdicts) {
+      if (!groups.has(verdict.dimension)) groups.set(verdict.dimension, []);
+      groups.get(verdict.dimension).push(verdict);
+    }
+    return [...groups.entries()];
+  }, [data]);
+
+  if (error && !data) return <ErrorBanner message={error} />;
+  if (!data) return <Spinner />;
+
+  const document_ = data.document;
+  const scorecard = document_.scorecard || { counts: { red: 0, amber: 0, green: 0 } };
+  const pending = data.verdicts.filter((v) => v.review_state === "awaiting_review").length;
+  const finalized = document_.status === "finalized";
+  const canReview = document_.status === "awaiting_review";
+
+  const doFinalize = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.finalize(document_.id);
+      await load();
+    } catch (err) {
+      setError(err.message || "定稿失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doExport = async (format) => {
+    setExporting(format);
+    setError("");
+    try {
+      const blob = await api.export(document_.id, format);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${document_.friendly_id}.${format}`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message || "导出失败");
+    } finally {
+      setExporting("");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <a
+            href="#/"
+            className="flex h-8 w-8 items-center justify-center rounded text-ink-2 transition-colors hover:bg-line-subtle hover:text-ink"
+          >
+            <Icon name="arrow_back" className="text-[20px]" />
+          </a>
+          <MonoId>{document_.friendly_id}</MonoId>
+          <Chip tone="muted">{document_.playbook_id === "delivery-intake" ? "客户交付件风险分析" : "供应商合同合规"}</Chip>
+          <h1 className="truncate text-[20px] font-semibold text-ink">{document_.title}</h1>
+          <StatusChip status={document_.status} />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {canReview && pending > 0 && (
+            <span className="whitespace-nowrap text-[12px] text-ink-3">待签字 {pending} 项</span>
+          )}
+          <SecondaryButton
+            disabled={!finalized}
+            title={finalized ? undefined : "红/黄判定需专家签字后才能导出"}
+            onClick={() => doExport("docx")}
+          >
+            <Icon name="file_download" className="text-[16px]" />
+            {exporting === "docx" ? "导出中…" : "导出报告"}
+          </SecondaryButton>
+          <PrimaryButton
+            disabled={!canReview || pending > 0 || busy}
+            title={
+              finalized
+                ? "文档已定稿"
+                : pending > 0
+                  ? `还有 ${pending} 项待签字`
+                  : undefined
+            }
+            onClick={doFinalize}
+          >
+            <Icon name="check_circle" className="text-[16px]" />
+            {finalized ? "已定稿" : "完成定稿"}
+          </PrimaryButton>
+        </div>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+      {document_.status === "failed" && document_.status_reason && (
+        <div className="flex items-center justify-between rounded border border-red-line bg-red-bg px-3 py-2 text-[13px] text-red-text">
+          <span>处理失败：{document_.status_reason}</span>
+          <TextAction
+            onClick={async () => {
+              try {
+                await api.process(document_.id);
+                load();
+              } catch (err) {
+                setError(err.message);
+              }
+            }}
+          >
+            重试
+          </TextAction>
+        </div>
+      )}
+      {processing && (
+        <div className="flex items-center gap-2 rounded border border-line bg-surface px-3 py-2 text-[13px] text-ink-2">
+          <Icon name="progress_activity" className="animate-spin text-[16px] text-accent" />
+          引擎正在评分，页面会自动刷新…
+        </div>
+      )}
+
+      <div className="flex items-center justify-between rounded-lg border border-line bg-surface px-5 py-3.5 shadow-card">
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[13px] text-ink-2">风险指数</span>
+          <span className="tnum text-[24px] font-bold leading-7 text-ink">{scorecard.risk_index ?? 0}</span>
+          <span className="text-[12px] text-ink-3">/100</span>
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[13px] text-ink-2">条款覆盖率</span>
+          <span className="tnum text-[16px] font-semibold text-ink">{scorecard.coverage_pct ?? 0}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] text-ink-2">审核分布</span>
+          <Chip tone="red" dot>红 <span className="tnum font-semibold">{scorecard.counts.red}</span></Chip>
+          <Chip tone="amber" dot>黄 <span className="tnum font-semibold">{scorecard.counts.amber}</span></Chip>
+          <Chip tone="green" dot>绿 <span className="tnum font-semibold">{scorecard.counts.green}</span></Chip>
+        </div>
+      </div>
+
+      {grouped.map(([dimension, verdicts]) => {
+        const dimensionPending = verdicts.filter((v) => v.review_state === "awaiting_review").length;
+        return (
+          <section key={dimension}>
+            <div className="mb-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="h-[16px] w-[3px] rounded bg-accent" />
+                <span className="text-[15px] font-semibold text-ink">{dimension}</span>
+                <span className="text-[12px] text-ink-3">{verdicts.length} 条</span>
+              </div>
+              <span className="text-[12px] text-ink-3">
+                {dimensionPending > 0 ? `需专家签字确认 ${dimensionPending} 项` : "全部已就绪"}
+              </span>
+            </div>
+            <div className="space-y-3">
+              {verdicts.map((verdict) => (
+                <VerdictCard
+                  key={verdict.id}
+                  verdict={verdict}
+                  canReview={canReview}
+                  onDecide={(v) => setDeciding(v)}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {deciding && (
+        <DecisionModal
+          document_={document_}
+          verdict={deciding}
+          onClose={() => setDeciding(null)}
+          onDone={async () => {
+            setDeciding(null);
+            await load();
+          }}
+        />
+      )}
+    </>
+  );
+}

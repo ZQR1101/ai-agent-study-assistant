@@ -15,3 +15,5 @@ pytest
 
 # Optional scanned-PDF OCR (do not install in CI unless OCR integration is tested):
 # pip install rapidocr-onnxruntime PyMuPDF
+python-docx
+openpyxl

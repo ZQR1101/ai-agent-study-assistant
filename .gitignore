@@ -32,3 +32,6 @@ temp_*.py
 更换需求/
 .pytest_tmp/
 tmp/
+
+# ZCode session artifacts
+.zcode/

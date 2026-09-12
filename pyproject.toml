@@ -38,6 +38,8 @@ dependencies = [
     "langgraph",
     "SQLAlchemy",
     "psycopg[binary]",
+    "python-docx",
+    "openpyxl",
 ]
 
 [project.optional-dependencies]

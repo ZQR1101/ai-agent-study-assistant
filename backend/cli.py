@@ -30,6 +30,8 @@ CORE_DEPENDENCIES = {
     "langgraph": "langgraph",
     "sqlalchemy": "SQLAlchemy",
     "psycopg": "psycopg[binary]",
+    "docx": "python-docx",
+    "openpyxl": "openpyxl",
 }
 
 # Minimal working configuration for `init` when no full .env.example is available
@@ -210,6 +212,102 @@ def cmd_check(_args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Headless single-document review: upload → engine → scorecard printout."""
+
+    from backend.documents.models import Document
+    from backend.documents.service import create_document
+    from backend.engine.orchestrator import ReviewConflict, run_review
+    from backend.platform_db import platform_session
+
+    source = Path(args.file).expanduser().resolve()
+    if not source.is_file():
+        _print_result("ERROR", f"File not found: {source}")
+        return 1
+
+    session = platform_session()
+    try:
+        document, created = create_document(
+            session,
+            playbook_id=args.playbook,
+            filename=source.name,
+            content=source.read_bytes(),
+            actor="cli",
+        )
+        if not created:
+            _print_result("SKIP", f"Duplicate content — already reviewed as {document.friendly_id}")
+            return 0
+        document_id = document.id
+        friendly = document.friendly_id
+    finally:
+        session.close()
+
+    _print_result("INFO", f"Ingested as {friendly}; running review engine...")
+    try:
+        engine_run = run_review(document_id, trigger="cli")
+    except ReviewConflict as exc:
+        _print_result("ERROR", str(exc))
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        _print_result("ERROR", f"Review failed: {exc}")
+        return 1
+
+    _print_result(
+        "OK",
+        f"Review finished in {engine_run.total_latency_ms} ms "
+        f"({engine_run.status})",
+    )
+    session = platform_session()
+    try:
+        document = session.get(Document, document_id)
+        scorecard = document.scorecard or {}
+        counts = scorecard.get("counts", {})
+        print()
+        print(f"=== {friendly} · {document.title} ===")
+        print(
+            f"红 {counts.get('red', 0)} | 黄 {counts.get('amber', 0)} | 绿 {counts.get('green', 0)}"
+            f"    风险指数 {scorecard.get('risk_index', 0)}/100"
+            f"    覆盖率 {scorecard.get('coverage_pct', 0)}%"
+        )
+        for verdict in document.verdicts:
+            rule = verdict.rule
+            label = {"red": "红", "amber": "黄", "green": "绿"}.get(verdict.rating, "?")
+            line = f"[{label}] {rule.name}（{rule.dimension}）: {verdict.rationale[:80]}"
+            print(line)
+            if verdict.gap_reason:
+                print(f"      缺口: {verdict.gap_reason}")
+    finally:
+        session.close()
+    print()
+    _print_result("HINT", "Open the web UI to review, sign off, and export deliverables.")
+    return 0
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    """Run the watched-folder auto-intake loop."""
+
+    from backend.engine.inbox_watcher import inbox_dir, run_watcher
+
+    _print_result("INFO", f"Watching {inbox_dir()} (playbook: {args.playbook})")
+    _print_result("INFO", "Drop supported documents into the folder; Ctrl+C stops.")
+    try:
+        stats = run_watcher(
+            playbook_id=args.playbook,
+            interval_seconds=args.interval,
+            settle_interval=args.settle,
+            once=args.once,
+        )
+    except KeyboardInterrupt:
+        _print_result("OK", "Watcher stopped")
+        return 0
+    _print_result(
+        "OK",
+        f"Ingested {stats.ingested}, duplicates {stats.duplicates}, "
+        f"dead-lettered {stats.dead_lettered}",
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ai-study-assistant",
@@ -231,6 +329,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = subparsers.add_parser("check", help="Verify environment and dependencies")
     check.set_defaults(func=cmd_check)
+
+    from backend.playbooks import list_playbook_ids
+
+    playbook_help = f"Playbook id: {', '.join(list_playbook_ids())}"
+
+    review = subparsers.add_parser("review", help="Review one document and print the scorecard")
+    review.add_argument("file", help="Path to the document (.pdf/.docx/.md/.txt)")
+    review.add_argument("--playbook", default="contract-compliance", help=playbook_help)
+    review.set_defaults(func=cmd_review)
+
+    inbox = subparsers.add_parser("inbox", help="Run the watched-folder auto-intake loop")
+    inbox.add_argument("--playbook", default="contract-compliance", help=playbook_help)
+    inbox.add_argument("--interval", type=float, default=10.0, help="Poll interval seconds")
+    inbox.add_argument("--settle", type=float, default=2.0, help="File-settle window seconds")
+    inbox.add_argument("--once", action="store_true", help="Single poll pass and exit")
+    inbox.set_defaults(func=cmd_inbox)
 
     return parser
 

@@ -122,6 +122,16 @@ app.add_middleware(
     ],
 )
 
+from backend.auth.routes import router as auth_router  # noqa: E402
+from backend.documents.routes import router as documents_router  # noqa: E402
+from backend.documents.review_routes import router as document_review_router  # noqa: E402
+from backend.documents.rules_routes import router as rules_router  # noqa: E402
+
+app.include_router(auth_router)
+app.include_router(documents_router)
+app.include_router(document_review_router)
+app.include_router(rules_router)
+
 
 @app.on_event("startup")
 def _startup_init_db():
@@ -132,6 +142,14 @@ def _startup_init_db():
             logger.info("Database tables initialized")
         except Exception as exc:
             logger.warning("Failed to initialize database: %s", exc)
+
+    try:
+        from backend.platform_db import init_platform_db
+
+        init_platform_db()
+        logger.info("Platform database initialized")
+    except Exception as exc:
+        logger.warning("Failed to initialize platform database: %s", exc)
 
     config = get_config()
     if config.enable_rag_warmup:

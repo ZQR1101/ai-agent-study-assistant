@@ -1,0 +1,26 @@
+{
+  "description": "规则手册审查引擎评测用例。每例指定剧本、样例文档与期望判定（rule_name → rating）。指标：引用命中率（引用可回溯原文）、覆盖正确率（有据规则未判红）、拒答正确率（无据规则正确判红并给缺口说明）。",
+  "cases": [
+    {
+      "id": "rev_contract_clean_001",
+      "document": "samples/供应商合同_样例A_条款完备.txt",
+      "playbook_id": "contract-compliance",
+      "expectation": "条款完备的合同应以绿为主，缺口红不超过 2 条",
+      "max_red": 2
+    },
+    {
+      "id": "rev_contract_risky_002",
+      "document": "samples/供应商合同_样例B_存在风险.txt",
+      "playbook_id": "contract-compliance",
+      "expectation": "风险合同应产出大量红/黄判定，且引用必须可回溯",
+      "min_red": 5
+    },
+    {
+      "id": "rev_sow_gaps_003",
+      "document": "samples/客户SOW_样例_信息不全.txt",
+      "playbook_id": "delivery-intake",
+      "expectation": "信息不全的 SOW 应触发大量缺口红（验收标准/时间/角色/范围等），且缺口说明非空",
+      "min_red": 4
+    }
+  ]
+}
