@@ -21,6 +21,9 @@ function useHashRoute() {
 
 function Shell({ user, onLogout, queueCount }) {
   const hash = useHashRoute();
+  const [notifications, setNotifications] = useState([]);
+  const [unread, setUnread] = useState(0);
+  const [panelOpen, setPanelOpen] = useState(false);
 
   let content;
   if (hash.startsWith("#/documents/")) {
@@ -35,6 +38,50 @@ function Shell({ user, onLogout, queueCount }) {
     content = <WorkbenchPage />;
   }
 
+  const refreshNotifications = useCallback(() => {
+    api
+      .notifications()
+      .then((data) => {
+        setNotifications(data.notifications);
+        setUnread(data.unread);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshNotifications();
+    const timer = setInterval(refreshNotifications, 15000);
+    return () => clearInterval(timer);
+  }, [refreshNotifications]);
+
+  const handleItemClick = useCallback(
+    async (item) => {
+      if (!item.read) {
+        try {
+          await api.markNotificationRead(item.id);
+        } catch {
+          /* ignore */
+        }
+        refreshNotifications();
+      }
+      const target = item.payload?.document_id;
+      if (target) {
+        window.location.hash = `#/documents/${target}`;
+        setPanelOpen(false);
+      }
+    },
+    [refreshNotifications],
+  );
+
+  const handleMarkAllRead = useCallback(async () => {
+    try {
+      await api.markAllNotificationsRead();
+    } catch {
+      /* ignore */
+    }
+    refreshNotifications();
+  }, [refreshNotifications]);
+
   return (
     <div className="min-h-screen bg-canvas">
       <Sidebar
@@ -43,7 +90,14 @@ function Shell({ user, onLogout, queueCount }) {
         queueCount={queueCount}
         onLogout={onLogout}
       />
-      <Topbar />
+      <Topbar
+        notifications={notifications}
+        unread={unread}
+        panelOpen={panelOpen}
+        onTogglePanel={() => setPanelOpen((v) => !v)}
+        onMarkAllRead={handleMarkAllRead}
+        onItemClick={handleItemClick}
+      />
       <main className="min-h-screen bg-canvas pl-[200px] pt-14">
         <div className="mx-auto w-full max-w-[1600px] space-y-6 p-6">{content}</div>
       </main>

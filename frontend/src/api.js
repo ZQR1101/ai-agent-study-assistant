@@ -81,6 +81,11 @@ export const api = {
   updateRule: (id, body) => request(`/rules/${id}`, { method: "PATCH", body }),
   auditRecent: () => request("/documents/audit/recent"),
   documentAudit: (id) => request(`/documents/${id}/audit`),
+  notifications: () => request("/notifications"),
+  markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
+  ask: (docId, question) =>
+    request(`/documents/${docId}/ask`, { method: "POST", body: { question } }),
 };
 
 export const STATUS_LABELS = {

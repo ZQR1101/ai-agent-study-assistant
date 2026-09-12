@@ -127,6 +127,24 @@ def run_review(document_id: str, *, trigger: str = "upload", custom_llm=None) ->
             _fail(session, document, engine_run, "score", "规则手册为空", stages, started)
             raise ReviewConflict("规则手册为空")
 
+        from backend.config import get_config
+
+        retrieval_mode = get_config().retrieval_mode
+        embedder = None
+        if retrieval_mode in ("semantic", "hybrid"):
+            from backend.engine.retrieval import get_clause_embedder
+
+            embedder = get_clause_embedder()
+            if embedder is None or not embedder.ensure_ready(parsed.clauses):
+                embedder = None
+                record_audit(
+                    session,
+                    correlation_id=document.friendly_id,
+                    event="review.retrieval_fallback",
+                    payload={"requested": retrieval_mode, "fell_back_to": "keyword"},
+                )
+                retrieval_mode = "keyword"
+
         verdict_rows: list[dict] = []
         try:
             for rule in rules:
@@ -137,6 +155,8 @@ def run_review(document_id: str, *, trigger: str = "upload", custom_llm=None) ->
                         parsed.text,
                         playbook_instructions=playbook.scoring_instructions,
                         custom_llm=custom_llm,
+                        embedder=embedder,
+                        retrieval_mode=retrieval_mode,
                     )
                 )
         except Exception as exc:  # LLM infrastructure failure
@@ -173,6 +193,7 @@ def run_review(document_id: str, *, trigger: str = "upload", custom_llm=None) ->
                 "latency_ms": int((time.perf_counter() - stage_start) * 1000),
                 "verdicts": len(verdict_rows),
                 "failures": sum(1 for row in verdict_rows if row["failure"]),
+                "retrieval_mode": retrieval_mode,
             }
         )
         record_audit(
@@ -212,6 +233,22 @@ def run_review(document_id: str, *, trigger: str = "upload", custom_llm=None) ->
                 "green": scorecard["counts"]["green"],
                 "risk_index": scorecard["risk_index"],
             },
+        )
+
+        from backend.notifications.service import create_notification
+
+        pending = scorecard["counts"]["red"] + scorecard["counts"]["amber"]
+        create_notification(
+            session,
+            type="scored",
+            title=f"{document.friendly_id} 评分完成",
+            body=(
+                f"{document.title}：红 {scorecard['counts']['red']} · "
+                f"黄 {scorecard['counts']['amber']} · 绿 {scorecard['counts']['green']}，"
+                f"待签字 {pending} 项"
+            ),
+            payload={"document_id": document.id, "pending": pending},
+            correlation_id=document.friendly_id,
         )
 
         engine_run.status = "succeeded"
@@ -254,5 +291,15 @@ def _fail(
         correlation_id=document.friendly_id,
         event="review.failed",
         payload={"stage": stage, "error": error},
+    )
+    from backend.notifications.service import create_notification
+
+    create_notification(
+        session,
+        type="failed",
+        title=f"{document.friendly_id} 处理失败",
+        body=error,
+        payload={"stage": stage},
+        correlation_id=document.friendly_id,
     )
     session.commit()

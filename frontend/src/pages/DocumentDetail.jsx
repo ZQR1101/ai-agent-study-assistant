@@ -241,6 +241,111 @@ function VerdictCard({ verdict, canReview, onDecide }) {
   );
 }
 
+function AskPanel({ documentId }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState({}); // `${index}-${ordinal}` → bool
+
+  const send = async () => {
+    const question = input.trim();
+    if (!question || busy) return;
+    setInput("");
+    setError("");
+    setMessages((m) => [...m, { role: "user", text: question }]);
+    setBusy(true);
+    try {
+      const data = await api.ask(documentId, question);
+      setMessages((m) => [...m, { role: "assistant", text: data.answer, citations: data.citations }]);
+    } catch (err) {
+      setError(err.status === 502 ? "问答模型调用失败，请稍后重试" : err.message || "问答失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const renderAnswer = (message, index) => {
+    const parts = message.text.split(/(\[条款 \d+\])/g);
+    return parts.map((part, partIndex) => {
+      const match = part.match(/^\[条款 (\d+)\]$/);
+      if (!match) return <span key={partIndex}>{part}</span>;
+      const ordinal = Number(match[1]);
+      const citation = (message.citations || []).find((c) => c.ordinal === ordinal);
+      const key = `${index}-${ordinal}`;
+      const open = expanded[key];
+      return (
+        <span key={partIndex} className="inline">
+          <button
+            onClick={() => citation && setExpanded((e) => ({ ...e, [key]: !e[key] }))}
+            className={`mx-0.5 inline-flex items-center whitespace-nowrap rounded border px-1.5 py-0.5 align-baseline text-[11px] font-medium transition-colors ${
+              citation && open
+                ? "border-accent bg-accent-tint text-accent"
+                : citation
+                  ? "border-line bg-canvas text-accent hover:border-accent"
+                  : "border-line bg-canvas text-ink-3"
+            }`}
+            title={citation ? "点击查看条款原文" : undefined}
+          >
+            [条款 {ordinal}]
+          </button>
+          {open && citation && (
+            <span className="block rounded-r border-l-[3px] border-accent bg-canvas px-3 py-2 my-1 text-[12px] italic leading-5 text-ink-2">
+              {citation.heading ? `${citation.heading}：` : ""}
+              {citation.quote}
+            </span>
+          )}
+        </span>
+      );
+    });
+  };
+
+  return (
+    <section className="rounded-lg border border-line bg-surface p-4 shadow-card">
+      <div className="flex items-center gap-2">
+        <Icon name="forum" className="text-[18px] text-accent" />
+        <span className="text-[15px] font-semibold text-ink">文档追问</span>
+        <span className="text-[12px] text-ink-3">仅基于本文档条款回答，回答标注条款出处</span>
+      </div>
+
+      {messages.length > 0 && (
+        <div className="mt-3 space-y-3">
+          {messages.map((message, index) =>
+            message.role === "user" ? (
+              <div key={index} className="flex justify-end">
+                <div className="max-w-[70%] rounded-lg rounded-br-sm bg-accent px-3.5 py-2 text-[13px] text-white">
+                  {message.text}
+                </div>
+              </div>
+            ) : (
+              <div key={index} className="flex justify-start">
+                <div className="max-w-[85%] rounded-lg rounded-bl-sm border border-line bg-canvas px-3.5 py-2 text-[13px] leading-6 text-ink">
+                  {renderAnswer(message, index)}
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+
+      {error && <div className="mt-3"><ErrorBanner message={error} /></div>}
+
+      <div className="mt-3 flex gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && send()}
+          placeholder="例如：付款账期是怎么约定的？"
+          className="h-9 flex-1 rounded-md border border-line-strong bg-surface px-3 text-[13px] outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/10"
+        />
+        <PrimaryButton onClick={send} disabled={busy || !input.trim()}>
+          {busy ? "思考中…" : "提问"}
+        </PrimaryButton>
+      </div>
+    </section>
+  );
+}
+
 export default function DocumentDetailPage({ documentId }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -444,6 +549,10 @@ export default function DocumentDetailPage({ documentId }) {
             await load();
           }}
         />
+      )}
+
+      {(document_.status === "awaiting_review" || finalized) && (
+        <AskPanel documentId={document_.id} />
       )}
     </>
   );

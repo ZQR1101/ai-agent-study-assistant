@@ -152,7 +152,14 @@ export function Sidebar({ active, user, queueCount, onLogout }) {
   );
 }
 
-export function Topbar() {
+export function Topbar({
+  notifications = [],
+  unread = 0,
+  panelOpen = false,
+  onTogglePanel,
+  onMarkAllRead,
+  onItemClick,
+}) {
   return (
     <header className="fixed left-[200px] right-0 top-0 z-40 flex h-14 items-center justify-between border-b border-line bg-canvas/80 px-6 backdrop-blur">
       <div className="flex items-center gap-2 text-[12px] font-medium text-ink-2">
@@ -164,9 +171,58 @@ export function Topbar() {
           <span className="h-2 w-2 rounded-full bg-accent" />
           <span>引擎运行中</span>
         </div>
-        <button className="flex h-8 w-8 items-center justify-center rounded text-ink-2 transition-colors hover:bg-line-subtle hover:text-ink">
-          <Icon name="notifications" className="text-[20px]" />
-        </button>
+        <div className="relative">
+          <button
+            onClick={onTogglePanel}
+            className="relative flex h-8 w-8 items-center justify-center rounded text-ink-2 transition-colors hover:bg-line-subtle hover:text-ink"
+          >
+            <Icon name={unread > 0 ? "notifications_active" : "notifications"} className="text-[20px]" />
+            {unread > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-red-text px-1 text-[10px] font-semibold text-white">
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+          </button>
+          {panelOpen && (
+            <div className="absolute right-0 top-10 w-[380px] rounded-lg border border-line bg-surface shadow-pop">
+              <div className="flex items-center justify-between border-b border-line-subtle px-4 py-2.5">
+                <span className="text-[13px] font-semibold text-ink">通知中心</span>
+                {unread > 0 && (
+                  <button
+                    onClick={onMarkAllRead}
+                    className="text-[12px] text-accent hover:underline"
+                  >
+                    全部已读
+                  </button>
+                )}
+              </div>
+              <div className="max-h-[380px] overflow-y-auto">
+                {notifications.length === 0 && (
+                  <div className="py-10 text-center text-[13px] text-ink-3">暂无通知</div>
+                )}
+                {notifications.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => onItemClick(item)}
+                    className={`block w-full border-b border-line-subtle px-4 py-3 text-left transition-colors last:border-0 hover:bg-canvas ${
+                      item.read ? "opacity-60" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}
+                      <span className={`truncate text-[13px] ${item.read ? "text-ink-2" : "font-semibold text-ink"}`}>
+                        {item.title}
+                      </span>
+                    </div>
+                    {item.body && (
+                      <div className="mt-0.5 line-clamp-2 text-[12px] leading-4 text-ink-3">{item.body}</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <button className="flex h-8 w-8 items-center justify-center rounded text-ink-2 transition-colors hover:bg-line-subtle hover:text-ink">
           <Icon name="help_outline" className="text-[20px]" />
         </button>

@@ -127,6 +127,10 @@ def init_platform_db() -> None:
         Rule,
         Verdict,
     )
+    from backend.notifications.models import (  # noqa: F401
+        Notification,
+        NotificationRead,
+    )
 
     engine = get_platform_engine()
     PlatformBase.metadata.create_all(engine)

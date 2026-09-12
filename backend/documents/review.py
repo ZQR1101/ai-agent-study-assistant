@@ -164,5 +164,15 @@ def finalize_document(session: Session, *, document: Document, actor: str) -> Do
         actor=actor,
         payload={"scorecard": document.scorecard},
     )
+    from backend.notifications.service import create_notification
+
+    create_notification(
+        session,
+        type="finalized",
+        title=f"{document.friendly_id} 已定稿",
+        body=f"{document.title} 完成签字定稿，报告可导出。",
+        payload={"document_id": document.id},
+        correlation_id=document.friendly_id,
+    )
     session.commit()
     return document

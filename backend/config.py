@@ -33,6 +33,7 @@ DEFAULT_BASE_URL = DEEPSEEK_BASE_URL
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBEDDING_MODEL_PATH = PROJECT_ROOT / "models" / DEFAULT_EMBEDDING_MODEL
 QUERY_REWRITE_MODES = {"off", "conditional", "always"}
+RETRIEVAL_MODES = {"keyword", "semantic", "hybrid"}
 CORS_DEFAULT_ORIGINS = (
     "http://127.0.0.1:5500",
     "http://localhost:5500",
@@ -90,6 +91,7 @@ class AppConfig:
     reranker_top_n: int
     reranker_min_score: float
     query_rewrite_mode: str
+    retrieval_mode: str
     cors_allowed_origins: tuple[str, ...]
     enable_insecure_dev_tool_keys: bool
     tool_approval_key: str | None
@@ -175,6 +177,11 @@ def read_float_env(name: str, default: float) -> float:
 def read_query_rewrite_mode() -> str:
     mode = (os.getenv("QUERY_REWRITE_MODE", "off").strip().lower() or "off")
     return mode if mode in QUERY_REWRITE_MODES else "off"
+
+
+def read_retrieval_mode() -> str:
+    mode = (os.getenv("RETRIEVAL_MODE", "hybrid").strip().lower() or "hybrid")
+    return mode if mode in RETRIEVAL_MODES else "hybrid"
 
 
 def read_cors_allowed_origins() -> tuple[str, ...]:
@@ -264,6 +271,7 @@ def get_config() -> AppConfig:
         reranker_top_n=read_positive_int_env("RERANKER_TOP_N", 15),
         reranker_min_score=read_float_env("RERANKER_MIN_SCORE", 0.0),
         query_rewrite_mode=read_query_rewrite_mode(),
+        retrieval_mode=read_retrieval_mode(),
         cors_allowed_origins=read_cors_allowed_origins(),
         enable_insecure_dev_tool_keys=enable_insecure_dev_tool_keys,
         tool_approval_key=read_tool_secret(

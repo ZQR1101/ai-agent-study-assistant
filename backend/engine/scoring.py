@@ -77,10 +77,17 @@ def score_rule(
     *,
     playbook_instructions: str,
     custom_llm=None,
+    embedder=None,
+    retrieval_mode: str = "hybrid",
 ) -> dict:
     """Produce one verdict dict for one rule against the document."""
 
-    selected = select_clauses(clauses, f"{rule.name} {rule.guidance}")
+    selected = select_clauses(
+        clauses,
+        f"{rule.name} {rule.guidance}",
+        embedder=embedder,
+        mode=retrieval_mode,
+    )
     prompt = _build_prompt(rule, selected, playbook_instructions)
     raw_content = _llm_invoke(custom_llm, prompt)
     data = _extract_json(raw_content)
