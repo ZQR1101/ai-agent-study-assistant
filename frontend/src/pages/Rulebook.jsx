@@ -6,6 +6,7 @@ import {
   Icon,
   Modal,
   PrimaryButton,
+  TextAction,
   SecondaryButton,
   Spinner,
 } from "../ui.jsx";
@@ -109,6 +110,78 @@ function RuleModal({ playbooks, activePlaybook, rule, dimensions, onClose, onSav
   );
 }
 
+function SuggestionsSection({ playbookId, isAdmin, onChanged }) {
+  const [suggestions, setSuggestions] = useState(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api.suggestions(playbookId, "proposed");
+      setSuggestions(data.suggestions);
+    } catch (err) {
+      setError(err.message || "加载失败");
+    }
+  }, [playbookId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const act = async (id, action) => {
+    try {
+      if (action === "accept") await api.acceptSuggestion(id);
+      else await api.dismissSuggestion(id);
+      await load();
+      onChanged?.();
+    } catch (err) {
+      setError(err.message || "操作失败");
+    }
+  };
+
+  if (!suggestions) return null;
+  if (error) return <ErrorBanner message={error} />;
+  if (!suggestions.length) return null;
+
+  return (
+    <section className="rounded-lg border border-amber-line bg-amber-bg/40 p-4">
+      <div className="flex items-center gap-2">
+        <Icon name="lightbulb" className="text-[18px] text-amber-text" />
+        <span className="text-[14px] font-semibold text-ink">规则建议</span>
+        <span className="text-[12px] text-ink-3">
+          评审代理起草的规则手册增补，{isAdmin ? "确认后入库生效" : "需管理员确认"}
+        </span>
+      </div>
+      <div className="mt-3 space-y-2">
+        {suggestions.map((s) => (
+          <div key={s.id} className="rounded border border-line bg-surface p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Chip tone="amber">{s.dimension}</Chip>
+                <span className="truncate text-[14px] font-semibold text-ink">{s.name}</span>
+                <span className="rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] text-ink-2">
+                  ×{s.weight}
+                </span>
+              </div>
+              {isAdmin && (
+                <div className="flex shrink-0 items-center gap-1">
+                  <TextAction onClick={() => act(s.id, "accept")}>接受入库</TextAction>
+                  <TextAction tone="red" onClick={() => act(s.id, "dismiss")}>
+                    驳回
+                  </TextAction>
+                </div>
+              )}
+            </div>
+            <p className="mt-1.5 text-[12px] leading-5 text-ink-2">{s.guidance}</p>
+            {s.rationale && (
+              <p className="mt-1 text-[12px] text-ink-3">立论依据：{s.rationale}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function RulebookPage({ user }) {
   const [playbooks, setPlaybooks] = useState([]);
   const [activePlaybook, setActivePlaybook] = useState(null);
@@ -185,6 +258,13 @@ export default function RulebookPage({ user }) {
       </div>
 
       {error && <ErrorBanner message={error} />}
+
+      <SuggestionsSection
+        key={activePlaybook}
+        playbookId={activePlaybook}
+        isAdmin={isAdmin}
+        onChanged={load}
+      />
 
       <div className="space-y-6">
         {grouped.map(({ dimension, rules: groupRules }) => (

@@ -88,14 +88,15 @@ def send_notification_email(session: Session, notification) -> bool:
         docx_bytes = None
         if notification.type == "finalized" and notification.payload:
             from backend.documents.models import Document
-            from backend.engine.export import render_deliverable
+            from backend.engine.export import default_docx_key, render_deliverable
             from backend.playbooks import get_playbook
 
             document = session.get(Document, notification.payload.get("document_id"))
             if document is not None:
                 playbook = get_playbook(document.playbook_id)
-                key = "handover_docx" if "handover_docx" in playbook.deliverables else "compliance_report_docx"
-                docx_bytes = render_deliverable(session, document, key)
+                docx_bytes = render_deliverable(
+                    session, document, default_docx_key(playbook)
+                )
 
         message = build_message(notification, docx_bytes=docx_bytes)
         host = _env("EMAIL_HOST")

@@ -241,8 +241,7 @@ function VerdictCard({ verdict, canReview, onDecide }) {
   );
 }
 
-function AskPanel({ documentId }) {
-  const [messages, setMessages] = useState([]);
+function AskPanel({ documentId }) {  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -346,12 +345,30 @@ function AskPanel({ documentId }) {
   );
 }
 
-export default function DocumentDetailPage({ documentId }) {
+export default function DocumentDetailPage({ documentId, user }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [deciding, setDeciding] = useState(null); // {verdict, decision}
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState("");
+  const [suggestMsg, setSuggestMsg] = useState("");
+
+  const analyzeGaps = async () => {
+    setSuggestMsg("");
+    setBusy(true);
+    try {
+      const data = await api.generateSuggestions(documentId);
+      setSuggestMsg(
+        data.created > 0
+          ? `代理起草了 ${data.created} 条新规则建议——去「规则手册」页确认后生效。`
+          : "代理未发现值得新增的规则。"
+      );
+    } catch (err) {
+      setSuggestMsg(err.message || "分析失败");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -443,6 +460,12 @@ export default function DocumentDetailPage({ documentId }) {
           {canReview && pending > 0 && (
             <span className="whitespace-nowrap text-[12px] text-ink-3">待签字 {pending} 项</span>
           )}
+          {user?.role === "admin" && (document_.status === "awaiting_review" || finalized) && (
+            <SecondaryButton onClick={analyzeGaps} disabled={busy}>
+              <Icon name="lightbulb" className="text-[16px]" />
+              {busy ? "分析中…" : "分析规则缺口"}
+            </SecondaryButton>
+          )}
           <SecondaryButton
             disabled={!finalized}
             title={finalized ? undefined : "红/黄判定需专家签字后才能导出"}
@@ -467,6 +490,13 @@ export default function DocumentDetailPage({ documentId }) {
           </PrimaryButton>
         </div>
       </div>
+
+      {suggestMsg && (
+        <div className="flex items-center gap-2 rounded border border-accent/30 bg-accent-tint px-3 py-2 text-[13px] text-accent">
+          <Icon name="lightbulb" className="text-[16px]" />
+          {suggestMsg}
+        </div>
+      )}
 
       {error && <ErrorBanner message={error} />}
       {document_.status === "failed" && document_.status_reason && (

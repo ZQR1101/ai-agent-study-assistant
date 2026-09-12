@@ -125,6 +125,7 @@ def init_platform_db() -> None:
         EngineRun,
         ReviewEvent,
         Rule,
+        RuleSuggestion,
         Verdict,
     )
     from backend.notifications.models import (  # noqa: F401

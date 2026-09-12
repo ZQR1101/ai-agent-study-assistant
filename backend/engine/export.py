@@ -193,13 +193,46 @@ def build_scorecard_xlsx(session: Session, document: Document) -> bytes:
     return buffer.getvalue()
 
 
+def build_dpa_report(session: Session, document: Document) -> bytes:
+    verdicts, rules = _load_context(session, document)
+    doc = _base_docx("数据处理协议（DPA）审查报告", document)
+    _render_scorecard_paragraph(doc, document.scorecard or {})
+    _add_verdict_table(doc, verdicts, rules)
+
+    doc.add_heading("逐条判定与引用", level=1)
+    for verdict in verdicts:
+        rule = rules.get(verdict.rule_id)
+        doc.add_heading(f"{rule.name if rule else verdict.rule_id} — {RATING_LABELS.get(verdict.rating, verdict.rating)}", level=2)
+        doc.add_paragraph(verdict.rationale)
+        for index, citation in enumerate(verdict.citations or [], start=1):
+            doc.add_paragraph(f"引用{index}：{citation.get('quote', '')}", style="Intense Quote")
+        if verdict.gap_reason:
+            doc.add_paragraph(f"缺口说明：{verdict.gap_reason}")
+        if verdict.expert_note:
+            doc.add_paragraph(f"专家意见（{verdict.reviewed_by}）：{verdict.expert_note}")
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
 # playbook deliverable key → (filename prefix, builder)
 DELIVERABLE_BUILDERS = {
     "compliance_report_docx": build_compliance_report,
+    "dpa_report_docx": build_dpa_report,
     "discovery_brief_docx": build_discovery_brief,
     "handover_docx": build_handover_doc,
     "scorecard_xlsx": build_scorecard_xlsx,
 }
+
+
+def default_docx_key(playbook) -> str:
+    """The playbook's primary Word deliverable key (never the xlsx matrix)."""
+
+    for key in playbook.deliverables:
+        if key.endswith("_docx"):
+            return key
+    return "compliance_report_docx"
 
 
 def render_deliverable(session: Session, document: Document, key: str) -> bytes:

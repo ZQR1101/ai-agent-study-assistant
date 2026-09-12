@@ -136,6 +136,28 @@ class AuditEntry(PlatformBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RuleSuggestion(PlatformBase):
+    """LLM-drafted rulebook addition; takes effect only after admin acceptance."""
+
+    __tablename__ = "rule_suggestions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    playbook_id: Mapped[str] = mapped_column(String(50), index=True)
+    dimension: Mapped[str] = mapped_column(String(50))
+    name: Mapped[str] = mapped_column(String(200))
+    guidance: Mapped[str] = mapped_column(Text)
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    source_document_id: Mapped[str] = mapped_column(String(36), index=True)
+    # proposed | accepted | dismissed
+    status: Mapped[str] = mapped_column(String(20), default="proposed", index=True)
+    decided_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class EngineRun(PlatformBase):
     __tablename__ = "engine_runs"
 

@@ -291,4 +291,4 @@ class TestAccessControl:
     def test_playbooks_endpoint_lists_both(self, client, admin_headers):
         response = client.get("/documents/playbooks", headers=admin_headers)
         ids = {p["id"] for p in response.json()["playbooks"]}
-        assert ids == {"contract-compliance", "delivery-intake"}
+        assert ids == {"contract-compliance", "delivery-intake", "dpa-review"}

@@ -115,9 +115,10 @@ class TestSeedData:
             by_playbook = {}
             for rule in rules:
                 by_playbook.setdefault(rule.playbook_id, []).append(rule)
-            assert set(by_playbook) == {"contract-compliance", "delivery-intake"}
+            assert set(by_playbook) == {"contract-compliance", "delivery-intake", "dpa-review"}
             assert len(by_playbook["contract-compliance"]) == 15
             assert len(by_playbook["delivery-intake"]) == 12
+            assert len(by_playbook["dpa-review"]) == 11
         finally:
             session.close()
             engine.dispose()
@@ -132,7 +133,7 @@ class TestSeedData:
         engine = create_engine(f"sqlite:///{platform_env['db_path']}")
         session = sessionmaker(bind=engine)()
         try:
-            assert session.query(Rule).count() == 27
+            assert session.query(Rule).count() == 38
         finally:
             session.close()
             engine.dispose()
@@ -168,7 +169,12 @@ class TestPlaybookRegistry:
             ),
         )
         register_playbook(spec)
-        assert "toy" in list_playbook_ids()
+        try:
+            assert "toy" in list_playbook_ids()
+        finally:
+            from backend.playbooks import registry
+
+            registry._PLAYBOOKS.pop("toy", None)
 
     def test_invalid_dimension_rejected(self):
         from backend.playbooks.base import PlaybookSpec

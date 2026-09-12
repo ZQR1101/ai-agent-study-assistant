@@ -126,12 +126,14 @@ from backend.auth.routes import router as auth_router  # noqa: E402
 from backend.documents.routes import router as documents_router  # noqa: E402
 from backend.documents.review_routes import router as document_review_router  # noqa: E402
 from backend.documents.rules_routes import router as rules_router  # noqa: E402
+from backend.documents.suggestions_routes import router as suggestions_router  # noqa: E402
 from backend.notifications.routes import router as notifications_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(document_review_router)
 app.include_router(rules_router)
+app.include_router(suggestions_router)
 app.include_router(notifications_router)
 
 

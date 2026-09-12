@@ -27,7 +27,7 @@ function Shell({ user, onLogout, queueCount }) {
 
   let content;
   if (hash.startsWith("#/documents/")) {
-    content = <DocumentDetailPage documentId={hash.replace("#/documents/", "")} />;
+    content = <DocumentDetailPage documentId={hash.replace("#/documents/", "")} user={user} />;
   } else if (hash === "#/queue") {
     content = <ReviewQueuePage />;
   } else if (hash === "#/rulebook") {

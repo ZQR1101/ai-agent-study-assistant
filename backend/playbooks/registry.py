@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from backend.playbooks.base import PlaybookSpec
 from backend.playbooks.contract_compliance import CONTRACT_COMPLIANCE_PLAYBOOK
+from backend.playbooks.dpa_review import DPA_REVIEW_PLAYBOOK
 from backend.playbooks.delivery_intake import DELIVERY_INTAKE_PLAYBOOK
 
 _PLAYBOOKS: dict[str, PlaybookSpec] = {
     spec.id: spec
-    for spec in (CONTRACT_COMPLIANCE_PLAYBOOK, DELIVERY_INTAKE_PLAYBOOK)
+    for spec in (CONTRACT_COMPLIANCE_PLAYBOOK, DELIVERY_INTAKE_PLAYBOOK, DPA_REVIEW_PLAYBOOK)
 }
 
 

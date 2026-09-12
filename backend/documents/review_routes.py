@@ -248,12 +248,9 @@ def export_document(
         from backend.playbooks import get_playbook
 
         playbook = get_playbook(document.playbook_id)
-        if format == "xlsx":
-            key = "scorecard_xlsx"
-        elif "handover_docx" in playbook.deliverables:
-            key = "handover_docx"
-        else:
-            key = "compliance_report_docx"
+        from backend.engine.export import default_docx_key
+
+        key = "scorecard_xlsx" if format == "xlsx" else default_docx_key(playbook)
         try:
             content = render_deliverable(session, document, key)
         except ValueError as exc:

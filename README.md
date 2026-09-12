@@ -83,6 +83,7 @@ rulebook inbox --playbook contract-compliance
 | `rulebook serve` | 启动 API 服务 |
 | `rulebook review <file> --playbook <id>` | 无头审查单份文档并打印记分卡 |
 | `rulebook inbox --playbook <id> [--interval N] [--once]` | 监听文件夹自动收件 |
+| `rulebook mail --playbook <id> [--interval N] [--once]` | IMAP 邮件收件（附件自动评审，主题标签路由剧本） |
 | `rulebook init` / `check` | 初始化 / 环境体检 |
 
 ## 📚 两套剧本（同一个引擎）
@@ -114,26 +115,27 @@ rulebook inbox --playbook contract-compliance
 ## ✅ 测试
 
 ```bash
-pytest   # 435 tests：认证/种子数据、引擎三路径（happy/duplicate/failure）、
+pytest   # 482 tests：认证/种子数据、引擎三路径（happy/duplicate/failure）、治理、邮件、检索模式、规则建议、
          # 治理（非法迁移/终稿门/幂等）、收件箱、既有 RAG/工具安全回归
 ```
 
-## ⚠️ 当前限制
+## ⚠️ 当前限制（v1.1）
 
-- 前端 UI 待实现：现阶段通过 API（`/docs` 交互式文档）与 CLI 操作。
+- 文档内邮件入口的运维监控（退信/限流告警）尚无面板。
 - 扫描版 PDF 的 OCR 文本可提取，但 OCR 质量对评分的影响未做专项评测。
-- 条款检索基于确定性的关键词匹配 + 字符预算，超长复杂合同可能需要扩大 `MAX_RULE_CONTEXT_CHARS`。
+- 条款检索默认 hybrid（语义+关键词），超长合同可通过 `RETRIEVAL_MODE` 与 `MAX_RULE_CONTEXT_CHARS` 调优。
 - 单机单库（SQLite WAL），面向 3–15 人小团队；多租户与外部邮件（IMAP）触发在路线图上。
 
-## 🗺️ 路线图
+## 🗺️ v1.1 已交付 & 后续路线
 
-- 审查工作台前端（登录、工作台、文档详情、审批队列、规则手册编辑、审计视图、追问面板）
-- IMAP 邮件触发（对接 A 的邮件入口叙事）
-- 评测报告常量化：`scripts/evaluate_review_engine.py --fresh` 用真实 LLM 跑 `eval_cases/review_cases.json`，产出引用命中率 / 拒答正确率 / 时延报告（`--fake` 可离线验证 harness）
-- 第三剧本（ESG 披露核查）以纯数据方式接入，持续验证引擎通用性
+**v1.1 新增**：语义/混合条款检索（`RETRIEVAL_MODE=hybrid`，本地 embedding，失败自动回退 keyword 并审计）、IMAP 邮件收件（`rulebook mail`，主题标签路由剧本）+ SMTP 通知（定稿邮件自动附 Word 报告）、应用内通知中心、文档内追问面板、规则建议 agent（生成式起草，管理员确认入库）、第三剧本 DPA 数据处理协议审查（纯数据落地，引擎零改动）。
+
+**后续候选**：ESG 等更多业务域、文档对比与供应商历史档案、WebSocket 实时推送、多租户与用户个人设置、Celery 任务队列、OCR 评分增强。
+
+**评测工具**：`scripts/evaluate_review_engine.py`（引用命中率/拒答正确率，真实 LLM）、`scripts/evaluate_retrieval.py`（选段命中率 keyword/semantic/hybrid 三模式对比）、`scripts/evaluate_review_engine.py --fake`（离线 harness 验证）。
 
 ## 🙏 致谢
 
-设计参考了 Microsoft Agent Academy Hackathon Operative Track 冠军 [VendorGuard](https://github.com/experienceswithanishh/vendorguard-copilot-studio)（自主合规闭环 + 规则即数据 + 记分卡叙事）与第二名 [Engagement Hub](https://github.com/leila-marspooner/engagement-hub-agent)（人工审批门、幂等去重、审计与失败路径治理），以及 [FastAPI](https://github.com/fastapi/fastapi)、[LangChain](https://github.com/langchain-ai/langchain)、[FAISS](https://github.com/facebookresearch/faiss)、[python-docx](https://github.com/python-openxml/python-docx)、[openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) 等开源项目。
+设计参考了 Microsoft Agent Academy Hackathon Operative Track 冠军 [VendorGuard](https://github.com/experienceswithanishh/vendorguard-copilot-studio)（自主合规闭环 + 规则即数据 + 记分卡叙事）与第二名 [Engagement Hub](https://github.com/leila-marspooner/engagement-hub-agent)（人工审批门、幂等去重、审计与失败路径治理），以及 [FastAPI](https://github.com/fastapi/fastapi)、[LangChain](https://github.com/langchain-ai/langchain)、[FAISS](https://github.com/facebookresearch/faiss)、[sentence-transformers](https://github.com/UKPLab/sentence-transformers)、[python-docx](https://github.com/python-openxml/python-docx)、[openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) 等开源项目。
 
 如果这个项目对你有帮助，欢迎点一个 Star ⭐

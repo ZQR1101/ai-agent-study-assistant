@@ -86,6 +86,15 @@ export const api = {
   markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
   ask: (docId, question) =>
     request(`/documents/${docId}/ask`, { method: "POST", body: { question } }),
+  generateSuggestions: (docId) =>
+    request(`/rule-suggestions/generate/${docId}`, { method: "POST", body: {} }),
+  suggestions: (playbookId, status) =>
+    request(
+      `/rule-suggestions?playbook_id=${encodeURIComponent(playbookId)}` +
+        (status ? `&status=${status}` : "")
+    ),
+  acceptSuggestion: (id) => request(`/rule-suggestions/${id}/accept`, { method: "POST" }),
+  dismissSuggestion: (id) => request(`/rule-suggestions/${id}/dismiss`, { method: "POST" }),
 };
 
 export const STATUS_LABELS = {
