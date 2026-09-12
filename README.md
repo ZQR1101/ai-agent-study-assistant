@@ -33,7 +33,7 @@
 pip install -r requirements.txt
 
 # 2) 配置模型 key
-cp .env.example .env   # 编辑 DEEPSEEK_API_KEY 等
+cp .env.example .env   # 编辑 DEEPSEEK_API_KEY 等；默认模型 deepseek-flash（成本友好，可用 DEEPSEEK_MODEL 换 deepseek-v4-pro）
 
 # 3) 启动 API 服务（含认证与全部 REST 端点）
 rulebook serve          # http://127.0.0.1:8000/docs
@@ -43,9 +43,21 @@ rulebook review samples/供应商合同_样例B_存在风险.txt --playbook cont
 
 # 5) 或开启收件箱监听：文档落入 data/inbox/ 即自动审查（零接触闭环）
 rulebook inbox --playbook contract-compliance
+
+# 6) 邮件闭环：邮件发到指定邮箱，附件自动评审，报告自动回邮
+rulebook mail --playbook contract-compliance
 ```
 
 首次启动自动创建管理员账号 `admin`（随机密码写入 `data/bootstrap_admin_password.txt`，或用 `AUTH_ADMIN_PASSWORD` 指定）。
+
+### 邮件闭环配置（已实测通过 ✅）
+
+1. 邮箱网页版开启 **IMAP/SMTP 服务**并生成**授权码**（QQ 邮箱：设置 → 账号 → POP3/IMAP/SMTP 服务 → 发短信验证；Gmail 用应用密码。Outlook 个人版已淘汰基本认证，不适用）
+2. `.env` 填写：`MAIL_*`（收件）、`EMAIL_*`（发件，同一授权码）、`NOTIFY_EMAILS`（通知收件人列表）
+3. 主题带剧本标签可路由业务：`[CG]`→合同合规、`[DI]`→交付件分析、`[DPA]`→DPA 审查
+4. 全链路：**邮件进 → 几分钟内评分记分卡邮件回邮 → 专家在工作台签字 → 定稿报告 Word 附件自动回邮**
+
+运维注意：修改 `.env` 后需重启服务生效；`rulebook mail` 首次运行会把收件箱历史未读全部跳过并标记已读（其中带可解析附件的会被当真文档评审）。
 
 ## 🏗️ 引擎流水线
 
@@ -121,7 +133,7 @@ pytest   # 482 tests：认证/种子数据、引擎三路径（happy/duplicate/f
 
 ## ⚠️ 当前限制（v1.1）
 
-- 文档内邮件入口的运维监控（退信/限流告警）尚无面板。
+- 邮件入口已实测（QQ 授权码 + Gmail 收件人），但退信/限流告警面板、邮件服务健康监控尚无。
 - 扫描版 PDF 的 OCR 文本可提取，但 OCR 质量对评分的影响未做专项评测。
 - 条款检索默认 hybrid（语义+关键词），超长合同可通过 `RETRIEVAL_MODE` 与 `MAX_RULE_CONTEXT_CHARS` 调优。
 - 单机单库（SQLite WAL），面向 3–15 人小团队；多租户与外部邮件（IMAP）触发在路线图上。
