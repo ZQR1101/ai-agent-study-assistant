@@ -55,6 +55,11 @@ MODEL_PROVIDERS = {
         "base_url": DEEPSEEK_BASE_URL,
         "api_key_env_names": ("DEEPSEEK_API_KEY",),
     },
+    "deepseek-v4.1-flash": {
+        "kind": "chat",
+        "base_url": DEEPSEEK_BASE_URL,
+        "api_key_env_names": ("DEEPSEEK_API_KEY",),
+    },
     "qwen3.7-max": {
         "kind": "chat",
         "base_url": DASHSCOPE_OPENAI_BASE_URL,
