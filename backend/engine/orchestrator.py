@@ -235,7 +235,7 @@ def run_review(document_id: str, *, trigger: str = "upload", custom_llm=None) ->
             },
         )
 
-        from backend.notifications.service import create_notification
+        from backend.notifications.service import create_notification_and_email as create_notification
 
         pending = scorecard["counts"]["red"] + scorecard["counts"]["amber"]
         create_notification(
@@ -292,7 +292,7 @@ def _fail(
         event="review.failed",
         payload={"stage": stage, "error": error},
     )
-    from backend.notifications.service import create_notification
+    from backend.notifications.service import create_notification_and_email as create_notification
 
     create_notification(
         session,

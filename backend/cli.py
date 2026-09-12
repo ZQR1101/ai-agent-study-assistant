@@ -308,6 +308,30 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mail(args: argparse.Namespace) -> int:
+    """Run the IMAP mail intake loop (requires MAIL_* configuration)."""
+
+    from backend.engine.mail_inbox import run_mail_loop
+
+    _print_result("INFO", f"Mail intake loop starting (default playbook: {args.playbook})")
+    _print_result("INFO", "Configure MAIL_HOST/MAIL_USER/MAIL_PASSWORD in .env; Ctrl+C stops.")
+    try:
+        stats = run_mail_loop(
+            default_playbook=args.playbook,
+            interval_seconds=args.interval,
+            once=args.once,
+        )
+    except KeyboardInterrupt:
+        _print_result("OK", "Mail loop stopped")
+        return 0
+    _print_result(
+        "OK",
+        f"Reviewed {stats['reviewed']}, duplicates {stats['duplicates']}, "
+        f"skipped {stats['skipped']}, failed {stats['failed']}",
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rulebook",
@@ -345,6 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     inbox.add_argument("--settle", type=float, default=2.0, help="File-settle window seconds")
     inbox.add_argument("--once", action="store_true", help="Single poll pass and exit")
     inbox.set_defaults(func=cmd_inbox)
+
+    mail = subparsers.add_parser("mail", help="Run the IMAP mail intake loop")
+    mail.add_argument("--playbook", default="contract-compliance", help=playbook_help)
+    mail.add_argument("--interval", type=float, default=60.0, help="Poll interval seconds")
+    mail.add_argument("--once", action="store_true", help="Single poll pass and exit")
+    mail.set_defaults(func=cmd_mail)
 
     return parser
 

@@ -7,12 +7,15 @@ contract.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.notifications.models import Notification, NotificationRead
+
+logger = logging.getLogger(__name__)
 
 
 def create_notification(
@@ -33,6 +36,20 @@ def create_notification(
         correlation_id=correlation_id,
     )
     session.add(notification)
+    return notification
+
+
+def create_notification_and_email(session: Session, **kwargs: Any) -> Notification:
+    """Create the in-app notification, then attempt email dispatch when enabled."""
+
+    notification = create_notification(session, **kwargs)
+    session.flush()
+    try:
+        from backend.mailer import send_notification_email
+
+        send_notification_email(session, notification)
+    except Exception:
+        logger.exception("邮件通知分发异常（已忽略，不影响主流程）")
     return notification
 
 

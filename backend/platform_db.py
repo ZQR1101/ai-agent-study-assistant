@@ -131,6 +131,7 @@ def init_platform_db() -> None:
         Notification,
         NotificationRead,
     )
+    from backend.engine.mail_inbox import MailState  # noqa: F401
 
     engine = get_platform_engine()
     PlatformBase.metadata.create_all(engine)

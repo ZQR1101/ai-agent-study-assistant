@@ -164,7 +164,7 @@ def finalize_document(session: Session, *, document: Document, actor: str) -> Do
         actor=actor,
         payload={"scorecard": document.scorecard},
     )
-    from backend.notifications.service import create_notification
+    from backend.notifications.service import create_notification_and_email as create_notification
 
     create_notification(
         session,
