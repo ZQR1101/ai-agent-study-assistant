@@ -32,6 +32,8 @@ REQUIREMENT_IMPORTS = {
     "langgraph": "langgraph",
     "SQLAlchemy": "sqlalchemy",
     "psycopg[binary]": "psycopg",
+    "python-docx": "docx",
+    "openpyxl": "openpyxl",
 }
 OPTIONAL_DEPENDENCIES = {
     "rapidocr-onnxruntime": "rapidocr_onnxruntime",
