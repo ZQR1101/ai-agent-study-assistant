@@ -138,7 +138,7 @@ class ObsidianSaveNoteTests(unittest.TestCase):
             note_path = vault / "AI Study Assistant" / "操作系统_20260827_143052.md"
             self.assertTrue(note_path.exists())
             written = note_path.read_text(encoding="utf-8")
-            self.assertIn("source: ai-study-assistant", written)
+            self.assertIn("source: rulebook", written)
             self.assertIn("进程和线程。", written)
             self.assertIn("操作系统", written)
             self.assertTrue((saved_dir / "notes.json").exists())

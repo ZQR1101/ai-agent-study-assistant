@@ -1,8 +1,8 @@
 services:
-  ai-study-assistant:
+  rulebook:
     build: .
-    image: ai-study-assistant:latest
-    container_name: ai-study-assistant
+    image: rulebook:latest
+    container_name: rulebook
     ports:
       - "8000:8000"
     # Load DEEPSEEK_API_KEY etc. from the repo .env when present.

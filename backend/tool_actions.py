@@ -72,7 +72,7 @@ def _write_vault_note(
         "---",
         f"title: {_yaml_scalar(title)}",
         f"created: {_yaml_scalar(datetime.now(timezone.utc).isoformat())}",
-        "source: ai-study-assistant",
+        "source: rulebook",
     ]
     if tags:
         rendered = ", ".join(_yaml_scalar(tag) for tag in tags)

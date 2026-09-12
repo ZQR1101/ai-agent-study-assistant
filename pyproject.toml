@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-study-assistant"
+name = "rulebook-review"
 dynamic = ["version"]
-description = "Study-focused AI assistant: local RAG, agent tool registry, optional LangGraph runtime and three-layer learning memory, shipped as a local web app + CLI."
+description = "Rulebook: rulebook-driven document review platform with citation-gated scoring, expert sign-off gates and full audit trails, shipped as a local web app + CLI."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-keywords = ["rag", "agent", "langgraph", "fastapi", "faiss", "study", "learning"]
+keywords = ["rulebook", "document-review", "compliance", "contract-review", "agents", "rag", "fastapi"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
@@ -43,12 +43,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional scanned-PDF OCR support (pip install ai-study-assistant[ocr])
+# Optional scanned-PDF OCR support (pip install rulebook-review[ocr])
 ocr = ["rapidocr-onnxruntime", "PyMuPDF"]
 dev = ["pytest"]
 
 [project.scripts]
-ai-study-assistant = "backend.cli:main"
+rulebook = "backend.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ZQR1101/rulebook"

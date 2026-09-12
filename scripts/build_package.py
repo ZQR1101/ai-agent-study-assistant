@@ -1,4 +1,4 @@
-"""Build the release artifacts (sdist + wheel) for ai-study-assistant.
+"""Build the release artifacts (sdist + wheel) for rulebook.
 
 The wheel is self-contained: it bundles the built frontend into
 ``backend/static`` and ships the full ``.env.example`` as ``backend/env.example``.
@@ -71,13 +71,13 @@ def main() -> int:
 
     run([sys.executable, "-m", "build"])
 
-    artifacts = sorted(DIST_DIR.glob("ai_study_assistant*"))
+    artifacts = sorted(DIST_DIR.glob("rulebook_review*"))
     print("\n[OK] Build complete:")
     for artifact in artifacts:
         print(f"  {artifact}")
     print("\nNext steps:")
     print("  1. Inspect the wheel:  python -m zipfile -l dist/<wheel>")
-    print("  2. Test install:       pip install dist/<wheel> and run `ai-study-assistant check`")
+    print("  2. Test install:       pip install dist/<wheel> and run `rulebook check`")
     print("  3. Publish:            twine upload dist/*")
     return 0
 

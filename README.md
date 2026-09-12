@@ -36,13 +36,13 @@ pip install -r requirements.txt
 cp .env.example .env   # 编辑 DEEPSEEK_API_KEY 等
 
 # 3) 启动 API 服务（含认证与全部 REST 端点）
-ai-study-assistant serve          # http://127.0.0.1:8000/docs
+rulebook serve          # http://127.0.0.1:8000/docs
 
 # 4) 无头审查一份文档，直接打印记分卡
-ai-study-assistant review samples/供应商合同_样例B_存在风险.txt --playbook contract-compliance
+rulebook review samples/供应商合同_样例B_存在风险.txt --playbook contract-compliance
 
 # 5) 或开启收件箱监听：文档落入 data/inbox/ 即自动审查（零接触闭环）
-ai-study-assistant inbox --playbook contract-compliance
+rulebook inbox --playbook contract-compliance
 ```
 
 首次启动自动创建管理员账号 `admin`（随机密码写入 `data/bootstrap_admin_password.txt`，或用 `AUTH_ADMIN_PASSWORD` 指定）。
@@ -80,10 +80,10 @@ ai-study-assistant inbox --playbook contract-compliance
 
 | 命令 | 说明 |
 |---|---|
-| `ai-study-assistant serve` | 启动 API 服务 |
-| `ai-study-assistant review <file> --playbook <id>` | 无头审查单份文档并打印记分卡 |
-| `ai-study-assistant inbox --playbook <id> [--interval N] [--once]` | 监听文件夹自动收件 |
-| `ai-study-assistant init` / `check` | 初始化 / 环境体检 |
+| `rulebook serve` | 启动 API 服务 |
+| `rulebook review <file> --playbook <id>` | 无头审查单份文档并打印记分卡 |
+| `rulebook inbox --playbook <id> [--interval N] [--once]` | 监听文件夹自动收件 |
+| `rulebook init` / `check` | 初始化 / 环境体检 |
 
 ## 📚 两套剧本（同一个引擎）
 
