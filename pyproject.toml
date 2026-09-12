@@ -51,7 +51,7 @@ dev = ["pytest"]
 ai-study-assistant = "backend.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ZQR1101/ai-agent-study-assistant"
+Homepage = "https://github.com/ZQR1101/rulebook"
 
 [tool.setuptools.dynamic]
 version = { attr = "backend.__version__" }

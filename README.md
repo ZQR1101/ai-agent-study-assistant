@@ -4,9 +4,9 @@
 
 **一套受治理的文档审查引擎**：文档进来 → 按可编辑的规则手册逐条体检 → 每条判定带原文引用的红黄绿记分卡 → 红/黄必须专家签字 → 导出交付物 → 全程审计可追问。**换业务域只换剧本（规则手册），不改一行代码。**
 
-[![CI](https://github.com/ZQR1101/ai-agent-study-assistant/actions/workflows/tests.yml/badge.svg)](https://github.com/ZQR1101/ai-agent-study-assistant/actions/workflows/tests.yml)
+[![CI](https://github.com/ZQR1101/rulebook/actions/workflows/tests.yml/badge.svg)](https://github.com/ZQR1101/rulebook/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-[![License: MIT](https://img.shields.io/github/license/ZQR1101/ai-agent-study-assistant)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/ZQR1101/rulebook)](LICENSE)
 
 业务方向 · 快速开始 · 引擎流水线 · 治理内核 · API · CLI · 两套剧本 · 附录：RAG 基准（遗留能力）
 
